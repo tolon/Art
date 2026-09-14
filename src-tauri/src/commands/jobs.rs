@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::core::error::CoreError;
-use crate::core::jobs::{CancelToken, JobId, JobProgress, JobState, ProgressSink};
+use crate::core::jobs::{CancelToken, JobId, JobProgress, JobState, JobTitle, ProgressSink};
 use crate::error::AppResult;
 
 /// The event name the frontend listens on.
@@ -46,17 +46,17 @@ impl JobRegistry {
     }
 
     /// Register a new job and return its id and cancel token.
-    fn open(&self, title: &str) -> (JobId, CancelToken) {
+    fn open(&self, title: JobTitle) -> (JobId, CancelToken) {
         self.open_in_lane(title, None)
     }
 
-    fn open_in_lane(&self, title: &str, lane: Option<&'static str>) -> (JobId, CancelToken) {
+    fn open_in_lane(&self, title: JobTitle, lane: Option<&'static str>) -> (JobId, CancelToken) {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let cancel = CancelToken::new();
         let entry = JobEntry {
             progress: JobProgress {
                 id,
-                title: title.to_string(),
+                title,
                 done: 0,
                 total: None,
                 message: String::new(),
@@ -207,7 +207,10 @@ impl ProgressSink for JobSink {
 /// `job-progress` events. The closure receives its own job id — so a result it
 /// emits can be tied back to the job — and a sink to report through, and must
 /// check `is_cancelled` between units of work.
-pub fn spawn_job<F>(app: &AppHandle, registry: Arc<JobRegistry>, title: &str, work: F) -> JobId
+///
+/// `title` is what the job bar shows: a catalogue key and its values, never
+/// an English sentence (ART-301).
+pub fn spawn_job<F>(app: &AppHandle, registry: Arc<JobRegistry>, title: JobTitle, work: F) -> JobId
 where
     F: FnOnce(JobId, &dyn ProgressSink) -> Result<(), CoreError> + Send + 'static,
 {
@@ -230,7 +233,7 @@ where
 pub fn spawn_job_in_lane<F>(
     app: &AppHandle,
     registry: Arc<JobRegistry>,
-    title: &str,
+    title: JobTitle,
     lane: &'static str,
     work: F,
 ) -> JobId
@@ -243,7 +246,7 @@ where
 fn spawn_in_lane<F>(
     app: &AppHandle,
     registry: Arc<JobRegistry>,
-    title: &str,
+    title: JobTitle,
     lane: Option<&'static str>,
     work: F,
 ) -> JobId
@@ -323,6 +326,40 @@ pub fn job_clear_finished(registry: State<'_, Arc<JobRegistry>>) {
 mod tests {
     use super::*;
 
+    // Real catalogue keys, so no test builds a title the job bar could not
+    // render. `src/i18n/job-title-keys.test.ts` skips this file on purpose:
+    // these are fixtures, not places a job starts.
+    const COMPONENTS: &str = "components.jobBar.title.previewComponents";
+    const PACKAGES: &str = "components.jobBar.title.previewPackages";
+    const INSTALL: &str = "components.jobBar.title.installRelease";
+    const INDEX: &str = "components.jobBar.title.indexTitles";
+    const REFRESH: &str = "components.jobBar.title.refreshCatalogue";
+
+    fn title(key: &'static str) -> JobTitle {
+        JobTitle::new(key)
+    }
+
+    /// ART-301. The registry keeps the title it was handed, values and all,
+    /// and hands it back unchanged — the bar renders what Rust named.
+    #[test]
+    fn the_registry_keeps_the_title_it_was_given() {
+        let registry = JobRegistry::new();
+        let given = JobTitle::new("components.jobBar.title.addPackages")
+            .count(1)
+            .text("target", &"E:/tree");
+        let (id, _) = registry.open(given.clone());
+
+        let snapshot = registry.snapshot();
+        let kept = &snapshot.iter().find(|p| p.id == id).unwrap().title;
+        assert_eq!(kept, &given);
+        assert_eq!(kept.key(), "components.jobBar.title.addPackages");
+        assert_eq!(
+            kept.params().len(),
+            2,
+            "the count and the target both survive"
+        );
+    }
+
     /// **ART-195.** The whole point is that the *previous* preview stops, so
     /// this asserts on a job that was demonstrably running first — the
     /// vacuous version of this test is one that supersedes an empty lane and
@@ -330,7 +367,7 @@ mod tests {
     #[test]
     fn a_new_job_in_a_lane_cancels_the_one_before_it() {
         let registry = JobRegistry::new();
-        let (first, first_token) = registry.open_in_lane("Preview 1", Some("preview"));
+        let (first, first_token) = registry.open_in_lane(title(COMPONENTS), Some("preview"));
 
         // Proof the lane was populated and live before anything superseded
         // it. Without these two the test would pass against a `supersede`
@@ -364,7 +401,7 @@ mod tests {
             for gone in registry.supersede("preview") {
                 assert_eq!(gone.state, JobState::Superseded);
             }
-            let (_, token) = registry.open_in_lane(&format!("Preview {round}"), Some("preview"));
+            let (_, token) = registry.open_in_lane(title(COMPONENTS), Some("preview"));
             tokens.push(token);
 
             let live = registry
@@ -393,7 +430,7 @@ mod tests {
     #[test]
     fn a_superseded_job_cannot_come_back_as_cancelled() {
         let registry = JobRegistry::new();
-        let (id, _) = registry.open_in_lane("Preview", Some("preview"));
+        let (id, _) = registry.open_in_lane(title(COMPONENTS), Some("preview"));
         assert_eq!(registry.supersede("preview").len(), 1);
 
         assert!(
@@ -415,9 +452,9 @@ mod tests {
     #[test]
     fn superseding_one_lane_leaves_every_other_job_alone() {
         let registry = JobRegistry::new();
-        let (_, other_lane) = registry.open_in_lane("Packages", Some("packages"));
-        let (_, laneless) = registry.open("Installing AmigaOS");
-        let (_, same_lane) = registry.open_in_lane("Components", Some("components"));
+        let (_, other_lane) = registry.open_in_lane(title(PACKAGES), Some("packages"));
+        let (_, laneless) = registry.open(title(INSTALL));
+        let (_, same_lane) = registry.open_in_lane(title(COMPONENTS), Some("components"));
 
         let gone = registry.supersede("components");
 
@@ -436,7 +473,7 @@ mod tests {
     #[test]
     fn a_finished_job_in_the_lane_is_left_where_it_is() {
         let registry = JobRegistry::new();
-        let (done, _) = registry.open_in_lane("Preview", Some("preview"));
+        let (done, _) = registry.open_in_lane(title(COMPONENTS), Some("preview"));
         registry.finish(done, JobState::Finished);
 
         assert!(registry.supersede("preview").is_empty());
@@ -449,8 +486,8 @@ mod tests {
     #[test]
     fn ids_are_unique_and_start_at_one() {
         let registry = JobRegistry::new();
-        let (first, _) = registry.open("A");
-        let (second, _) = registry.open("B");
+        let (first, _) = registry.open(title(INDEX));
+        let (second, _) = registry.open(title(REFRESH));
 
         assert_eq!(first, 1);
         assert_eq!(second, 2);
@@ -459,19 +496,19 @@ mod tests {
     #[test]
     fn snapshot_puts_running_jobs_first() {
         let registry = JobRegistry::new();
-        let (done_id, _) = registry.open("Finished one");
-        let (_running_id, _) = registry.open("Still going");
+        let (done_id, _) = registry.open(title(INDEX));
+        let (_running_id, _) = registry.open(title(REFRESH));
         registry.finish(done_id, JobState::Finished);
 
         let snapshot = registry.snapshot();
         assert_eq!(snapshot.len(), 2);
-        assert_eq!(snapshot[0].title, "Still going");
+        assert_eq!(snapshot[0].title.key(), REFRESH);
     }
 
     #[test]
     fn cancelling_flips_the_token_the_worker_holds() {
         let registry = JobRegistry::new();
-        let (id, token) = registry.open("Scanning");
+        let (id, token) = registry.open(title(INDEX));
 
         assert!(!token.is_cancelled());
         assert!(registry.cancel(id));
@@ -481,7 +518,7 @@ mod tests {
     #[test]
     fn a_finished_job_cannot_be_cancelled() {
         let registry = JobRegistry::new();
-        let (id, _) = registry.open("Scanning");
+        let (id, _) = registry.open(title(INDEX));
         registry.finish(id, JobState::Finished);
 
         assert!(!registry.cancel(id), "already terminal");
@@ -491,21 +528,21 @@ mod tests {
     #[test]
     fn clearing_keeps_running_jobs() {
         let registry = JobRegistry::new();
-        let (done, _) = registry.open("Done");
-        let (_running, _) = registry.open("Running");
+        let (done, _) = registry.open(title(INDEX));
+        let (_running, _) = registry.open(title(REFRESH));
         registry.finish(done, JobState::Cancelled { files_landed: None });
 
         registry.clear_finished();
 
         let snapshot = registry.snapshot();
         assert_eq!(snapshot.len(), 1);
-        assert_eq!(snapshot[0].title, "Running");
+        assert_eq!(snapshot[0].title.key(), REFRESH);
     }
 
     #[test]
     fn updates_are_visible_in_the_snapshot() {
         let registry = JobRegistry::new();
-        let (id, _) = registry.open("Hashing");
+        let (id, _) = registry.open(title(INDEX));
 
         registry.update(id, 5, Some(10), "disk.adf");
 

@@ -145,7 +145,8 @@ function JobRow({ job }: { job: JobProgress }) {
         }}
       >
         <span>
-          <strong>{job.title}</strong>
+          {/* A catalogue key Rust named, never a sentence (ART-301). */}
+          <strong>{t(job.title.key, job.title.params)}</strong>
           <span className="faint" style={{ marginLeft: 6 }}>
             {t(status.key, status.params)}
             {/*

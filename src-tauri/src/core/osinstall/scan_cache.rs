@@ -124,7 +124,21 @@ use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 /// `md5` joined it beside it (see the module doc's "One entry, two facts").
 /// A schema-1 entry is a miss, not an upgrade — it costs one walk and can
 /// never cost a wrong answer.
-const SCAN_CACHE_SCHEMA: u32 = 2;
+///
+/// `3`: a disc's `MediaEntry::date` is local wall time (ART-317); a schema-2
+/// listing holds UTC and must miss. `sha256` (below) is a further field on
+/// [`CacheFile`] added after schema 2 shipped, but it did **not** bump the
+/// schema itself — it is `#[serde(default)]` and genuinely optional, so an
+/// entry written without `sha256` still parses and still serves
+/// its listing and its MD5 (`an_entry_written_before_sha256_existed_still_serves_its_md5`).
+/// The date is different in kind: every schema-2 entry's `MediaEntry::date`
+/// values were computed as UTC, so an old entry cannot simply be read as
+/// missing one field — its dates are the *wrong* value, silently, which is
+/// exactly the "confident, wrong sentence" CLAUDE.md treats as ART's most
+/// expensive defect. Bumping forces every schema-2 listing to miss and be
+/// walked again, which is the only safe outcome; the owner accepted the cost
+/// of reading every install disc once more after this change.
+const SCAN_CACHE_SCHEMA: u32 = 3;
 
 /// Every file this module writes starts with this, so [`ScanCache::sweep`]
 /// and [`ScanCache::forget_all`] can find them — and only them — inside a
@@ -206,6 +220,14 @@ struct CacheFile {
     /// into it.
     #[serde(default)]
     md5: Option<String>,
+    /// The medium's SHA-256, when `scan::dedupe_identical_disks` has read
+    /// it (ART-302). Unlike `md5` this one *is* an identity check: two discs
+    /// with the same name and size are one disc only when these agree.
+    /// Optional and `#[serde(default)]` without a schema bump, the way `md5`
+    /// arrived: an entry written without this field parses as `None`
+    /// and keeps its listing and MD5.
+    #[serde(default)]
+    sha256: Option<String>,
 }
 
 /// One medium's listing, exactly as it was read off the medium.
@@ -340,6 +362,12 @@ impl ScanCache {
         self.read_valid(media_path)?.md5
     }
 
+    /// The SHA-256 recorded for `media_path`, if this medium is still the
+    /// one it was recorded for and something has hashed it.
+    pub fn lookup_sha256(&self, media_path: &Path) -> Option<String> {
+        self.read_valid(media_path)?.sha256
+    }
+
     /// Record `listing` as what `media_path` held, keeping whatever hash is
     /// already recorded for it.
     pub fn store(&self, media_path: &Path, listing: &CachedListing) {
@@ -357,6 +385,39 @@ impl ScanCache {
     /// already recorded for it.
     pub fn store_md5(&self, media_path: &Path, md5: &str) {
         self.store_with(media_path, |entry| entry.md5 = Some(md5.to_string()));
+    }
+
+    /// Record `sha256` as `media_path`'s content hash, keeping whatever
+    /// listing and MD5 are already recorded for it.
+    pub fn store_sha256(&self, media_path: &Path, sha256: &str) {
+        self.store_with(media_path, |entry| entry.sha256 = Some(sha256.to_string()));
+    }
+
+    /// [`Self::store_sha256`], but only if `media_path` still has the
+    /// identity it had in `before` — the identity read **before** `sha256`
+    /// was computed, not the one `store_with` would read now (finding M1).
+    ///
+    /// `sha256` takes real time on a hundreds-of-megabytes disc image, and
+    /// `store_with` stats the file again at store time and keys the entry on
+    /// *that* reading. A medium replaced mid-hash — same path, and by the
+    /// time the write lands, coincidentally the same size and mtime again —
+    /// would otherwise get the old content's hash filed under the new
+    /// content's identity: a wrong answer that reads as a hit forever after,
+    /// exactly the "confident, wrong sentence" this project treats as its
+    /// most expensive defect (CLAUDE.md). Checking the identity has not
+    /// moved between the two reads is what closes that window; a caller
+    /// that never captured `before` has nothing to compare and should call
+    /// [`Self::store_sha256`] instead.
+    pub fn store_sha256_if_unchanged(
+        &self,
+        media_path: &Path,
+        before: &MediaIdentity,
+        sha256: &str,
+    ) {
+        if identity_of(media_path).as_ref() != Some(before) {
+            return;
+        }
+        self.store_sha256(media_path, sha256);
     }
 
     /// Update this medium's entry, keyed on the identity it has **now**, and
@@ -397,6 +458,7 @@ impl ScanCache {
             mtime_nanos: identity.mtime_nanos,
             listing: None,
             md5: None,
+            sha256: None,
         });
         update(&mut payload);
         let Ok(bytes) = serde_json::to_vec(&payload) else {
@@ -657,7 +719,7 @@ mod tests {
 
     fn listing_for(path: &Path) -> CachedListing {
         let found = identify(path).expect("the fixture is media");
-        let mut source = open_media(&found).unwrap();
+        let mut source = open_media(&found, &crate::core::clock::UtcClock).unwrap();
         listing_of(source.as_mut(), found.kind).unwrap()
     }
 
@@ -700,6 +762,152 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         filetime_set(&image, stamp);
         assert_eq!(cache.lookup_md5(&image), None);
+    }
+
+    /// ART-302. A disc's SHA-256 outlives the process, keyed on the same
+    /// identity as the listing and the MD5, and a replaced medium has none.
+    #[test]
+    fn a_stored_sha256_comes_back_and_a_replaced_medium_has_none() {
+        let (_guard, dir) = fixtures::scratch("sha256-roundtrip");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+
+        assert_eq!(cache.lookup_sha256(&medium), None, "nothing hashed yet");
+        cache.store_sha256(&medium, "abc123");
+        assert_eq!(cache.lookup_sha256(&medium).as_deref(), Some("abc123"));
+
+        std::fs::write(&medium, vec![8u8; 8192]).unwrap();
+        assert_eq!(
+            cache.lookup_sha256(&medium),
+            None,
+            "a replaced medium is a miss"
+        );
+    }
+
+    /// The three facts share one entry: storing a SHA-256 keeps the MD5 and
+    /// the listing a previous pass paid for.
+    #[test]
+    fn a_sha256_does_not_evict_the_md5_stored_beside_it() {
+        let (_guard, dir) = fixtures::scratch("sha256-merge");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        cache.store_md5(&medium, "md5value");
+        cache.store_sha256(&medium, "shavalue");
+        assert_eq!(cache.lookup_md5(&medium).as_deref(), Some("md5value"));
+        assert_eq!(cache.lookup_sha256(&medium).as_deref(), Some("shavalue"));
+    }
+
+    /// An entry written without `sha256` still loads.
+    #[test]
+    fn an_entry_written_before_sha256_existed_still_serves_its_md5() {
+        let (_guard, dir) = fixtures::scratch("sha256-old-entry");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        cache.store_md5(&medium, "md5value");
+        let file = cache.file_for(&medium).unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("sha256");
+        std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert_eq!(cache.lookup_md5(&medium).as_deref(), Some("md5value"));
+        assert_eq!(cache.lookup_sha256(&medium), None);
+    }
+
+    /// **ART-317, the schema bump's own guard.** `2` here is a **literal**,
+    /// not `SCAN_CACHE_SCHEMA - 1` — this pins the real historical schema
+    /// this ART used to write every `MediaEntry::date` as UTC under, not
+    /// "whatever the previous constant happened to be". A schema-2 listing's
+    /// *shape* still parses today (nothing about the JSON changed), so
+    /// without this a schema-2 entry would be silently served with UTC dates
+    /// read back as if they were local wall time — exactly the "confident,
+    /// wrong sentence" CLAUDE.md names as ART's most expensive defect. Found
+    /// by mutation: reverting `SCAN_CACHE_SCHEMA` to `2` passed every other
+    /// test in this module, because they all write and read through the
+    /// live symbolic constant and so cannot see what its actual value is.
+    ///
+    /// M4 (final review): a miss has more than one cause — a future field
+    /// that does not survive the `serde_json::Value` round trip below would
+    /// keep the `is_none()` assertion green for the wrong reason. The
+    /// control arm sends the same entry through the same round trip with
+    /// the schema left at the live `SCAN_CACHE_SCHEMA` and asserts a hit
+    /// first, so the round trip itself is proved innocent before `2` is
+    /// read as evidence about the schema number specifically.
+    #[test]
+    fn a_schema_2_listing_from_before_local_time_is_a_miss() {
+        let (_dir, image, cache) = media_and_cache("schema-2-utc-dates");
+        let listing = listing_for(&image);
+        cache.store(&image, &listing);
+        let file = cache.file_for(&image).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+
+        // Control arm: the same round trip, schema untouched, must still be
+        // a hit.
+        value["schema"] = serde_json::json!(SCAN_CACHE_SCHEMA);
+        std::fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(
+            cache.lookup(&image).is_some(),
+            "the serde_json::Value round trip must not itself drop a hit"
+        );
+
+        value["schema"] = serde_json::json!(2);
+        std::fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert!(
+            cache.lookup(&image).is_none(),
+            "a schema-2 listing holds UTC-computed dates and must miss under schema 3"
+        );
+    }
+
+    #[test]
+    fn a_cache_that_is_off_neither_reads_nor_writes_a_sha256() {
+        let (_guard, dir) = fixtures::scratch("sha256-off");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::off();
+        cache.store_sha256(&medium, "abc");
+        assert_eq!(cache.lookup_sha256(&medium), None);
+    }
+
+    /// M1. A medium that changed between the identity a caller captured
+    /// before hashing and the store call must not get that hash filed under
+    /// its new identity — the race `store_sha256_if_unchanged` closes.
+    #[test]
+    fn a_medium_that_changed_since_the_captured_identity_is_not_stored() {
+        let (_guard, dir) = fixtures::scratch("sha256-race");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        let before = identity_of(&medium).unwrap();
+
+        // The medium changes after the identity was captured — the window
+        // `store_sha256_if_unchanged` exists to catch.
+        std::fs::write(&medium, vec![9u8; 8192]).unwrap();
+
+        cache.store_sha256_if_unchanged(&medium, &before, "stale-hash-of-old-content");
+        assert_eq!(
+            cache.lookup_sha256(&medium),
+            None,
+            "a changed medium must not get a stale hash stored under its new identity"
+        );
+    }
+
+    /// The ordinary case: identity unchanged between capture and store, so
+    /// the hash is kept exactly as [`ScanCache::store_sha256`] would keep it.
+    #[test]
+    fn a_medium_unchanged_since_the_captured_identity_is_stored() {
+        let (_guard, dir) = fixtures::scratch("sha256-unchanged");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        let before = identity_of(&medium).unwrap();
+
+        cache.store_sha256_if_unchanged(&medium, &before, "abc123");
+        assert_eq!(cache.lookup_sha256(&medium).as_deref(), Some("abc123"));
     }
 
     /// **One entry, two facts, and neither evicts the other.**
@@ -996,11 +1204,14 @@ mod tests {
     fn a_cached_source_answers_what_the_real_source_answers() {
         let (_dir, image, _cache) = media_and_cache("agrees");
         let found = identify(&image).unwrap();
-        let mut real = open_media(&found).unwrap();
+        let mut real = open_media(&found, &crate::core::clock::UtcClock).unwrap();
         let listing = listing_of(real.as_mut(), found.kind).unwrap();
         let path = image.clone();
         let mut cached = CachedSource::new(listing.clone(), move || {
-            open_media(&identify(&path).expect("still media"))
+            open_media(
+                &identify(&path).expect("still media"),
+                &crate::core::clock::UtcClock,
+            )
         });
 
         let mut paths: Vec<String> = vec![String::new()];
@@ -1038,7 +1249,7 @@ mod tests {
         let (_dir, image, _cache) = media_and_cache("no-open");
         let found = identify(&image).unwrap();
         let listing = {
-            let mut real = open_media(&found).unwrap();
+            let mut real = open_media(&found, &crate::core::clock::UtcClock).unwrap();
             listing_of(real.as_mut(), found.kind).unwrap()
         };
         // The medium is deleted, so opening it is impossible. Every listing
@@ -1111,18 +1322,19 @@ mod tests {
         let found = identify(&image).expect("the fixture is media");
 
         let listing = {
-            let mut first = open_media_cached(&found, &cache).unwrap();
+            let mut first =
+                open_media_cached(&found, &cache, &crate::core::clock::UtcClock).unwrap();
             listing_of(first.as_mut(), found.kind).unwrap()
         };
         assert!(!listing.entries.is_empty());
 
         swap_contents_keeping_identity(&image);
         assert!(
-            open_media(&found).is_err(),
+            open_media(&found, &crate::core::clock::UtcClock).is_err(),
             "the medium itself can no longer answer anything"
         );
 
-        let mut second = open_media_cached(&found, &cache).unwrap();
+        let mut second = open_media_cached(&found, &cache, &crate::core::clock::UtcClock).unwrap();
         assert_eq!(second.walk("").unwrap(), listing.entries);
         assert_eq!(second.volume_name(), listing.volume_name);
     }
@@ -1141,20 +1353,21 @@ mod tests {
         let (_dir, image, cache) = media_and_cache("rescan");
         let found = identify(&image).expect("the fixture is media");
         {
-            let mut first = open_media_cached(&found, &cache).unwrap();
+            let mut first =
+                open_media_cached(&found, &cache, &crate::core::clock::UtcClock).unwrap();
             assert!(!first.walk("").unwrap().is_empty());
         }
 
         swap_contents_keeping_identity(&image);
         assert!(
-            open_media_cached(&found, &cache).is_ok(),
+            open_media_cached(&found, &cache, &crate::core::clock::UtcClock).is_ok(),
             "the cache is serving this — which is exactly the stale answer the rescan exists for"
         );
 
         assert_eq!(cache.forget_all(), 1, "one remembered listing dropped");
 
         assert!(
-            open_media_cached(&found, &cache).is_err(),
+            open_media_cached(&found, &cache, &crate::core::clock::UtcClock).is_err(),
             "after a rescan the answer must come off the medium, whatever the medium now says"
         );
     }
@@ -1166,9 +1379,9 @@ mod tests {
         let (_dir, image, _cache) = media_and_cache("off-reads");
         let off = ScanCache::off();
         let found = identify(&image).expect("the fixture is media");
-        assert!(open_media_cached(&found, &off).is_ok());
+        assert!(open_media_cached(&found, &off, &crate::core::clock::UtcClock).is_ok());
         swap_contents_keeping_identity(&image);
-        assert!(open_media_cached(&found, &off).is_err());
+        assert!(open_media_cached(&found, &off, &crate::core::clock::UtcClock).is_err());
     }
 
     /// **The measurement ART-194 and ART-195 both asked for**, against the

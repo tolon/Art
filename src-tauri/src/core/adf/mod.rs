@@ -144,13 +144,20 @@ impl AdfImage {
     }
 
     /// List entries in the root directory.
-    pub fn list_root(&self) -> CoreResult<Vec<FileEntry>> {
-        fs::list_directory(&self.image, self.root_block_num)
+    pub fn list_root(
+        &self,
+        clock: &dyn crate::core::clock::AmigaClock,
+    ) -> CoreResult<Vec<FileEntry>> {
+        fs::list_directory(&self.image, self.root_block_num, clock)
     }
 
     /// List entries in a specific directory block.
-    pub fn list_dir(&self, dir_block: u32) -> CoreResult<Vec<FileEntry>> {
-        fs::list_directory(&self.image, dir_block)
+    pub fn list_dir(
+        &self,
+        dir_block: u32,
+        clock: &dyn crate::core::clock::AmigaClock,
+    ) -> CoreResult<Vec<FileEntry>> {
+        fs::list_directory(&self.image, dir_block, clock)
     }
 
     /// Extract the payload of a file given its header block number.
@@ -238,7 +245,7 @@ mod mod_tests {
     fn list_root_of_blank_is_empty() {
         let bytes = make_blank_ffs_image();
         let adf = AdfImage::from_bytes(bytes).unwrap();
-        let entries = adf.list_root().unwrap();
+        let entries = adf.list_root(&crate::core::clock::UtcClock).unwrap();
         assert!(entries.is_empty());
     }
 

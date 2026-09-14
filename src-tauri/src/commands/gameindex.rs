@@ -18,7 +18,7 @@ use crate::core::gameindex::igamewrite::{self, IGameOutcome, IGamePlan, IGameSta
 use crate::core::gameindex::record::GameRecord;
 use crate::core::gameindex::scan::{scan_titles_with, CatalogueEntry};
 use crate::core::gameindex::store;
-use crate::core::jobs::JobId;
+use crate::core::jobs::{JobId, JobTitle};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::error::{AppError, AppResult};
 
@@ -240,19 +240,15 @@ pub fn catalogue_refresh(
     let emit_app = app.clone();
     let stamped = now_stamp();
 
-    let id = spawn_job(
-        &app,
-        registry,
-        "Refreshing the catalogue",
-        move |job_id, progress| {
-            store::refresh_root(&dir, &root_path, refresh, stamped, progress)?;
-            // The screen reloads the whole catalogue rather than patching one
-            // root: the user layer and availability both apply across roots, and
-            // one reload is cheaper than keeping two views in step.
-            let _ = emit_app.emit(REFRESHED_EVENT, RefreshedRoot { job_id, root });
-            Ok(())
-        },
-    );
+    let title = JobTitle::new("components.jobBar.title.refreshCatalogue");
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        store::refresh_root(&dir, &root_path, refresh, stamped, progress)?;
+        // The screen reloads the whole catalogue rather than patching one
+        // root: the user layer and availability both apply across roots, and
+        // one reload is cheaper than keeping two views in step.
+        let _ = emit_app.emit(REFRESHED_EVENT, RefreshedRoot { job_id, root });
+        Ok(())
+    });
 
     Ok(id)
 }
@@ -503,23 +499,19 @@ pub fn gameindex_scan(
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
 
-    let id = spawn_job(
-        &app,
-        registry,
-        "Indexing titles",
-        move |job_id, progress| {
-            let entries = scan_titles_with(&dir, progress)?;
-            let _ = emit_app.emit(
-                INDEX_RESULT_EVENT,
-                IndexResult {
-                    job_id,
-                    dir_path,
-                    entries,
-                },
-            );
-            Ok(())
-        },
-    );
+    let title = JobTitle::new("components.jobBar.title.indexTitles");
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        let entries = scan_titles_with(&dir, progress)?;
+        let _ = emit_app.emit(
+            INDEX_RESULT_EVENT,
+            IndexResult {
+                job_id,
+                dir_path,
+                entries,
+            },
+        );
+        Ok(())
+    });
 
     Ok(id)
 }
@@ -613,9 +605,9 @@ pub fn igamewrite_apply(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Writing igame.data for {} title(s)", plan.items.len());
+    let title = JobTitle::new("components.jobBar.title.writeIgameData").count(plan.items.len());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = igamewrite::apply(&plan, progress);
 
         // Every ending gets its own count in the log too — a partial result

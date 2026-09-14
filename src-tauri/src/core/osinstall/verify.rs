@@ -967,7 +967,7 @@ mod tests {
     /// A freshly formatted, empty FFS partition, ready for `copy_in`.
     fn formatted_ffs_image(dir: &Path) -> PathBuf {
         let image = card_with_partition(dir, AmigaHardDiskFs::FfsStandard, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         image
@@ -976,7 +976,7 @@ mod tests {
     /// A freshly formatted, empty PFS3 partition, ready for `copy_in`.
     fn formatted_pfs3_image(dir: &Path) -> PathBuf {
         let image = card_with_partition(dir, AmigaHardDiskFs::Pfs3DirectScsi, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         image
@@ -1047,7 +1047,7 @@ mod tests {
         let content = b"cmd";
         let image = formatted_ffs_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         (_guard, image, manifest_for_load_module(content), tree)
@@ -1068,7 +1068,7 @@ mod tests {
         let content = b"cmd";
         let image = formatted_ffs_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x00); // pure bit gone
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         (_guard, image, manifest_for_load_module(content), tree)
@@ -1226,7 +1226,7 @@ mod tests {
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         let manifest = manifest_for_load_module(content);
@@ -1282,7 +1282,7 @@ mod tests {
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         let mut manifest = manifest_for_load_module(content);
@@ -1315,7 +1315,7 @@ mod tests {
         let image = formatted_pfs3_image(&dir);
         // The volume genuinely carries --p-rwed (0x20) ...
         let tree = tree_with_load_module(&dir, content, 0x20);
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         // ... but the manifest expects the default, unprotected bits.
@@ -1354,7 +1354,7 @@ mod tests {
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         let mut manifest = manifest_for_load_module(content);
@@ -1389,7 +1389,7 @@ mod tests {
         let content = b"cmd";
         let image = formatted_pfs3_image(&dir);
         let tree = tree_with_load_module(&dir, content, 0x20);
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         let mut manifest = manifest_for_load_module(content);
@@ -1477,7 +1477,7 @@ mod tests {
         // Deliberately no .uaem sidecar: `copy_in` falls back to
         // `FileMeta::default()`, exactly as it does for a real composed
         // `S/User-Startup` (see `apply.rs`'s own module doc).
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1519,7 +1519,7 @@ mod tests {
         let image = formatted_ffs_image(&dir);
         let tree = tree_with_load_module(&dir, b"cmd", 0x20);
         std::fs::write(tree.join("Unlisted"), b"nobody told the manifest").unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         let manifest = manifest_for_load_module(b"cmd");

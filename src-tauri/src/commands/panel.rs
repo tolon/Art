@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::jobs::JobTitle;
 use crate::error::AppResult;
 
 /// The most entries returned for one folder.
@@ -260,9 +261,9 @@ pub fn panel_directory_size(
     let key = dir.to_string_lossy().to_string();
     let registry = std::sync::Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Counting {key}");
+    let title = JobTitle::new("components.jobBar.title.countFolder").text("path", &key);
 
-    let id = super::jobs::spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = super::jobs::spawn_job(&app, registry, title, move |job_id, progress| {
         let total = crate::core::dirsize::host_total(&dir, progress)?;
         let _ = tauri::Emitter::emit(
             &emit_app,
@@ -326,11 +327,13 @@ pub fn panel_delete_many(
     let log_path = oplog.path().to_path_buf();
     let registry = std::sync::Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Deleting {} item(s) from {}", names.len(), dir.display());
+    let title = JobTitle::new("components.jobBar.title.deleteItems")
+        .count(names.len())
+        .text("source", &dir.display());
     let source = format!("{}:{}", dir.display(), names.join(", "));
     let asked = names.len();
 
-    let id = super::jobs::spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = super::jobs::spawn_job(&app, registry, title, move |job_id, progress| {
         let result = crate::core::hostfs::recycle_many(
             &crate::tools::recycle_bin::RecycleBin,
             &dir,

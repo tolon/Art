@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **PFS3 partitions ART formats now carry PFS3's deleted-files area (deldir), in the
+  layout the Amiga's own handler reads.** A file deleted through ART's writer goes into
+  it and can be undeleted through that same writer. Checked only by reading pfs3aio's
+  source and against ART's own reader and hst-imager; undeleting on a real Amiga has not
+  been tried yet.
+
+### Fixed
+
+- **The job bar names each job in the language you chose.** Titles such as
+  "Adding 1 package(s) to …" were English on a Turkish screen and counted
+  with "(s)"; they now read, for example, "Work.hdf içine 1 paket ekleniyor",
+  or "Adding 1 package to Work.hdf" in English. A failed job's reason is
+  still in English.
+- **The OS Builder answers its first question of a session without re-reading two identical
+  install discs whole, on every start after the first.** ART remembers a disc's fingerprint
+  between starts; the first start after this update still reads them, and a remembered
+  fingerprint is dropped 30 days after it was stored.
+- **Adding an older update over a newer one says which is newer and in what order to add them**,
+  instead of talking about a recipe's overrides.
+- **A PFS3 partition ART fills holds as many files and drawers as PFS3 allows.** It
+  used to stop at about 21 500, whatever the partition's size, and ART sized
+  many-file content gigabytes larger than it needed to trying to fit it.
+- **A file or drawer name the Amiga could not open is refused by name.** ART now
+  formats PFS3 for 107-byte names, as hst-imager does, and refuses a name longer
+  than 106 bytes before the copy starts. Before, a name longer than 31 bytes was
+  written, listed on the Amiga, and could not be opened.
+- **PFS3 drawers record the drawer they are in the way the Amiga's PFS3 handler
+  expects.** A PFS3 partition ART formatted before this fix is worth formatting
+  again.
+- **Dates on the Amiga now show your local time.** A file, drawer, disk or partition ART stamps from the
+  current time now carries the time your PC's clock shows, in the offset that was in force on that date, where
+  it used to carry UTC and showed early or late by your time zone. A file copied into a disk image (ADF Studio
+  or the Files screen's copy) keeps its own date the same way — a file last changed in winter keeps its winter
+  time. Files put on a PiStorm card are dated when ART writes them, not with the date they carried on your PC;
+  a PFS3 partition still cannot hold a `.uaem` file's own date either (ART-116). Dates ART shows for files
+  inside a disk image are read the same way. Dates carried in `.uaem` files were always your local time and
+  are copied as written. Dates already on existing disks and cards stay as they were written. Each install
+  disc ART already knows about is read again once, because remembering its listing changed shape to hold the
+  corrected dates.
+
 ## [0.9.3] - 2026-09-13
 
 ### Fixed

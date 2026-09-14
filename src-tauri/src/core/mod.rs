@@ -19,6 +19,7 @@ pub mod artwork;
 pub mod binary;
 pub mod card;
 pub mod cbm;
+pub mod clock;
 pub mod compatibility;
 pub mod conversion;
 pub mod detect;
@@ -853,6 +854,149 @@ fn production_after() -> u32 {
             "core/ spawned a process outside a #[cfg(test)] block — the trait rule \
              (CLAUDE.md, \"The core independence rule\"; ART-274) says the spawn belongs \
              in tools/, not here:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// ART-317: the UTC offset is a platform question, answered by
+    /// `tools/local_time.rs` through `core::clock::AmigaClock`. A time-zone
+    /// crate named inside `core/` would put the answer back where it cannot
+    /// be tested with a fixed clock.
+    ///
+    /// Mutate by adding `use chrono::Local;` to `core/clock.rs`; this fails.
+    #[test]
+    fn core_never_names_a_time_zone_crate() {
+        // Built with `concat!` so this file's own source does not match.
+        let needles = [
+            concat!("chro", "no::"),
+            concat!("use chro", "no"),
+            concat!("iana_time", "_zone"),
+        ];
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            for (n, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if needles.iter().any(|needle| line.contains(needle)) {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "core/ named a time-zone crate — the offset belongs in tools/local_time.rs (ART-317):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// ART-317: an Amiga date is made from an instant only through
+    /// `core::clock::AmigaClock`. Production code naming the epoch constant is
+    /// doing that arithmetic by hand, which is how every writer came to stamp
+    /// UTC. `bcpl.rs` defines it and `clock.rs` is the one converter.
+    ///
+    /// Mutate by pasting create.rs's old `get_current_amiga_date` above its
+    /// `#[cfg(test)]`; this fails.
+    #[test]
+    fn core_makes_amiga_dates_only_through_the_clock() {
+        let needle = concat!("AMIGA_EPOCH", "_UNIX");
+        let allowed = ["adf/bcpl.rs", "clock.rs"];
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let shown = path.display().to_string().replace('\\', "/");
+            if allowed.iter().any(|ok| shown.ends_with(ok)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&path.display().to_string(), &lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                if line.contains(needle) {
+                    offenders.push(format!("{shown}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "an Amiga date made outside core::clock (ART-317):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// Every `.rs` file under `commands/` and `tools/`, recursively — the
+    /// wiring layer [`commands_and_tools_never_name_utc_clock_outside_a_test`]
+    /// reads. Separate from [`core_files`] because `UtcClock` is legitimate
+    /// inside `core/` itself (see that test's own doc comment).
+    fn command_and_tool_files() -> Vec<PathBuf> {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        for sub in ["commands", "tools"] {
+            let mut stack = vec![base.join(sub)];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(&dir)
+                    .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+                {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|ext| ext == "rs") {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+        files
+    }
+
+    /// ART-317, final review I1's survivor (a). Nothing stopped a
+    /// `commands/` or `tools/` site from passing `&crate::core::clock::UtcClock`
+    /// in place of `&crate::tools::local_time::LOCAL_TIME` — that makes a UTC
+    /// Amiga date on every machine, not only a UTC CI runner, and no test,
+    /// clippy lint or guard caught it. This walks `commands/` and `tools/`
+    /// rather than `core/`: `UtcClock` is `pub` and legitimately named inside
+    /// `core/` at three sites that read only a directory listing's names or
+    /// counts and never a date shown to the user —
+    /// `core/adf/fs.rs::list_files` (`list_directory_on`, line ~130),
+    /// `core/dirsize.rs` (`list_directory_on`, line ~175) and
+    /// `core/gameindex/readers/whdhdf.rs` (icon/drawer lookups, lines ~196
+    /// and ~285). None of those three files are under `commands/` or
+    /// `tools/`, so they need no allow-list entry here; grepping
+    /// `commands/**` and `tools/**` for `UtcClock` (2026-09-14) found no
+    /// site at all, product or test.
+    ///
+    /// Mutate by passing `&crate::core::clock::UtcClock` instead of
+    /// `&crate::tools::local_time::LOCAL_TIME` at a real `commands/` site
+    /// (for example `commands/adf.rs`'s `list_root`/`list_dir` calls); this
+    /// fails.
+    #[test]
+    fn commands_and_tools_never_name_utc_clock_outside_a_test() {
+        let needle = concat!("Utc", "Clock");
+        let mut offenders = Vec::new();
+        for path in command_and_tool_files() {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&path.display().to_string(), &lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                if line.contains(needle) {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "commands/ or tools/ named UtcClock outside a test — a date reaching a \
+             command must go through tools::local_time::LOCAL_TIME, never a fixed \
+             UTC offset (ART-317, final review I1):\n{}",
             offenders.join("\n")
         );
     }

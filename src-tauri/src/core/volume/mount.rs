@@ -829,7 +829,8 @@ mod rdb_tests {
         let found = scan_image(&path).unwrap();
         let (device, geometry) = mount(&path, &found.volumes[0]).unwrap();
 
-        let entries = list_directory_on(&device, geometry.root_block).unwrap();
+        let entries =
+            list_directory_on(&device, geometry.root_block, &crate::core::clock::UtcClock).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         assert_eq!(names, vec!["Readme", "Startup-Sequence"]);
@@ -854,7 +855,8 @@ mod rdb_tests {
         let found = scan_image(&path).unwrap();
         let (device, geometry) = mount(&path, &found.volumes[0]).unwrap();
 
-        let entries = list_directory_on(&device, geometry.root_block).unwrap();
+        let entries =
+            list_directory_on(&device, geometry.root_block, &crate::core::clock::UtcClock).unwrap();
         let header =
             crate::core::adf::fs::read_header_on(&device, entries[0].header_block).unwrap();
         let bytes = crate::core::adf::extract::extract_file_on(

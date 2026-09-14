@@ -28,7 +28,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_result};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::lha::OverwritePolicy;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::safety::{guarded_write, BackupPolicy};
@@ -167,8 +167,13 @@ where
                 entry.block_size,
             )?;
             let outcome = {
-                let mut writer =
-                    VolumeWriter::open(&mut device, geometry, image, entry.byte_offset)?;
+                let mut writer = VolumeWriter::open_with_clock(
+                    &mut device,
+                    geometry,
+                    image,
+                    entry.byte_offset,
+                    &crate::tools::local_time::LOCAL_TIME,
+                )?;
                 run(&mut writer)?
             };
             device.sync()?;
@@ -285,7 +290,13 @@ impl WholeFileVolume {
         image: &Path,
         volume_offset: u64,
     ) -> CoreResult<VolumeWriter<'a>> {
-        VolumeWriter::open(&mut self.device, geometry, image, volume_offset)
+        VolumeWriter::open_with_clock(
+            &mut self.device,
+            geometry,
+            image,
+            volume_offset,
+            &crate::tools::local_time::LOCAL_TIME,
+        )
     }
 
     /// `VALIDATE → BACKUP → APPLY`, with the volume put back where it came
@@ -1204,9 +1215,9 @@ pub fn volume_copy_in(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying into {}", image.display());
+    let title = JobTitle::new("components.jobBar.title.copyInto").text("target", &image.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let folder = HostFolder::new(&source_path, options.sidecars.unwrap_or(true));
 
         // F5 is a plain user-driven copy: a cancel keeps whatever already
@@ -1325,9 +1336,10 @@ pub fn volume_copy_in_many(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying a selection into {}", image.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copySelectionInto").text("target", &image.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_selection_into_volume(
             &image,
             volume_index,
@@ -1466,8 +1478,13 @@ pub fn run_copy_in_folder_with(
                 entry.block_size,
             )?;
             let report = {
-                let mut writer =
-                    VolumeWriter::open(&mut device, geometry, image, entry.byte_offset)?;
+                let mut writer = VolumeWriter::open_with_clock(
+                    &mut device,
+                    geometry,
+                    image,
+                    entry.byte_offset,
+                    &crate::tools::local_time::LOCAL_TIME,
+                )?;
                 copy_into_volume(&mut writer, parent, source, policy, progress)?
             };
             device.sync()?;
@@ -1682,9 +1699,9 @@ pub fn volume_copy_out(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying out of {}", image.display());
+    let title = JobTitle::new("components.jobBar.title.copyOutOf").text("source", &image.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_out_folder(
             &image,
             volume_index,
@@ -1788,9 +1805,10 @@ pub fn volume_extract_many(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying a selection out of {}", image.display());
+    let title = JobTitle::new("components.jobBar.title.copySelectionOutOf")
+        .text("source", &image.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = extract_selection_out(
             &image,
             volume_index,
@@ -1940,9 +1958,11 @@ pub fn volume_copy_between_many(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying a selection between {from_path} and {to_path}");
+    let title = JobTitle::new("components.jobBar.title.copySelectionBetween")
+        .text("source", &from_path)
+        .text("target", &to_path);
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_selection_between_volumes(
             &source_image,
             from_volume,
@@ -2063,8 +2083,13 @@ fn run_copy_in_staged_with(
                 entry.block_size,
             )?;
             let report = {
-                let mut writer =
-                    VolumeWriter::open(&mut device, geometry, image, entry.byte_offset)?;
+                let mut writer = VolumeWriter::open_with_clock(
+                    &mut device,
+                    geometry,
+                    image,
+                    entry.byte_offset,
+                    &crate::tools::local_time::LOCAL_TIME,
+                )?;
                 copy_into_volume(&mut writer, parent, staged.source(), policy, progress)?
             };
             device.sync()?;
@@ -2132,7 +2157,13 @@ pub fn volume_attributes(
         entry.byte_length,
         entry.block_size,
     )?;
-    let writer = VolumeWriter::open(&mut device, geometry, &image, entry.byte_offset)?;
+    let writer = VolumeWriter::open_with_clock(
+        &mut device,
+        geometry,
+        &image,
+        entry.byte_offset,
+        &crate::tools::local_time::LOCAL_TIME,
+    )?;
     let attributes = writer.attributes(entry_block)?;
 
     Ok(view_of(attributes))

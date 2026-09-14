@@ -53,6 +53,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 name = "amiga-retro-toolkit"
 version = "0.9.3"
 dependencies = [
+ "chrono",
  "delharc",
  "fatfs",
  "jpeg-decoder",
@@ -2072,7 +2073,7 @@ checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libpfs3"
-version = "0.1.3+art.2"
+version = "0.1.3+art.4"
 dependencies = [
  "byteorder",
  "thiserror 2.0.20",

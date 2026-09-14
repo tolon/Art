@@ -69,7 +69,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::core::card::manifest::{manifest_path_for, read_manifest};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::ProgressSink;
+use crate::core::jobs::{JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::osinstall::apply::MANIFEST_FILE_NAME;
 use crate::core::osinstall::PairedRom;
@@ -604,11 +604,13 @@ pub fn preload_run(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Preparing {} volume(s) on {image}", made.formats());
+    let title = JobTitle::new("components.jobBar.title.preparePartitions")
+        .count(made.formats())
+        .text("target", &image);
     let for_log = image.clone();
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
-        let native = NativeFormatter;
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        let native = NativeFormatter::new(&crate::tools::local_time::LOCAL_TIME);
         let run_result = run_with_fallback(
             &made,
             &native,
@@ -1127,7 +1129,7 @@ mod tests {
         })
         .unwrap();
 
-        let native = NativeFormatter;
+        let native = NativeFormatter::UTC;
         let unreachable = HstImager::at(dir.join("does-not-exist.exe"));
         let (outcome, reports) = run_with_fallback(
             &made,
@@ -1209,7 +1211,7 @@ mod tests {
         let recorder = Recorder::default();
         let (outcome, reports) = run_with_fallback(
             &made,
-            &NativeFormatter,
+            &NativeFormatter::UTC,
             Some(&recorder as &dyn VolumeFormatter),
             &crate::core::jobs::NoProgress,
         )
@@ -1319,7 +1321,7 @@ mod tests {
         let recorder = Recorder::default();
         let (outcome, reports) = run_with_fallback(
             &made,
-            &NativeFormatter,
+            &NativeFormatter::UTC,
             Some(&recorder as &dyn VolumeFormatter),
             &crate::core::jobs::NoProgress,
         )
@@ -1423,7 +1425,7 @@ mod tests {
             }],
         };
 
-        let native = NativeFormatter;
+        let native = NativeFormatter::UTC;
         let recorder = Recorder::default();
         let (outcome, reports) = run_with_fallback(
             &made,
@@ -1486,7 +1488,7 @@ mod tests {
         // The real formatter: it refuses `import_filesystem` unconditionally,
         // for every card (see its own module doc comment), so both steps are
         // genuinely known capability gaps rather than a canned failure.
-        let native = NativeFormatter;
+        let native = NativeFormatter::UTC;
         let recorder = Recorder::default();
         let (outcome, reports) = run_with_fallback(
             &made,
@@ -2117,7 +2119,7 @@ mod tests {
 
         let outcome = run_with_fallback(
             &made,
-            &NativeFormatter,
+            &NativeFormatter::UTC,
             fallback.as_ref().map(|tool| tool as &dyn VolumeFormatter),
             &NoProgress,
         );

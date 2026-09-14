@@ -33,10 +33,75 @@ export type JobState =
    */
   | { state: "superseded" };
 
+/**
+ * Every catalogue key a job title may name (ART-301).
+ *
+ * A job's title is decided in Rust — `JobTitle::new("…")` in
+ * `src-tauri/src/commands/*.rs` — and rendered by `JobBar.tsx` through a
+ * variable, so no TypeScript code would otherwise name these keys. This list
+ * is where they are named. `dead-keys.test.ts` counts them as reachable
+ * because they are written out here. `src/i18n/job-title-keys.test.ts`
+ * resolves each one in both catalogues and reads the Rust tree. It fails on a
+ * Rust key missing from this list, on a key here that no Rust site names, and
+ * on values a sentence does not use.
+ *
+ * Sorted, one entry per key. A plural key is named without `_one` / `_other`.
+ */
+export const JOB_TITLE_KEYS = [
+  "components.jobBar.title.addPackages",
+  "components.jobBar.title.applyAppearance",
+  "components.jobBar.title.applyLayout",
+  "components.jobBar.title.buildCard",
+  "components.jobBar.title.copyArchiveInto",
+  "components.jobBar.title.copyDiscInto",
+  "components.jobBar.title.copyInto",
+  "components.jobBar.title.copyOutOf",
+  "components.jobBar.title.copySelectionBetween",
+  "components.jobBar.title.copySelectionInto",
+  "components.jobBar.title.copySelectionOutOf",
+  "components.jobBar.title.countFolder",
+  "components.jobBar.title.countVolumeBlock",
+  "components.jobBar.title.deleteItems",
+  "components.jobBar.title.downloadPackage",
+  "components.jobBar.title.downloadPackages",
+  "components.jobBar.title.fetchArtwork",
+  "components.jobBar.title.identifyMedia",
+  "components.jobBar.title.indexTitles",
+  "components.jobBar.title.installArchive",
+  "components.jobBar.title.installArchiveInto",
+  "components.jobBar.title.installArchivesInto",
+  "components.jobBar.title.installOnAmiga",
+  "components.jobBar.title.installRelease",
+  "components.jobBar.title.planArchives",
+  "components.jobBar.title.planLayout",
+  "components.jobBar.title.preparePartitions",
+  "components.jobBar.title.previewComponents",
+  "components.jobBar.title.previewPackages",
+  "components.jobBar.title.readLocalPictures",
+  "components.jobBar.title.readReadme",
+  "components.jobBar.title.refreshCatalogue",
+  "components.jobBar.title.rehearseFirstBoot",
+  "components.jobBar.title.restorePictures",
+  "components.jobBar.title.syncAminet",
+  "components.jobBar.title.writeIgameData",
+] as const;
+
+export type JobTitleKey = (typeof JOB_TITLE_KEYS)[number];
+
+/**
+ * What a job is: a catalogue key and the values its sentence needs, never a
+ * sentence (ART-301). The same shape as `Phrase`, narrowed to the keys above.
+ * Values are paths, names and counts, and pass through untranslated.
+ */
+export interface JobTitle {
+  key: JobTitleKey;
+  params?: Record<string, string | number>;
+}
+
 export interface JobProgress {
   id: number;
-  /** What the job is, in the user's language. */
-  title: string;
+  /** What the job is — render with `t(title.key, title.params)`. */
+  title: JobTitle;
   done: number;
   /** Null while the size is unknown — show an indeterminate indicator, not a fake bar. */
   total: number | null;

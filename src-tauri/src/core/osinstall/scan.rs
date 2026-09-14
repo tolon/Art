@@ -78,6 +78,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::clock::AmigaClock;
 use crate::core::error::CoreResult;
 
 use super::scan_cache;
@@ -131,10 +132,13 @@ pub struct FoundMedia {
 /// own probe — a scan can find far more candidates than a single install
 /// touches, and holding every one open (or every one's read window) for the
 /// whole scan would cost memory nothing here needs.
-pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
+pub fn open_media(
+    found: &FoundMedia,
+    clock: &'static dyn AmigaClock,
+) -> CoreResult<Box<dyn MediaSource>> {
     Ok(match found.kind {
         MediaKind::Floppy => Box::new(AdfSource::open(&found.path)?),
-        MediaKind::Disc => Box::new(CdSource::open(&found.path)?),
+        MediaKind::Disc => Box::new(CdSource::open(&found.path, clock)?),
     })
 }
 
@@ -155,15 +159,16 @@ pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
 pub fn open_media_cached(
     found: &FoundMedia,
     cache: &scan_cache::ScanCache,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<Box<dyn MediaSource>> {
     if let Some(listing) = cache.lookup(&found.path) {
         let found = found.clone();
         return Ok(Box::new(scan_cache::CachedSource::new(
             listing,
-            move || open_media(&found),
+            move || open_media(&found, clock),
         )));
     }
-    let mut source = open_media(found)?;
+    let mut source = open_media(found, clock)?;
     if cache.is_on() {
         if let Ok(listing) = scan_cache::listing_of(source.as_mut(), found.kind) {
             cache.store(&found.path, &listing);
@@ -435,9 +440,59 @@ pub fn media_for_layer<'a>(
 /// applied across the result. Exported rather than reimplemented — a second
 /// answer to "is this one disk or two" is how the two would drift.
 pub fn dedupe_identical_disks(found: Vec<FoundMedia>) -> Vec<FoundMedia> {
-    let memo = ShaMemo::process();
+    dedupe_identical_disks_cached(found, &scan_cache::ScanCache::off())
+}
+
+/// [`dedupe_identical_disks`], with a disc's SHA-256 also kept in `cache`
+/// so the next process does not read the disc again (ART-302). The memo
+/// answers first, then the cache, then the disc.
+pub fn dedupe_identical_disks_cached(
+    found: Vec<FoundMedia>,
+    cache: &scan_cache::ScanCache,
+) -> Vec<FoundMedia> {
+    dedupe_identical_disks_cached_with_memo(found, cache, ShaMemo::process())
+}
+
+/// [`dedupe_identical_disks_cached`], with the memo handed in — so a test
+/// can stand in for "a fresh process" with a [`ShaMemo::default`] of its
+/// own, rather than sharing the one static memo every other test in this
+/// binary reads and writes (ART-302, finding I3).
+pub(crate) fn dedupe_identical_disks_cached_with_memo(
+    found: Vec<FoundMedia>,
+    cache: &scan_cache::ScanCache,
+    memo: &ShaMemo,
+) -> Vec<FoundMedia> {
     dedupe_identical_disks_with(found, &mut |path: &Path| {
-        memo.get_or_hash(path, &mut file_sha256)
+        cached_sha256(path, memo, cache, &mut file_sha256)
+    })
+}
+
+/// One disc's SHA-256 through the three places it may already be known.
+/// A hash read from the disc is written to the cache; a cache that is off
+/// neither reads nor writes ([`scan_cache::ScanCache::Off`]).
+///
+/// The identity used to decide whether the write is still safe is read
+/// **before** `hasher` runs, not after (finding M1) — `hasher` can take real
+/// time on a large disc image, and a medium replaced mid-hash must not get
+/// the old content's hash filed under whatever identity the file happens to
+/// have once the write finally lands. See
+/// [`scan_cache::ScanCache::store_sha256_if_unchanged`].
+fn cached_sha256(
+    path: &Path,
+    memo: &ShaMemo,
+    cache: &scan_cache::ScanCache,
+    hasher: &mut impl FnMut(&Path) -> Option<String>,
+) -> Option<String> {
+    memo.get_or_hash(path, &mut |p: &Path| {
+        if let Some(known) = cache.lookup_sha256(p) {
+            return Some(known);
+        }
+        let before = scan_cache::identity_of(p);
+        let hash = hasher(p)?;
+        if let Some(before) = before {
+            cache.store_sha256_if_unchanged(p, &before, &hash);
+        }
+        Some(hash)
     })
 }
 
@@ -500,10 +555,9 @@ fn dedupe_identical_disks_with(
 /// remembered only while the file's size and modification time are the ones
 /// it was hashed at. A changed file is a new file and is hashed again.
 ///
-/// In memory and for the life of the process, not on disk: the questions
-/// that pay for a hash come in a burst — the slots, the chain and the plan of
-/// one tab — and a disc's hash is not worth a settings file. Only discs whose
-/// names repeat at one size ever reach it, so it holds a handful of strings.
+/// In memory for the life of the process, in front of the scan cache: the
+/// questions that pay for a hash come in a burst, and [`cached_sha256`]
+/// keeps the hash on disk for the next start (ART-302).
 #[derive(Default)]
 pub(crate) struct ShaMemo {
     entries: std::sync::Mutex<std::collections::HashMap<PathBuf, Remembered>>,
@@ -1116,6 +1170,62 @@ mod tests {
         assert_eq!(calls.get(), 2, "a changed file is hashed again");
     }
 
+    /// ART-302. A second session — a fresh memo, the same cache — takes a
+    /// disc's hash from the cache instead of reading the disc again. The
+    /// owner's two identical 490 856 448-byte `AmigaOS3.9` images cost 24.2 s
+    /// on the first question of every start before this.
+    #[test]
+    fn a_new_session_takes_a_discs_hash_from_the_cache_not_the_disc() {
+        let (_guard, dir) = scratch("dedupe-cached");
+        let path = dir.join("disk.iso");
+        std::fs::write(&path, vec![3u8; 4096]).unwrap();
+        let cache = scan_cache::ScanCache::in_dir(dir.join("cache"));
+        let calls = std::cell::Cell::new(0u32);
+        let mut hasher = |p: &Path| {
+            calls.set(calls.get() + 1);
+            file_sha256(p)
+        };
+
+        let first = cached_sha256(&path, &ShaMemo::default(), &cache, &mut hasher);
+        assert_eq!(calls.get(), 1, "the first session reads the disc");
+
+        let second = cached_sha256(&path, &ShaMemo::default(), &cache, &mut hasher);
+        assert_eq!(second, first);
+        assert_eq!(
+            calls.get(),
+            1,
+            "a fresh process reads the cache, not the disc"
+        );
+
+        std::fs::write(&path, vec![4u8; 8192]).unwrap();
+        let third = cached_sha256(&path, &ShaMemo::default(), &cache, &mut hasher);
+        assert_ne!(third, first);
+        assert_eq!(calls.get(), 2, "a changed disc is read again");
+    }
+
+    /// ART-302, finding I3(b). The **public** entry point production calls,
+    /// not `cached_sha256` directly: two discs, same name and size, real
+    /// bytes that actually differ. The cache is seeded with the same fake
+    /// hash for both, so a fresh-process dedupe (`ShaMemo::default()`, never
+    /// touching the static process memo) follows the cache's answer rather
+    /// than reading the discs' real, differing bytes.
+    #[test]
+    fn dedupe_identical_disks_cached_follows_the_cached_hash_not_the_disc() {
+        let (_guard, dir) = scratch("dedupe-cached-public");
+        let a = disk_file(&dir, "os39-a.iso", "AmigaOS3.9", 4096, 1);
+        let b = disk_file(&dir, "os39-b.iso", "AmigaOS3.9", 4096, 2);
+        let cache = scan_cache::ScanCache::in_dir(dir.join("cache"));
+        cache.store_sha256(&a.path, "seeded-hash");
+        cache.store_sha256(&b.path, "seeded-hash");
+
+        let kept = dedupe_identical_disks_cached_with_memo(vec![a, b], &cache, &ShaMemo::default());
+        assert_eq!(
+            kept.len(),
+            1,
+            "a fresh process reads the cached hash, not the discs' real, differing bytes"
+        );
+    }
+
     /// One folder named twice is one folder. A user who picks their media
     /// folder and then adds it again must not be told every disk in it is
     /// ambiguous with itself.
@@ -1439,7 +1549,7 @@ mod tests {
 
         // The walk really is refused — without this the test would pass for
         // a disc ART was perfectly happy with, and prove nothing.
-        let refusal = CdSource::open(&path).unwrap_err();
+        let refusal = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap_err();
         assert_eq!(refusal.code(), "ART-LIMIT-EXCEEDED", "{refusal}");
 
         // And the identification succeeds anyway, with the name read from
@@ -1476,7 +1586,7 @@ mod tests {
         write_test_iso(&dir, "os39.iso", "AmigaOS3.9");
 
         for m in find_media(&dir).unwrap() {
-            let source = open_media(&m).unwrap();
+            let source = open_media(&m, &crate::core::clock::UtcClock).unwrap();
             assert_eq!(source.volume_name(), m.volume_name);
         }
     }

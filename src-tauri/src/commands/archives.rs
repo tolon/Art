@@ -45,7 +45,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::lha::OverwritePolicy;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::security::safe_join;
@@ -134,14 +134,14 @@ pub fn archives_plan_install(
 
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Planning {} archives", archives.len());
+    let title = JobTitle::new("components.jobBar.title.planArchives").count(archives.len());
 
     // Resolved here rather than inside the job: a scratch root that has
     // gone away is the user's to fix, and they should hear it from the
     // button they pressed (ART-196).
     let scratch_root = crate::scratch::root()?;
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let plan = build_plan(
             &archives,
             &image_path,
@@ -228,18 +228,16 @@ pub fn archives_install(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!(
-        "Installing {} archives into {}",
-        archives.len(),
-        image_path.display()
-    );
+    let title = JobTitle::new("components.jobBar.title.installArchivesInto")
+        .count(archives.len())
+        .text("target", &image_path.display());
 
     // Resolved here rather than inside the job: a scratch root that has
     // gone away is the user's to fix, and they should hear it from the
     // button they pressed (ART-196).
     let scratch_root = crate::scratch::root()?;
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = install_archives(
             &archives,
             &image_path,

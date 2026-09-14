@@ -31,7 +31,7 @@ use crate::core::archive::extract::ExtractOutcome;
 use crate::core::cbm::d64::{CbmEntry, D64Image};
 use crate::core::cbm::t64::{T64Archive, T64Entry};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::volume::write::copy::OverwritePolicy;
 use crate::error::AppResult;
@@ -406,9 +406,9 @@ pub fn cbm_extract(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying out of {}", file.display());
+    let title = JobTitle::new("components.jobBar.title.copyOutOf").text("source", &file.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = extract_all(&file, &destination, &names, policy, progress);
 
         let record = user_operation("Copy files out of a Commodore image")

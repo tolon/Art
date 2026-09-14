@@ -20,6 +20,7 @@ use crate::core::adf::blocks::EntryKind;
 use crate::core::adf::bootblock::FileSystemType;
 use crate::core::adf::{extract, fs as adf_fs, validate};
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::jobs::JobTitle;
 use crate::core::volume::mount::{mount, scan_image, ImageVolumes, VolumeEntry};
 use crate::core::volume::VolumeGeometry;
 use crate::error::AppResult;
@@ -62,7 +63,8 @@ pub fn volume_list(
     let (device, geometry) = mount(&image, &entry)?;
 
     let dir_block = dir_block.unwrap_or(geometry.root_block);
-    let entries = adf_fs::list_directory_on(&device, dir_block)?;
+    let entries =
+        adf_fs::list_directory_on(&device, dir_block, &crate::tools::local_time::LOCAL_TIME)?;
 
     let volume_name = read_volume_name(&device, &geometry).unwrap_or_else(|| entry.name.clone());
 
@@ -124,9 +126,11 @@ pub fn volume_directory_size(
     let key = block.to_string();
     let registry = std::sync::Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Counting block {block} in {}", entry.name);
+    let title = JobTitle::new("components.jobBar.title.countVolumeBlock")
+        .text("block", &block)
+        .text("volume", &entry.name);
 
-    let id = super::jobs::spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = super::jobs::spawn_job(&app, registry, title, move |job_id, progress| {
         // Re-opened inside the job: the device the check above produced
         // borrows nothing that can cross a thread, and re-opening is cheap
         // beside the walk itself.

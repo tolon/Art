@@ -859,16 +859,9 @@ fn package_state(
     // for a row that cannot be added without putting older files over newer
     // ones. Read from the newer package's own `overrides` — the declaration
     // `add_package` checks — so the row and the refusal cannot disagree.
-    let overtaken: Vec<String> = all
-        .iter()
-        .filter(|other| {
-            have.contains(&other.id)
-                && other
-                    .component
-                    .overrides
-                    .iter()
-                    .any(|over| over == &package.id)
-        })
+    let overtaken: Vec<String> = super::package::overriders_of(all, &package.id)
+        .into_iter()
+        .filter(|other| have.contains(&other.id))
         .map(|other| other.name.clone())
         .collect();
     if !overtaken.is_empty() {

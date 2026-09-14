@@ -223,11 +223,11 @@ every Amiga disk. **PFS3 and FFS volumes are formatted and filled by ART
 itself** — no external tool required, though one can be configured as a
 fallback for two named gaps. 0.9.2 corrected how ART formats PFS3: a partition
 over about 4.9 GB could not be mounted, and the Amiga's first new drawer could
-fail ([ART-310](docs/ISSUES.md#fixed)). **One limit on filling PFS3 remains,
-said here rather than discovered later:** a partition ART fills holds at most
-about 21 500 files and drawers ([ART-311](docs/ISSUES.md#open)). A writer defect
-that could, rarely, give a file another block's contents with no error is fixed
-in 0.9.3 ([ART-312](docs/ISSUES.md#fixed)).
+fail ([ART-310](docs/ISSUES.md#fixed)). A partition ART fills holds as many
+files and drawers as PFS3 itself allows ([ART-311](docs/ISSUES.md#fixed)); a
+name longer than 106 bytes is refused by name ([ART-314](docs/ISSUES.md#fixed)).
+A writer defect that could, rarely, give a file another block's contents with
+no error is fixed in 0.9.3 ([ART-312](docs/ISSUES.md#fixed)).
 
 The card can carry **more than one complete AmigaOS** — 3.1 for compatibility
 beside 3.2 for daily use, say. ART writes no boot menu, because AmigaOS already
@@ -797,8 +797,8 @@ with **one deliberate exception**: `libpfs3`, the PFS3 implementation ART writes
 real PiStorm cards with, is **LGPL-3.0-or-later**. Weak copyleft, compatible
 with ART's own licence, and taken in preference to writing a second filesystem
 writer from scratch. ART carries it as a patched copy in
-`src-tauri/vendor/libpfs3` — only its formatter changed
-([ART-310](docs/ISSUES.md#fixed)) — with its licence texts and a record of what
+`src-tauri/vendor/libpfs3` — its formatter and writer changed
+([ART-310](docs/ISSUES.md#fixed) to [ART-316](docs/ISSUES.md#fixed)) — with its licence texts and a record of what
 was changed beside it. All of them are listed in
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) and checked on every push by
 `cargo deny`. ART itself distributes **no** Amiga ROMs, no AmigaOS files and no

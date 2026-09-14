@@ -715,6 +715,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // 186 → 187 (the owner's findings of 2026-09-10): the build bar's button names
     // the next tab, `t(stepLabelKey(next))` — the pattern `OsBuilder.tsx`'s own
     // strip already uses for the same labels, not a new one.
-    expect(dynamicCalls).toBe(187);
+    // 187 → 188 (ART-301): `JobBar.tsx` renders a job's title as
+    // `t(job.title.key, job.title.params)` — a key Rust names. The keys are the
+    // closed `JOB_TITLE_KEYS` list in `@/lib/jobs`, and
+    // `src/i18n/job-title-keys.test.ts` resolves every one in both catalogues
+    // and holds the list to the Rust sources, which is the check this scan
+    // cannot make.
+    expect(dynamicCalls).toBe(188);
   });
 });

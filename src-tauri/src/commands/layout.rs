@@ -14,6 +14,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
+use crate::core::jobs::JobTitle;
 use crate::core::layout::apply::apply;
 use crate::core::layout::policy::Policy;
 use crate::core::layout::{Collision, LayoutPlan};
@@ -64,9 +65,9 @@ pub fn layout_plan(
 ) -> AppResult<u64> {
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Working out what {} sources need", request.paths.len());
+    let title = JobTitle::new("components.jobBar.title.planLayout").count(request.paths.len());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let plan = crate::core::layout::plan_with(
             &request.root,
             &request.paths,
@@ -131,10 +132,12 @@ pub fn layout_apply(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Laying {} item(s) out in {root}", plan.items.len());
+    let title = JobTitle::new("components.jobBar.title.applyLayout")
+        .count(plan.items.len())
+        .text("target", &root);
     let for_log = root.clone();
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = apply(&plan, progress);
 
         let record = user_operation("Lay content out into a staging folder")

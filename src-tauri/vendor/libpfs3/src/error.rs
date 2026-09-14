@@ -1,4 +1,8 @@
 //! Error types for libpfs3.
+//!
+//! Modified by ART on 2026-09-14 (ART-314): the `NameTooLong` variant, for a
+//! name the volume cannot store and find again. `ART-PATCH.md` in this
+//! crate's root says what and why.
 
 /// Result type alias using the PFS3 [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
@@ -29,6 +33,14 @@ pub enum Error {
 
     #[error("already exists: {0}")]
     AlreadyExists(String),
+
+    /// ART-314: a name longer than the volume can store and find again.
+    #[error("name too long: '{name}' is {len} bytes, this volume stores at most {max}")]
+    NameTooLong {
+        name: String,
+        len: usize,
+        max: usize,
+    },
 
     #[error("disk full: {0}")]
     DiskFull(String),

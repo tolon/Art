@@ -117,6 +117,24 @@ pub enum CoreError {
     #[error("{}", non_ascii_pfs3_message(paths, *more))]
     NonAsciiPfs3Names { paths: Vec<String>, more: usize },
 
+    /// A name longer than the PFS3 volume can store and find again (ART-314).
+    ///
+    /// pfs3aio cuts a new name to `fnsize - 1` bytes and cuts a searched-for
+    /// name the same way before a compare that needs equal lengths
+    /// (`directory.c:1489-1490,721-722`, `assroutines.c:163`), so a longer name
+    /// would be listed on the Amiga and never open. ART's format writes
+    /// `fnsize` 107; a volume formatted elsewhere may say less, and the limit is
+    /// read from the volume. Raised by `core::preload::native` before anything
+    /// reaches `libpfs3`, the same shape as
+    /// [`NonAsciiPfs3Names`](Self::NonAsciiPfs3Names). **Not a fallback
+    /// reason**: hst-imager formats `fnsize` 107 as well.
+    #[error("{}", pfs3_names_too_long_message(paths, *more, *max_bytes))]
+    Pfs3NamesTooLong {
+        paths: Vec<String>,
+        more: usize,
+        max_bytes: usize,
+    },
+
     /// `NativeFormatter::import_filesystem` cannot embed a driver into an
     /// existing card's RDB in place (ART-117) — see `core/preload/native.rs`'s
     /// module docs for why `create_rdb_layout` cannot be reused for this.
@@ -250,6 +268,21 @@ fn non_ascii_pfs3_message(paths: &[String], more: usize) -> String {
     msg
 }
 
+/// The sentence for [`CoreError::Pfs3NamesTooLong`].
+fn pfs3_names_too_long_message(paths: &[String], more: usize, max_bytes: usize) -> String {
+    let mut msg = format!(
+        "{} name(s) are longer than the {max_bytes} bytes this PFS3 volume can store and find \
+         again — the Amiga would list them and never open them: {}",
+        paths.len() + more,
+        paths.join(", ")
+    );
+    if more > 0 {
+        msg.push_str(&format!(", and {more} more"));
+    }
+    msg.push_str(". Shorten them before copying.");
+    msg
+}
+
 impl CoreError {
     /// A short, stable identifier for this class of failure.
     ///
@@ -274,6 +307,7 @@ impl CoreError {
             Self::CancelledPartway { .. } => "ART-CANCELLED-PARTWAY",
             Self::PartiallyApplied { .. } => "ART-APPLY-PARTIAL",
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
+            Self::Pfs3NamesTooLong { .. } => "ART-PFS3-NAME-TOO-LONG",
             Self::ForeignRdbEmbedNotSupported => "ART-NATIVE-EMBED-UNSUPPORTED",
             Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",
             Self::FirstBootHookUnreachable { .. } => "ART-FIRSTBOOT-HOOK-UNREACHABLE",
@@ -398,6 +432,11 @@ mod tests {
             CoreError::NonAsciiPfs3Names {
                 paths: vec!["x".into()],
                 more: 0,
+            },
+            CoreError::Pfs3NamesTooLong {
+                paths: vec!["x".into()],
+                more: 0,
+                max_bytes: 106,
             },
             CoreError::ForeignRdbEmbedNotSupported,
             CoreError::EscapedNamesNeedNativeCopy {

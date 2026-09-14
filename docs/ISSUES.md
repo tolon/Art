@@ -26,79 +26,20 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-311** 🟡 **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
-mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
-format fix left the writer untouched by the owner's decision*
-`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_anode`, `alloc_anode_block`) · pfs3aio allocates index blocks on
-demand (`NewIndexBlock`, `anodes.c:717-772`: up to `MAXSMALLINDEXNR` + 1 = 99 in small mode, through
-`NewSuperBlock` in SUPERINDEX mode). `libpfs3`'s writer does neither. In small mode it returns
-`DiskFull("no index block slot available")` as soon as `rootblock.indexblocks[idx_nr]` is unset
-(`writer.rs:1024`), so a volume keeps the one index block the format made: 253 × 84 − 6 = 21 246
-anodes. In SUPERINDEX mode it returns `DiskFull("no superindex slot available")` when
-`superindex[n]` is unset (`writer.rs:980`), but that is never reached: `alloc_anode` searches only
-anode blocks 0..256 (`writer.rs:901`) and then returns `DiskFull("no free anode slots")` (`:947`), so
-a SUPERINDEX-mode volume holds 256 × 84 − 6 = 21 498 anodes at 1024-byte reserved blocks. *Corrected
-2026-09-13 by the branch's final whole-branch review; this entry first said "only past 253² anode
-blocks".*
-**How it hurts a user:** content of more than ~21 000 files cannot go on a PFS3 partition ART fills,
-at any size. `core::card::sizing::pfs3_small_mode_anode_cap` sizes such content up past MAXSMALLDISK,
-which spends gigabytes of Work and does not lift the ceiling. Measured 2026-09-13 with ART-310's format fix applied: 20 655 files
-into one directory on a 1 GiB volume, then `disk full: no index block slot available`. Not scheduled;
-lifting it changes `core::card::sizing` and its tests, which is the owner's to schedule.
-**A small-mode fix already exists, unmerged and unpushed:** the Windows machine's earlier, independent
-ART-310 run (2026-09-11/12, branch `art-310-windows`, local only) allocates small-mode index blocks on
-demand up to `MAXSMALLINDEXNR` (`writer.rs:1140-1145` there, commit `de26e58`). That run's task-5 review
-also found a writer defect older than ART-310 that silently corrupts files: `alloc_anode` resolves an
-index entry through the cache, which reads the device and never the writer's `pending_writes`, so a
-second allocation in one operation re-creates the same anode block and hands out the same anode number
-twice. 3 of 22 000 files read back a directory block; 0 with one variable changed (`write_reserved`
-writing through); the same 3 files on 0.1.3's writer at 18 000 (fixed there in `9c7c845`; the review
-is that machine's git-ignored `.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`).
-That defect is ART-312, fixed 2026-09-13 on `art-312-anode-reuse`. The owner chose on 2026-09-13 to finish this branch first and port that work
-afterwards.
-
-**ART-118** 🟠 **The OS Builder's install screen has never been driven in a
-real browser past its headings — jsdom now covers what a browser could not,
-the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
-browser pass and Task 14's real run; narrowed 2026-08-19*
-`src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
-the route, the new `Install` kind, and five resolved `h2` strings with no raw
-key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination
-fields, ticking a component, running Plan, reading the confirmation panel or
-the refusals card, running Verify and reading its three states, switching to
-Turkish — crashed the renderer reproducibly with an access violation
-(`-1073741819`), in both Chrome and Edge and both headless modes, and was not
-resolved. Task 14's real run (`run_the_real_engine_against_the_users_own_media_when_asked`)
-exercised the same 26-component checklist and the modules-on-without-being-
-chosen path **through the Rust engine directly**, never through this screen —
-so the engine's own correctness is now evidenced far beyond the screen's own
-verification.
-
-**2026-08-19: `src/components/osbuilder/OsInstall.test.tsx` added — five jsdom
-component tests, the first automated coverage of this screen at all.**
-Mocked at the `@/lib/osinstall` / `@/lib/pistorm` / `@/lib/settings` boundary
-(the house pattern — see `useRomPairing.test.tsx`), not deeper, and the real
-component is rendered directly rather than a proxy harness. What is now
-covered:
-- The screen mounts **past its headings** with the media/ROM/destination
-  fields, the 26-entry component checklist, and the Build and Verify actions
-  all present and reachable — the thing no browser session could get past.
-- The whole rendered tree carries no raw i18next key shape and no literal
-  `{{…}}`, in **both English and Turkish** — the first time any language has
-  been checked against a running instance of this screen (`ART-062`).
-- Ticking a component in the checklist reaches the request `osinstallPlan` is
-  asked to plan and changes what the plan section shows — the checklist's
-  own wiring had never been exercised by anything before this.
-- A refusal renders as the real, translated sentence, not a blank card.
-
-What is still **not** covered, and why this stays open rather than closing:
-jsdom does no layout at all, so it cannot reproduce the access violation
-itself (a native renderer crash) or measure whether a long Turkish string
-overflows its container — that half of `ART-062` is unchanged and still a
-real-screen job. The crash's root cause is still unknown; a real
-`pnpm tauri dev` pass by a human, driving the screen against a real media
-folder (e.g. `E:\amiga\ProjeART\dist-3.2`), is still owed and is what would
-actually close this.
+**ART-319** 🔵 **An error part-way through a PFS3 writer operation leaves pending writes and in-memory
+index/superindex/deldir state for the next commit** — *found 2026-09-14 while implementing ART-315; widened
+2026-09-14 by the final review, M4; reading-derived, not run*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_data_blocks`, `move_to_deldir`, `free_data_blocks`) · Two cases,
+both because `Writer`'s in-memory state (the data bitmap, `pending_writes`) is only written back on a successful
+commit, and an error returned mid-operation leaves it as the failed attempt left it, for whatever the writer does
+next: (1) On `DiskFull` after a partial data allocation the cleared bits stay cleared in memory and the touched
+bitmap blocks stay in `pending_writes`, without `blocksfree` being reduced; the next operation that commits writes
+them, and those blocks are lost to the volume. **Unreachable from ART today:** `copy_in_pfs3` refuses content
+larger than the free space before writing and stops at the first error. (2) ART-318's writer path: `delete_in`
+calls `move_to_deldir` (which can itself write and succeed) and then `free_data_blocks`; if `free_data_blocks`
+fails after `move_to_deldir` succeeded, the file is left both in its directory and in the deldir, in memory, for
+the next commit — a later eviction of that deldir slot then frees a file still reachable from its directory.
+**Unreachable from ART today:** ART never deletes on PFS3.
 
 **ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
 by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
@@ -256,34 +197,582 @@ re-audits them without reason:
 
 ---
 
-**ART-300** 🔵 **The refusal for an older package added over a newer one does not name the
-order** — *found 2026-09-10 fixing ART-298*
-`src-tauri/src/core/osinstall/apply.rs` (`add_package_staging_in`) · The chain row now says it
-([ART-298](#fixed)), so the screen no longer reaches this refusal; `osinstall_add_package` still can,
-and its sentence — *"would write over 32 file(s) it never declared it may replace … a package
-overwrites only what its own `overrides` names"* — reads as an instruction to edit a recipe rather
-than as *the newer package is already here*. The owners of the undeclared files are in
-`distribution.json`; naming a shipped package whose own `overrides` lists this one would make it
-actionable. Not done this round: the add-package tests run on fixture packages, and the name needs
-the shipped catalogue.
-
-**ART-301** 🔵 **The job bar's titles are English sentences composed in Rust** — *found 2026-09-10
-in the owner's screenshot*
-`src/components/JobBar.tsx` (`job.title`) · 34 `let title = format!(…)` sites across 18 command
-files. The owner saw *"Adding 1 package(s) to …"* twice on a Turkish screen. The two rows are **two
-runs**, not a double render — 21:22:08 and 21:23:04 in `operations.jsonl`. The refusal under each is
-the core's own sentence and English by design (ART-060); the title is not the core's sentence but
-the command layer's, and a job could carry a `Phrase` instead. A round of its own.
-
-**ART-302** 🔵 **The first tab question of a session still reads two same-size discs whole** —
-*found 2026-09-10 measuring ART-297*
-`src-tauri/src/core/osinstall/scan.rs` (`ShaMemo`) · On the owner's folders `AmigaOS3.9` repeats at
-one size — two identical 490 856 448-byte images — and proving them identical takes a full read:
-24.2 s for the first `osinstall_slots` after a start, off the window's thread since ART-297, then
-0.45 s warm. The memo lives in memory only; keeping the hash in the scan cache (`ScanCache` already
-stores md5s keyed by size and modification time) would let the next start pay nothing.
-
 ## Fixed
+
+**ART-317** 🟡 ✅ **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
+the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
+beside hst-imager's 21:15 on a UTC+3 machine, experiment E2 — see
+`docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md` on the local-only branch `art-310-windows`,
+`git show art-310-windows:docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`); scope widened and
+rescoped 2026-09-14; filed 2026-09-14; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/vendor/libpfs3/src/util.rs:163-172` · `src-tauri/src/core/volume/write/layout.rs:104-120` ·
+`src-tauri/src/core/adf/bcpl.rs:5-6` · `src-tauri/src/core/preload/native.rs:642-655` ·
+`src-tauri/src/core/adf/create.rs:192-204` · `src-tauri/src/core/adf/mutate.rs` (does not exist; no such
+file on 2026-09-14) ·
+`src-tauri/src/core/volume/write/copy.rs:372-373,380-388` · `src-tauri/src/core/volume/write/uaem.rs:206` ·
+AmigaDOS `DateStamp()` is local time with no zone (pfs3aio stamps with it, `directory.c:3540`, `format.c:393`;
+pfs3aio `211f7f0`, read, not run). ART stamps two kinds of Amiga date as UTC seconds − 252 460 800: one read
+from the host clock at write time (libpfs3's own rootblock and entry dates, ART's FFS/OFS writer, the RDB and
+ADF paths) and one converted from a host file's modification time (the host-mtime fallback, `copy.rs:380-388`).
+**A `.uaem` sidecar's own date is not part of this defect and was wrongly folded into "every date" before
+2026-09-14's rescope:** `uaem.rs:206`'s `amiga_from_civil` parses the sidecar's zone-less text directly into an
+`AmigaDate` with no UTC step at all, and `copy.rs:372-373` writes that value through unchanged — already local,
+never converted. Nothing in ART obtains the local offset for the two paths that are wrong; `core/` may not call
+a Windows API. **How it hurts a user:** every file, directory and volume ART stamps from `now()` or from a host
+file's own modification time shows a time off by the machine's UTC offset on the Amiga; a file carrying its own
+`.uaem` sidecar date is unaffected. **Decided 2026-09-14:** local time everywhere, with the offset obtained
+outside `core/` (plan 5, design first).
+**Fixed:** every writer, copy source and reader takes a `core::clock::AmigaClock`. The product's is
+`tools::local_time::LOCAL_TIME` (`chrono::Local`, the offset in force on each date), and libpfs3 is
+`0.1.3+art.4`. Tests: `core::clock::tests::the_offset_is_the_one_in_force_at_the_date_not_now` (M3, final
+review: re-run with the defect-shaped mutation itself — `amiga_from_unix` changed to
+`self.offset_at(self.now_unix())` in place of `self.offset_at(unix)` — and it does go red, alongside
+`a_round_trip_survives_both_sides_of_the_switch`; the citation stands),
+`a_new_drawer_and_a_new_file_carry_the_writers_local_time`, `a_new_disk_is_stamped_with_the_clocks_local_time`,
+`a_winter_mtime_copied_in_summer_keeps_its_winter_local_time`, `a_uaem_date_round_trips_without_an_offset` (a
+`.uaem` date is wall time and is never shifted), `a_pfs3_format_and_copy_in_carry_the_clocks_local_time`,
+`an_ffs_format_and_copy_in_carry_the_clocks_local_time`,
+`a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock` (pfs3aio `AddToDeldir`, read at
+211f7f0), `a_listed_date_is_the_instant_the_writer_stamped`,
+`a_disc_recording_date_is_read_as_local_wall_time`, `core_makes_amiga_dates_only_through_the_clock`; each seen
+failing with its defect put back. **Survivors, disclosed by the final review (I1) and its fix wave
+(2026-09-14):** on a UTC CI runner, `offset_at` returning 0 passes every non-ignored test; the ignored
+`agrees_with_dotnet_timezoneinfo_across_seasons_and_years` catches it on a non-UTC machine — run on the owner's
+machine in the fix wave, `test result: ok. 1 passed; 0 failed`, offset and round trip both agreeing with .NET's
+`TimeZoneInfo` at all four instants checked. (a) A `commands/`/`tools/` site could pass
+`&crate::core::clock::UtcClock` in place of `&crate::tools::local_time::LOCAL_TIME` and make a UTC date on every
+machine, not only a UTC CI runner; **closed** by `core::independence::commands_and_tools_never_name_utc_clock_outside_a_test`
+(grepped `commands/**`/`tools/**` for `UtcClock` first — no site found, so nothing needed allow-listing). Two
+survivors remain **open**, neither guarded nor disclosed before this fix wave: (b) calling
+`amiga_from_wall(system_now_unix())` directly bypasses the clock's own offset lookup — both are `pub` and
+`clock.rs` is on `core_makes_amiga_dates_only_through_the_clock`'s own allow-list, so no guard sees it; (c) a
+libpfs3 `Writer` opened without calling `set_entry_date` falls back to UTC (`vendor/libpfs3/src/writer.rs:132-133`)
+and the independence guards do not read `vendor/`. Dates already on volumes stay as written.
+
+**ART-301** 🔵 ✅ **The job bar's titles were English sentences composed in Rust** — *found 2026-09-10 in the
+owner's screenshot; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/src/core/jobs/mod.rs` (`JobTitle`) · `src-tauri/src/commands/jobs.rs` · `src/lib/jobs.ts`
+(`JOB_TITLE_KEYS`) · `src/components/JobBar.tsx` · The owner saw *"Adding 1 package(s) to …"* twice on a Turkish
+screen. **Corrected count:** there were 40 titles in 19 command files, not 34 in 18 as this entry first said —
+33 built with `format!`, 7 fixed strings. A job now carries a `JobTitle`: a catalogue key under
+`components.jobBar.title.*` and the values its sentence names, serialised to the TypeScript `Phrase` shape.
+The job bar renders it with `t()`. A count goes in as `count`, so i18next picks `_one` / `_other` and no title
+builds `(s)` by hand. Paths, names and releases pass through untranslated. That makes 36 keys and 47 leaves in each
+catalogue. `spawn_job` takes a `JobTitle` and nothing else, so a sentence no longer compiles there. Unchanged
+on purpose: the refusal under a failed job is still the core's English sentence (ART-060), and the operation
+log's record names are not titles — `commands/oplog.rs`'s `user_operation` writes its own English strings to
+`operations.jsonl`, and a job's title never reaches that file. **The Turkish strings above were written by the
+plan, not yet read on screen by the owner** — folded into [ART-062](ISSUES.md)'s still-unread Turkish catalogue,
+not a separate claim of having been checked.
+Guards: `core::jobs::tests::{a_job_title_serializes_to_the_phrase_shape,
+a_count_is_sent_as_a_number_named_count, a_title_without_values_sends_no_params_field,
+a_job_progress_sends_its_title_as_a_phrase_not_a_sentence, a_title_reads_back_as_itself}`,
+`commands::jobs::tests::the_registry_keeps_the_title_it_was_given`; `src/components/JobBar.test.tsx` (*names a
+job in Turkish when Turkish is chosen*, *picks the plural from count, not from a hand-built (s)*);
+`src/i18n/job-title-keys.test.ts`, which reads the Rust tree. It checks both catalogues, literal keys in
+their own `let title` statement, exactly the values each sentence interpolates, all 40 sites, and no listed
+key without a site.
+
+Red before the fix:
+- Task 1 (`core::jobs::`/`commands::jobs::`, before `JobTitle` existed): `error[E0425]: cannot find type
+  \`JobTitle\` in this scope` at `src\commands\jobs.rs:335:36` — 14 compile errors, all `JobTitle` not found.
+- Task 2 (`src/components/JobBar.test.tsx`, `src/i18n/job-title-keys.test.ts`, before the catalogue existed):
+  `Error: Objects are not valid as a React child (found: object with keys {key, params})` and `TypeError:
+  JOB_TITLE_KEYS is not iterable` — `Test Files 2 failed (2)` / `Tests 9 failed (9)`.
+- Task 3 (`src/i18n/job-title-keys.test.ts`, before any command file moved off `format!`):
+  `AssertionError: expected 0 to be greater than 0` — `Test Files 1 failed (1)` / `Tests 1 failed | 7 passed (8)`.
+- Task 7 (`src/i18n/job-title-keys.test.ts`, pinning the reverse direction): no red on the count itself — all
+  40 sites were already migrated, so `"finds all forty sites"` passed immediately; the reverse direction's red
+  came only from its own mutation, below.
+
+Mutations put back and seen to fail:
+- Task 1 M1 — dropped `skip_serializing_if = "BTreeMap::is_empty"` on `JobTitle.params`: compiled, failed at run
+  time in `a_title_without_values_sends_no_params_field` (`params` serialised as `{}` instead of omitted).
+- Task 1 M2 — dropped `#[serde(untagged)]` on `JobParam`: compiled, failed at run time in
+  `a_count_is_sent_as_a_number_named_count` (plus `a_job_progress_sends_its_title_as_a_phrase_not_a_sentence`
+  and `a_job_title_serializes_to_the_phrase_shape`, both also asserting on the params shape).
+- Task 2 — mutated `JobBar.tsx`'s `{t(job.title.key, job.title.params)}` to `{job.title.key}`: `Test Files 1
+  failed (1)` / `Tests 4 failed | 1 passed (5)` — the four title-reading tests failed, showing the raw key
+  instead of the rendered sentence; the Stop-button test stayed innocent, as expected.
+- Task 3 M1 — mangled a key, `components.jobBar.title.copyOutOf` → `…copyOutOff` in `cbm.rs`: failed
+  `"names only keys the list holds"`, naming `commands\cbm.rs → components.jobBar.title.copyOutOff`.
+- Task 3 M2 — deleted `.text("source", &file.display())` from the same `cbm.rs` site: failed `"passes exactly
+  the values its sentence interpolates"`, naming `commands\cbm.rs → components.jobBar.title.copyOutOf: passes
+  [], the sentence names [source]`.
+- Task 7 — swapped `JobTitle::new("components.jobBar.title.syncAminet")` for
+  `…title.fetchArtwork"` in `sources.rs`: failed `"leaves no listed key without a Rust site"` (`Tests 1 failed |
+  8 passed (9)`), naming `components.jobBar.title.syncAminet` as a listed key with no Rust site.
+- Task 7 — replaced the same site's `JobTitle::new(...)` with a plain string,
+  `let title = "Syncing the Aminet catalog";`: `cargo check` refused it —
+  `error[E0308]: mismatched types … expected \`JobTitle\`, found \`&str\`` — the compiler itself, not a runtime
+  test, since `spawn_job` no longer accepts anything but `JobTitle` once the bridge is gone.
+
+No survivor. Every mutation above was killed by the guard it was aimed at; none needed strengthening.
+
+**ART-318** 🟠 ✅ **`libpfs3`'s writer put a deleted file into the deldir in a layout pfs3aio does not read** —
+*found 2026-09-14 while implementing ART-316; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`delete_in`, `move_to_deldir`, `write_deldir_entry`, `undelete`) ·
+`src-tauri/vendor/libpfs3/src/ondisk/mod.rs` (`DelDirEntry::parse`, `deldir_entries_per_block`) · pfs3aio stores a
+deldir entry's name as a length byte then at most 17 (15 on `MODE_LARGEFILE`) bytes (`blocks.h:100-105,368-379`,
+`directory.c:4549-4550`),
+takes the slot at `deldirroving` and advances it over `deldirsize × 31` slots (`directory.c:4497-4507`), frees only
+the anodes of the file a slot evicts (`:4510-4518`), frees a deleted file's data blocks and keeps its anodes
+(`directory.c:1816-1830`, `allocation.c:520-665`), and refuses to undelete a file whose blocks were reused
+(`directory.c:4092-4114`). 0.1.3 wrote the raw name, took the first empty slot and evicted slot 0, kept the
+deleted file's blocks allocated, freed an evicted file's blocks, and computed 63/127 entries a block past 1024-byte
+reserved blocks. All read, not run under pfs3aio. **Cross-check:** hst-amiga `6b45584` matches pfs3aio's roving and
+eviction (`Directory.cs:2143-2178`) but writes the raw name, as 0.1.3 did (`DelDirEntryWriter.cs:14-20`,
+`Constants.cs:108-109`); pfs3aio, the Amiga's handler, is followed. **The brief's own name length disagreed with
+the pfs3aio build pfs3aio itself makes:** its struct comment names 15 bytes (`blocks.h:375-378`, the
+`LARGE_FILE_SIZE` build), but pfs3aio's only build file compiles with `-DLARGE_FILE_SIZE=0` (`makefile:21`),
+selecting `DELENTRYFNSIZE` 18 (17 name bytes; `blocks.h:100-105`) — the writer follows the makefile's build: 17
+name bytes on an ordinary volume, 15 on a `MODE_LARGEFILE` one.
+**How it would have hurt a user:** once ART's partitions carry a deldir (the owner's decision), a file deleted
+through this writer would have shown on the Amiga under a garbled name and could not be undeleted by name.
+**Fixed:** the writer follows pfs3aio, and `NativeFormatter` formats with the deldir on.
+- **Tests, each red first** (`cargo test --lib -- deldir undeletes_until`; the brief's `deldir` filter alone
+  misses the undelete test): `native_pfs3_format_turns_the_deldir_on` — `assertion left == right failed:
+  MODE_DELDIR | MODE_SUPERDELDIR / left: 0 / right: 264`; `a_deleted_pfs3_file_undeletes_until_its_blocks_are_reused`
+  — `` called `Result::unwrap()` on an `Err` value: NotFound("deldir index 0 out of range") ``;
+  `a_deleted_pfs3_file_goes_into_pfs3aios_deldir_entry` — `` assertion `left == right` failed: the deldir entry,
+  raw / left: [] ``; `the_pfs3_deldir_roves_and_the_63rd_delete_evicts_slot_zero` — `` assertion `left == right`
+  failed: a full deldir / left: 0 / right: 62 ``.
+- **Mutations:** 11 run (M1–M11), 10 killed at run time. **M8** (the deldir's two-block reserved-area charge
+  dropped from `pfs3_fits`) survived — judged a wrong mutation: `pfs3_fits`'s existing 8-block margin absorbs
+  the 2 blocks, so no partition size where the real format fits and the estimate disagrees is moved by it.
+  **M9** (`deldir_entries_per_block`'s `.min(DELENTRIES_PER_BLOCK)` removed) survived in the first run — every
+  test volume uses 1024-byte reserved blocks, where the computed count is already 31, so no volume test could
+  see the cap; judged a weak guard and closed with a direct test,
+  `a_pfs3_deldir_block_holds_31_entries_at_every_reserved_block_size` (asserts `[31, 31, 31]` at 1024/2048/4096
+  bytes — pre-fix it reads `[31, 63, 127]`), against which M9 was re-run and killed.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** a file deleted or undeleted on a real Amiga; hst-imager listing a deldir (the oracle reads the
+  directory tree, not the deldir). Not tested: the `MODE_LARGEFILE` branch (ART never sets it) and the `ST_FILE`
+  gate that keeps soft links out of the deldir. Two behaviours kept from the brief over pfs3aio, disclosed by the
+  implementer: a roving pointer naming a missing block frees slot 0's anodes (pfs3aio leaks them instead); a
+  refused undelete writes nothing (pfs3aio also frees the entry's anodes and clears the slot).
+
+**ART-311** 🟡 ✅ **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
+mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit";
+filed 2026-09-13, when ART-310's format fix left the writer untouched by the owner's decision; fixed 2026-09-14
+on `art-debt-0914` (commits `7ff422f`, `69123e5`)*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_anode`, `alloc_anode_block`, `update_rootblock`,
+`clear_single_anode`, new `anode_block_limit`/`refresh_anode_reader`) · `src-tauri/src/core/card/sizing.rs`
+(`pfs3_anode_cap`, `reserved_needed`, `pfs3_fits`) · pfs3aio allocates index blocks on
+demand (`NewIndexBlock`, `anodes.c:717-772`: up to `MAXSMALLINDEXNR` + 1 = 99 in small mode, through
+`NewSuperBlock` in SUPERINDEX mode, up to `MAXSUPER` + 1 = 16), searches an anode block's own address space as a
+16-bit seqnr (`anodes.c:582`), and roves from the block it last allocated from rather than rescanning from 0
+(`AllocAnode`, `anodes.c:366-471`). *Corrected 2026-09-13 by the branch's final whole-branch review; this entry
+first said "only past 253² anode blocks".*
+**What changed:** `alloc_anode` searches every anode block the volume can address instead of a fixed 256, via a
+new `anode_block_limit()`; in small mode `alloc_anode_block` makes a missing index block on demand up to
+`MAXSMALLINDEXNR`, writing the rootblock's `indexblocks` union in `update_rootblock` (Task 4); in SUPERINDEX mode
+it makes a missing super block up to `MAXSUPER`, reads a super block through the writer's own pending writes
+(not the cache), numbers a new index block across the volume rather than inside its own super block, and
+`update_rootblock` writes `rootblock_ext.superindex` when it changed; `alloc_anode` roves from the anode block it
+last allocated from, skipping blocks marked full, restarting from 0 only when the roving search itself started
+past 0; `clear_single_anode` clears a freed anode's block from the "full" set (Task 5). `sizing.rs`'s
+`pfs3_small_mode_anode_cap` (small mode only) is replaced by `pfs3_anode_cap` (both modes, pfs3aio's own limits);
+`reserved_needed` charges the index/super blocks this fix adds; `pfs3_fits` applies the cap unconditionally
+instead of only in small mode.
+- **Fill times, 22 000 files, before the roving search (Task 4) → after (Task 5):** small mode 6.15 s → 0.68 s;
+  SUPERINDEX mode 8.91 s → 1.19 s.
+- **Tests, each red first:** `a_small_pfs3_volume_takes_more_anodes_than_one_index_block_holds` —
+  `D103/F00025: disk full: no index block slot available`; `a_superindex_pfs3_volume_takes_more_anodes_than_256_anode_blocks_hold`
+  — `D104/F00070: disk full: no free anode slots`; `a_superindex_pfs3_volume_makes_its_second_super_block` —
+  `` called `Result::unwrap()` on an `Err` value: DiskFull("no superindex slot available") ``; sizing's
+  `many_files_stay_in_small_mode_and_fit_their_estimate` — `25 000 files: estimate 5244051456 bytes is past
+  MAXSMALLDISK (10241440 blocks)`; `the_anode_ceiling_is_pfs3aios` — `` assertion `left == right` failed / left:
+  21246 / right: 2103942 ``. Sizing's `many_files_cross_into_superindex_mode` was removed (superseded by these
+  two).
+- **Mutations:** Task 4's M1–M3, killed, no survivors. Task 5's M1–M4 and M8 killed; **M5** (roving start forced
+  to 0, full-block skip disabled) produced no test failure, as expected — a performance change, not a guard,
+  confirmed by the fill times reverting to the pre-roving numbers; disclosed. **M6** (`anode_block_full`'s clear
+  on free deleted) survived — disclosed: a freed anode's block is passed over as full for the rest of the
+  writer's session and a new block made instead, wasteful not wrong, and no ART path deletes through `libpfs3`
+  today. **M7** (`refresh_anode_reader` deleted from the super-block-creation branch) survived — a weak guard,
+  corrected 2026-09-14 by the final review from an earlier "unobservable": it is observable, just not by any
+  test here — it would surface once a chain walk in the same session reaches an anode under a new super block
+  (only reachable past 64 009 anode blocks at 1024-byte reserved blocks), which no test does before the volume
+  is reopened (which rebuilds the reader fresh) and so cannot see the stale copy. **M9** (`reserved_needed`'s sum
+  reduced to `dir_blocks + anode_blocks`) survived — a real weak guard, parked for the final review: `pfs3_fits`'s
+  8-block margin absorbs the one or two index/super blocks this fix adds for every size the suite exercises.
+  **Closed 2026-09-14 by the final review** with a direct arithmetic test,
+  `reserved_needed_counts_the_extra_index_block_past_index_per_block_anode_blocks` (21 246 files at 1024-byte
+  reserved blocks need 253 reserved blocks, 21 247 need 255 — one more anode block *and* one more index block),
+  against which the same mutation was re-run and killed
+  (`` assertion `left == right` failed: 1 root dir block + 253 anode blocks + 1 more index block / left: 254 /
+  right: 255 ``), then restored.
+- **Note, final review (M5):** `update_rootblock`'s comment calling the rootblock write "atomic commit" was wrong
+  — pending writes are flushed in place before it, not copy-on-write, so a new super block named by the rootblock
+  extension write can already be on disk while the on-disk reserved bitmap still marks it free; the rootblock,
+  written last, is a commit *point*, not the moment every earlier write becomes true at once. Not introduced by
+  this fix wave: every reserved block ART's writer touches has worked this way since 0.1.3 — only the comment was
+  corrected.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3292 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** the second super block is proved only on a volume made to look full in a test (`MAXSUPER`
+  super blocks are reachable only past 64 009 anode blocks at 1024-byte reserved blocks, and never at 2048 or
+  4096 — no real volume this size has been built and filled this way); `rext.curranseqnr` is not written, so the
+  roving search restarts at 0 each session rather than resuming pfs3aio's own hint; no volume filled this way has
+  been read by a real Amiga or under real pfs3aio.
+
+**ART-313** 🟠 ✅ **PFS3 directories ART writes carry the wrong `parent`: the Amiga's handler cannot find a
+file's parent directory** — *found 2026-09-11 by the Windows machine's ART-310 research (D3); verified against
+pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed 2026-09-14; fixed 2026-09-14 on
+`art-debt-0914` (commit `8cb6afb`)*
+`src-tauri/vendor/libpfs3/src/format.rs:321-326` · `src-tauri/vendor/libpfs3/src/writer.rs:1135` · In pfs3aio a
+directory block's `parent` is the anode of the directory that *contains* the block's directory, and `0` marks the
+root's own blocks: `format.c:548` writes the root with parent 0, `directory.c:1653,1707` gives a subdirectory of
+the root parent 5, and a continuation block copies the directory's parent (`directory.c:3176,3204,3392`).
+`GetParent` reads the containing block's `parent` and treats 0 as "in root" (`directory.c:645-654`). `libpfs3`
+wrote the root with parent 5 (`format.rs:321-326`) and gave every continuation block the directory's *own*
+anode (`writer.rs:1135`). `libpfs3`'s reader never reads `parent`, which is why ART never saw it.
+**How it hurt a user:** on the Amiga, asking for the parent of anything in the root, or of anything in a
+directory large enough to need a second block, went wrong (reading-derived from pfs3aio's source — not run under
+a real handler). **Fixed:** the root directory block is written with parent 0 (`format.rs`), and a continuation
+directory block copies the parent of the directory's existing blocks instead of its own anode (`writer.rs`
+`add_dir_entry`).
+- **Test, red first:** `pfs3_directory_blocks_carry_their_containing_directorys_anode_as_parent` — `` root (anode
+  5): every directory block's parent must be 0, read [5, 5] ``.
+- **Mutations, both killed:** M1 (`format.rs`'s parent write reverted to `ANODE_ROOTDIR`) — red, same message;
+  M2 (`writer.rs`'s continuation-block parent write reverted to the directory's own anode) — a compile-time red
+  under `libpfs3`'s `#![deny(warnings)]` (`unused variable: parent`) rather than a runtime panic, disclosed as
+  differing in kind but still a genuine "must fail".
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** `GetParent` run under a real handler; volumes ART formatted before this fix keep root parent 5
+  (reformat).
+
+**ART-314** 🟠 ✅ **A PFS3 name longer than 31 bytes lists on the Amiga but cannot be opened by name** — *found
+2026-09-11 (D14); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
+2026-09-14; fixed 2026-09-14 on `art-debt-0914` (commit `0f860af`)*
+`src-tauri/vendor/libpfs3/src/format.rs` (`FORMAT_FNSIZE`) · `src-tauri/vendor/libpfs3/src/error.rs`
+(`Error::NameTooLong`) · `src-tauri/vendor/libpfs3/src/writer.rs` (`max_name_bytes`, `check_name_len`, wired into
+`write_file_in`, `write_file_in_no_commit`, `create_dir_in`, `create_softlink_in`, `create_hardlink`,
+`rename_in`) · `src-tauri/src/core/error.rs` (`CoreError::Pfs3NamesTooLong`) ·
+`src-tauri/src/core/preload/native.rs` (`can_copy_in`, `copy_in_pfs3`, `from_pfs3`) · The format writes `fnsize`
+32 (pfs3aio's own default, `format.c:520`); the writer accepted names up to 107 bytes and silently cut longer
+ones; ART checked only non-ASCII names. pfs3aio truncates a *search* name to `fnsize - 1` (`directory.c:721-722`)
+and its compare needs equal lengths (`assroutines.c:163`), so a 32–107-byte name was listed but never matched
+(reading-derived, not run). hst-imager formats `fnsize` 107 (`henrikstengaard/hst-amiga` @ `6b45584`,
+`Pfs3Formatter.cs:297`). *Corrected 2026-09-14 by plan 3:* the limit is `fnsize − 1` = 106 bytes on a volume ART
+formats, not 107 — pfs3aio cuts names to `FILENAMESIZE − 1` on create and lookup (`blocks.h:516`,
+`directory.c:1489-1490,1663-1664,721-722`), so a 107-byte name would have been the same defect one byte out.
+*Confirmed by the owner 2026-09-14:* 106 bytes. **Fixed:** the format writes `fnsize` 107 (`FORMAT_FNSIZE`), and
+every writer call that names an entry refuses a name longer than `fnsize − 1` bytes before anything is
+allocated; `commands/preload.rs::FallbackReason::from_native_error` does not treat this as a capability gap —
+hst-imager formats `fnsize` 107 too.
+- **Tests, each red first:** `a_pfs3_name_longer_than_fnsize_minus_one_is_refused_before_anything_is_written` —
+  `` assertion `left == right` failed: rext.fnsize / left: 32 / right: 107 ``;
+  `a_pfs3_name_too_long_for_the_volume_is_refused_by_name_before_anything_is_written` — `` called
+  `Result::unwrap_err()` on an `Ok` value: () ``.
+- **Mutations, all four killed:** M1 (`check_name_len`'s body replaced by `Ok(())`) — red,
+  `unwrap_err()` on `Ok`; M2 (the format's `fnsize` write reverted to 32) — red both ways, the crate test's
+  `rext.fnsize` and the ART test's refusal at `max_bytes: 31` instead of 106; M3 (`can_copy_in`'s pre-flight
+  name-length check removed) — red, `unwrap_err()` on `Ok`; M4 (`copy_in_pfs3`'s name-length check removed) —
+  red, but on an earlier assertion than predicted (the error's bare name has no `Drawer/` prefix, since
+  `from_pfs3` maps the writer's own bare `name` field, not a path) — judged a correct kill via a different route,
+  not a weak guard.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** no name was looked up under a real pfs3aio handler.
+
+**ART-315** 🟡 ✅ **`libpfs3`'s data allocator accepts a block number up to `bitmapstart` past the partition** —
+*found 2026-09-11 (D8); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
+2026-09-14; fixed 2026-09-14 on `art-debt-0914` (commit `04ce670`)*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`load_data_bitmap`, `alloc_data_blocks`, `free_data_block`) · The bound
+was `disksize + bitmapstart`; valid data blocks are `[bitmapstart, disksize)` (`format.rs:120,128,193`), and
+pfs3aio bounds on the partition's block count (`allocation.c:344`, `volume.c:637`). ART's own format clears the
+bitmap's tail bits (`format.rs:268-278`), so only a volume formatted elsewhere (pfs3aio leaves the tail free,
+`allocation.c:1054-1055`) near full could reach it, and ART's device refused the write
+(`core/volume/device.rs:330-333`) — an error, not corruption. **Fixed:** `load_data_bitmap` sizes the bitmap from
+`disksize − bitmapstart`, `alloc_data_blocks` skips a bitmap bit at or past `disksize` instead of
+`disksize + bitmapstart`, and `free_data_block` refuses a block outside `[bitmapstart, disksize)` instead of only
+checking the lower bound.
+- **Tests, each red first:** `a_pfs3_allocation_never_hands_out_a_block_past_the_partition` — `attempt to subtract
+  with overflow` (`blocksfree` underflows before the device write, in a test build; a release build would wrap
+  and the out-of-range write fail at the device); `freeing_a_pfs3_block_past_the_partition_changes_nothing` —
+  `` assertion `left == right` failed: blocksfree counted block 48000, past the partition, as freed / left: 45182
+  / right: 45181 ``.
+- **Mutations:** M1 (`alloc_data_blocks`'s bound reverted to the old, wider one) — killed, red with `attempt to
+  subtract with overflow`; M2 (`free_data_block`'s guard narrowed back to the lower bound only) — killed, red
+  with the same `blocksfree` assertion; M3 (`load_data_bitmap`'s bitmap size reverted to the whole `disksize`) —
+  **survived**, disclosed as a weak *test*, not a weak guard: the property is actually enforced by M1/M2's bounds,
+  and the wider bitmap size resolves to no bitmap block at all on this fixed-size test volume, so
+  `load_data_bitmap`'s extra loop iteration finds nothing to push.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** run on a pfs3aio- or hst-formatted volume (the tail bits that let this be reached were set by
+  the test itself, not by a real format).
+
+**ART-316** 🔵 ✅ **`libpfs3`'s `FormatOptions.enable_deldir` is never read** — *found 2026-09-11 (D4); filed
+2026-09-14; fixed 2026-09-14 on `art-debt-0914` (commit `351fc60`)*
+`src-tauri/vendor/libpfs3/src/format.rs` · The option silently did nothing; ART passed `false`
+(`native.rs:189-192`, `sizing.rs:666`). pfs3aio formats a two-block deldir with `MODE_DELDIR | MODE_SUPERDELDIR`
+(`format.c:252-255`, `directory.c:4442-4480,4572-4637`); a volume without one is valid (`init.c:642-643`)
+(pfs3aio `211f7f0`, read, not run). **Fixed:** when `opts.enable_deldir`, the format sets
+`MODE_DELDIR | MODE_SUPERDELDIR`, allocates two more reserved blocks after the root directory, writes
+`rext.deldirroving` (0), `rext.deldirsize` (2) and `rext.deldir[0..2]`, and writes each block as `DD` with its
+seqnr, protection 5 and the rootblock's creation date. **ART's PFS3 format has the deldir on since ART-318 (the
+owner's decision, 2026-09-14):** this task's own crate-level test proves the format; ART-318's
+`native_pfs3_format_turns_the_deldir_on` proves `NativeFormatter` turns the option on.
+- **Test, red first:** `a_pfs3_format_with_the_deldir_makes_pfs3aios_two_deldir_blocks` — `` assertion `left ==
+  right` failed: 48000: MODE_DELDIR | MODE_SUPERDELDIR / left: 0 / right: 264 ``.
+- **Mutations, all four killed:** M1 (`MODE_SUPERDELDIR` dropped from the flags write) — red, `left: 8 right:
+  264`; M2 (`deldirsize` write deleted) — red, `left: (0, 0, 0) right: (0, 2, 0)`; M3 (`protection` written to
+  the wrong offset, `0x12` instead of `0x16`) — red, `left: (0, 0) right: (0, 5)`; M4 (the deldir block's
+  creation-day write deleted) — red, `left: [0, 0, 1, 35, 6, 214] right: [69, 124, 1, 35, 6, 214]`.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** nothing has been mounted under real pfs3aio on an Amiga or in WinUAE; that mount is still owed
+  by a person.
+
+**ART-302** 🔵 ✅ **The first tab question of a session still read two same-size discs whole, every
+start** — *found 2026-09-10 measuring ART-297; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/src/core/osinstall/scan_cache.rs` · `src-tauri/src/core/osinstall/scan.rs` ·
+`src-tauri/src/commands/osinstall.rs` · On the owner's folders `AmigaOS3.9` repeats at one size —
+two identical 490 856 448-byte images — and proving them identical took a full read: 24.2 s for the
+first `osinstall_slots` after a start, off the window's thread since ART-297, then 0.45 s warm
+(*not measured on the owner's discs this round; the 24.2 s → warm figure is the owner's to
+confirm*). `ShaMemo`, the fix that avoided the repeat read within one process, lived in memory only,
+so a fresh process paid the full read again. `ScanCache` gained `lookup_sha256`/`store_sha256`
+beside its existing md5 pair (`CacheFile.sha256: Option<String>`, `#[serde(default)]`, so an entry
+written before this round still serves its md5 with no `sha256` —
+`an_entry_written_before_sha256_existed_still_serves_its_md5`), and a new
+`dedupe_identical_disks_cached(found, cache)` reads and writes through it while the old
+`dedupe_identical_disks` keeps its signature by delegating to it with `ScanCache::off()`.
+`osinstall_slots` (`commands/osinstall.rs`) now calls the cached form with the `ScanCache` already
+in scope for `mediahash::remembered_media_in`.
+
+Tests: `a_stored_sha256_comes_back_and_a_replaced_medium_has_none`,
+`a_sha256_does_not_evict_the_md5_stored_beside_it`,
+`an_entry_written_before_sha256_existed_still_serves_its_md5`,
+`a_cache_that_is_off_neither_reads_nor_writes_a_sha256` (`scan_cache.rs`);
+`a_new_session_takes_a_discs_hash_from_the_cache_not_the_disc` (`scan.rs`).
+
+Red: `error[E0599]: no method named `store_sha256` found for enum `scan_cache::ScanCache` in the
+current scope` / `error[E0599]: no method named `lookup_sha256` found for enum `scan_cache::ScanCache`
+in the current scope`; then, wiring the dedupe path, `error[E0425]: cannot find function
+`cached_sha256` in this scope (x3)`.
+
+Mutations: `store_sha256`'s body reduced to `let _ = (media_path, sha256);` —
+`a_stored_sha256_comes_back_and_a_replaced_medium_has_none` failed, `(assertion left == right
+failed — expected Some("abc123"))`. The `cache.store_sha256(p, &hash);` line deleted from
+`cached_sha256` — `a_new_session_takes_a_discs_hash_from_the_cache_not_the_disc` failed,
+`(assertion failed — "a fresh process reads the cache, not the disc")`. Both restored from an
+absolute-path backup, both suites green again.
+
+Suite: `cargo test --lib core::osinstall::scan_cache` `test result: ok. 24 passed; 0 failed; 1
+ignored; 0 measured; 3295 filtered out`; `core::osinstall::scan` `test result: ok. 60 passed; 0
+failed; 1 ignored; 0 measured; 3260 filtered out`; `commands::osinstall` `test result: ok. 96
+passed; 0 failed; 9 ignored; 0 measured; 3216 filtered out`. Full `cargo test --lib`, twice: `test
+result: ok. 3266 passed; 0 failed; 58 ignored; 0 measured; 0 filtered out`; fmt and clippy clean.
+The shared test helper both new `scan_cache.rs` tests and the brief call `scratch` is
+`crate::core::osinstall::fixtures::scratch(tag) -> (ScratchDir, PathBuf)`, called as
+`fixtures::scratch(...)`.
+
+**Fix wave (final review), 2026-09-14, on `art-debt-0914` (findings M1 and I3).** Two gaps the
+final whole-branch review found in the round above.
+
+*M1 — the identity used to decide a store was safe was read after `hasher` ran, not before.*
+`store_with` (`scan_cache.rs`) stats the medium again at store time and keys the write on *that*
+reading; a medium replaced mid-hash — same path, and by the time the write lands, coincidentally
+the same size and mtime again — would get the old content's hash filed under the new content's
+identity, a wrong answer that then reads as a hit forever after. `ScanCache::store_sha256_if_unchanged(path,
+&MediaIdentity, sha256)` takes the identity a caller captured **before** hashing and stores only if
+it still matches; `scan.rs`'s `cached_sha256` now captures it before calling `hasher` and calls the
+new method instead of `store_sha256`.
+
+*I3 — the production wiring itself had no guard.* `undeclared_overwrites`'s `owners` field had no
+direct test of its own (only indirectly, through `add_package`'s refusal tests), and
+`dedupe_identical_disks_cached` always resolved through the static, process-wide `ShaMemo::process()`,
+so no test could simulate "a fresh process" without sharing state with every other test in the
+binary. A new crate-private `dedupe_identical_disks_cached_with_memo(found, cache, memo)` takes the
+memo as a parameter; the public function delegates to it with `ShaMemo::process()`. A source-literal
+test (the house pattern already used for the window-thread guard) requires `commands/osinstall.rs`
+to spell out `scan::dedupe_identical_disks_cached(media, &cache)` — assembled at runtime
+(`format!("scan::dedupe_identical_disks{}(media, &cache)", "_cached")`) so the assertion cannot
+trivially pass by matching its own source line.
+
+Tests: `a_medium_that_changed_since_the_captured_identity_is_not_stored`,
+`a_medium_unchanged_since_the_captured_identity_is_stored` (`scan_cache.rs`, M1);
+`dedupe_identical_disks_cached_follows_the_cached_hash_not_the_disc` (`scan.rs`, I3 — through the
+new `dedupe_identical_disks_cached_with_memo`, real content that differs, a cache seeded with a
+matching fake hash for both discs); `osinstall_slots_dedupes_through_the_scan_cache`
+(`commands/osinstall.rs`, I3, the source-literal guard).
+
+Mutations, each seen to fail and then restored from an absolute-path backup:
+`store_sha256_if_unchanged`'s identity check dropped (`let _ = before;`, unconditional store) —
+`a_medium_that_changed_since_the_captured_identity_is_not_stored` FAILED, `cache.lookup_sha256`
+returned the stale hash instead of `None`. `dedupe_identical_disks_cached_with_memo` handed
+`cached_sha256` a hardcoded `ScanCache::off()` instead of its own `cache` parameter —
+`dedupe_identical_disks_cached_follows_the_cached_hash_not_the_disc` FAILED, `kept.len()` was `2`
+(the discs' real, differing bytes), not `1`. `osinstall_slots`'s call reverted to
+`scan::dedupe_identical_disks(media)` — `osinstall_slots_dedupes_through_the_scan_cache` FAILED.
+
+Suite after this wave: full `cargo test --lib`, twice: `test result: ok. 3274 passed; 0 failed; 58
+ignored; 0 measured; 0 filtered out`; `cargo fmt --check` and `cargo clippy --all-targets -- -D
+warnings` clean.
+
+Record, no code change (accepted, not fixed): a medium replaced in place with an identical path,
+size and mtime can still serve a stale SHA-256 from the cache — accepted as consistent with
+`ShaMemo`'s own in-memory memo, with `mediahash`'s MD5 keyed the same way, and with the ART-194
+Forget button that already exists for exactly this case. The plan path `find_media_across` still
+calls the uncached `dedupe_identical_disks` rather than the cached form — left as is because the
+process-wide `ShaMemo` already covers repeat calls within one session, pending the slots question
+of whether `plan()` should take a scan cache at all.
+
+**ART-300** 🔵 ✅ **The refusal for an older package added over a newer one did not name the
+order** — *found 2026-09-10 fixing ART-298; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/src/core/osinstall/package.rs` · `src-tauri/src/core/osinstall/apply.rs` ·
+`src-tauri/src/core/osinstall/chain.rs` · The chain row already says it ([ART-298](#fixed)), so the
+screen no longer reaches this refusal; `osinstall_add_package` still can, and its sentence —
+*"would write over 32 file(s) it never declared it may replace … a package overwrites only what its
+own `overrides` names"* — read as an instruction to edit a recipe rather than as *the newer package
+is already here*. `package::overriders_of(catalogue, id)` answers, by declaration, which packages
+override a given one, and `chain.rs`'s own inline filter for the same question now calls through it
+instead of repeating it. `apply.rs`'s `undeclared_overwrites` returns a new `Overwrites {
+undeclared, owners, unrecorded }` instead of a two-tuple, and a new `undeclared_refusal(package,
+undeclared, owners, catalogue)` names, when a newer installed package already declares the override
+the current one lacks, which package and that it is newer — an undeclared overwrite with no newer
+package present keeps its old sentence.
+
+Tests: `the_packages_that_override_one_are_found_by_their_declaration` (`package.rs`);
+`an_older_package_over_a_newer_one_is_refused_with_the_order`,
+`an_undeclared_overwrite_with_no_newer_package_keeps_its_sentence` (`apply.rs`).
+
+Red: `error[E0425]: cannot find function `overriders_of` in this scope (x2)`; then `error[E0425]:
+cannot find function `undeclared_refusal` in this scope (x2)`.
+
+Mutation: `undeclared_refusal`'s owner filter (`.filter(|other| owners.iter().any(|owner| owner ==
+&other.id))`) reduced to `.filter(|_| false)` — `an_older_package_over_a_newer_one_is_refused_with_the_order`
+failed, `(assertion failed — "is older than" text missing)`. Restored, green again. `overriders_of`
+(Task 3) has no mutation step in the brief and none was run.
+
+Suite: `core::osinstall::package` `test result: ok. 54 passed; 0 failed; 2 ignored; 0 measured;
+3266 filtered out`; `core::osinstall::chain` `test result: ok. 38 passed; 0 failed; 0 ignored; 0
+measured; 3284 filtered out`; `core::osinstall::apply` `test result: ok. 86 passed; 0 failed; 14
+ignored; 0 measured; 3224 filtered out`. Full `cargo test --lib`, twice: `test result: ok. 3266
+passed; 0 failed; 58 ignored; 0 measured; 0 filtered out`; fmt and clippy clean. **Deviation:** the
+two new `apply.rs` tests' `&[two.id.clone()]` / `&[one.clone()]`, as given, fail this project's
+clippy gate (`cloned_ref_to_slice_refs`, implied by `-D warnings`); rewritten to
+`std::slice::from_ref(&two.id)` / `std::slice::from_ref(&one)` — same values, same outcome.
+
+**Fix wave (final review), 2026-09-14, on `art-debt-0914` (findings I1, I2 and I3(a)).** The
+whole-branch review found the order sentence itself could still be false, and two of its own
+guards were unguarded.
+
+*I1 — the order sentence named only the first newer package, and used it even when the owners
+were mixed.* The shipped catalogue has **two** packages that override `boingbag-39-1`
+(`boingbag-39-2` and `boingbags-39-3-4`); with both already in the tree the old sentence said
+"without 'BoingBag 3.9-2'" while `boingbags-39-3-4` still overrode the package, so the suggested
+order would be refused again. And with a mixed `owners` — some owners are newer overriders, some
+are not — the old code still picked the first matching overrider and gave the order sentence,
+which is a false instruction: rebuilding "without" that one package would still be refused by the
+files the other owner claims. `undeclared_refusal` now takes the order sentence only when **every**
+owner in `owners` is a newer overrider (`newer.len() == owners.len()`, owners already
+deduplicated), and a new `quoted_list` names all of them — `'A'`, `'A' and 'B'`, or `'A', 'B' and
+'C'` — with subject-verb agreement (`is`/`are`, `replaces`/`replace`) on the count. Otherwise the
+plain sentence, unchanged.
+
+*I2 — the owner half of the filter (`.filter(|other| owners.iter().any(...))`) had no dedicated
+test;* the existing tests all happened to pass an `owners` list where an unfiltered
+`overriders_of` result would coincidentally agree.
+
+*I3(a) — `undeclared_overwrites`'s own `owners` field had no direct test,* only indirect coverage
+through `add_package`'s refusal tests, which never checked deduplication.
+
+Tests, each seen red first against the pre-review `undeclared_refusal`:
+`two_newer_overriders_are_both_named_in_the_order_sentence`,
+`mixed_owners_with_one_non_overriding_owner_keep_the_plain_sentence`, and the updated
+`an_older_package_over_a_newer_one_is_refused_with_the_order` (new wording: `"'{name}' is older
+than {list}, which {is|are} already in this tree and {replaces|replace} it (…) — build the tree
+again adding '{name}' before {list}, or without {list}"`). Plus `apply.rs`:
+`a_catalogue_overrider_that_is_not_actually_the_owner_keeps_the_plain_sentence` (I2),
+`undeclared_overwrites_returns_each_owner_once_deduplicated` (I3(a), through `undeclared_overwrites`
+directly — a real tree built with the shared test helpers, two undeclared files both owned by
+`base-c`, one owner named once). The ignored `commands/osinstall.rs` test
+`the_turkish_updates_go_on_in_chain_order_and_the_chain_says_why_not_the_other_way` gained
+`assert!(refused.to_string().contains("is older than"), "{refused}")` beside its existing
+`SafetyRefused` check — not run this round, per the brief (needs the owner's own material).
+
+Red: all three I1 tests run against the original `undeclared_refusal` (temporarily restored from
+git, tests kept) FAILED — e.g. `two_newer_overriders_are_both_named_in_the_order_sentence`:
+`"names both, plural: operation refused to protect data: 'Test package' is older than 'Test
+package two', 'Test package three', which is already in this tree and replaces it …"` (the old
+code named only the first, joined with `newer.join("', '")`, and used the singular verbs
+regardless of count).
+
+Mutations, each seen to fail and then restored from an absolute-path backup: the `newer.len() ==
+owners.len()` guard dropped to `!newer.is_empty()` —
+`mixed_owners_with_one_non_overriding_owner_keep_the_plain_sentence` FAILED, the order sentence
+fired for an owner (`base-c`) that never overrode anything. The owner filter widened to
+`.filter(|_| true)` — `a_catalogue_overrider_that_is_not_actually_the_owner_keeps_the_plain_sentence`
+FAILED for the same reason. `undeclared_overwrites`'s `owners.push(owner.to_string());` deleted —
+`undeclared_overwrites_returns_each_owner_once_deduplicated` FAILED, `owners` came back empty
+instead of `["base-c"]`.
+
+Suite after this wave: full `cargo test --lib`, twice: `test result: ok. 3274 passed; 0 failed; 58
+ignored; 0 measured; 0 filtered out`; `cargo fmt --check` and `cargo clippy --all-targets -- -D
+warnings` clean.
+
+**ART-118** 🟠 ✅ **The OS Builder's install screen has never been driven in a
+real browser past its headings — jsdom now covers what a browser could not,
+the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
+browser pass and Task 14's real run; narrowed 2026-08-19*
+
+**Closed 2026-09-14 as superseded — see the last paragraph; the text above is the entry as it stood open.**
+
+`src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
+the route, the new `Install` kind, and five resolved `h2` strings with no raw
+key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination
+fields, ticking a component, running Plan, reading the confirmation panel or
+the refusals card, running Verify and reading its three states, switching to
+Turkish — crashed the renderer reproducibly with an access violation
+(`-1073741819`), in both Chrome and Edge and both headless modes, and was not
+resolved. Task 14's real run (`run_the_real_engine_against_the_users_own_media_when_asked`)
+exercised the same 26-component checklist and the modules-on-without-being-
+chosen path **through the Rust engine directly**, never through this screen —
+so the engine's own correctness is now evidenced far beyond the screen's own
+verification.
+
+**2026-08-19: `src/components/osbuilder/OsInstall.test.tsx` added — five jsdom
+component tests, the first automated coverage of this screen at all.**
+Mocked at the `@/lib/osinstall` / `@/lib/pistorm` / `@/lib/settings` boundary
+(the house pattern — see `useRomPairing.test.tsx`), not deeper, and the real
+component is rendered directly rather than a proxy harness. What is now
+covered:
+- The screen mounts **past its headings** with the media/ROM/destination
+  fields, the 26-entry component checklist, and the Build and Verify actions
+  all present and reachable — the thing no browser session could get past.
+- The whole rendered tree carries no raw i18next key shape and no literal
+  `{{…}}`, in **both English and Turkish** — the first time any language has
+  been checked against a running instance of this screen (`ART-062`).
+- Ticking a component in the checklist reaches the request `osinstallPlan` is
+  asked to plan and changes what the plan section shows — the checklist's
+  own wiring had never been exercised by anything before this.
+- A refusal renders as the real, translated sentence, not a blank card.
+
+What is still **not** covered, and why this stays open rather than closing:
+jsdom does no layout at all, so it cannot reproduce the access violation
+itself (a native renderer crash) or measure whether a long Turkish string
+overflows its container — that half of `ART-062` is unchanged and still a
+real-screen job. The crash's root cause is still unknown; a real
+`pnpm tauri dev` pass by a human, driving the screen against a real media
+folder (e.g. `E:\amiga\ProjeART\dist-3.2`), is still owed and is what would
+actually close this.
+
+**Closed 2026-09-14: superseded, not reproduced.** The screen this entry is about no longer exists: the four-tab
+rewrite deleted `src/components/osbuilder/OsInstall.tsx` and its test (`docs/STATUS.md`, the four-tabs item;
+no `OsInstall*` remains under `src/components/osbuilder/`). Its successor has jsdom coverage per tab
+(`FilesTab.test.tsx`, `ChoiceTab.test.tsx`, `MachineTab.test.tsx`, `BuildTab.test.tsx`) and has been driven by
+the owner in packaged builds, which found defects and no crash: ART-297 (2026-09-10, `main-f354f46`), ART-303
+(2026-09-10, `main-e2633a6`), ART-304 (2026-09-11, `main-706de9f`); the single-column screen before it on
+2026-08-22 (`docs/session-log.md`, "The owner drove the OS Builder"). **Not claimed:** the access violation
+(`-1073741819`) was a headless Chrome/Edge renderer crash and was never explained; no headless run was repeated.
+The Turkish-layout half stays with ART-062.
 
 **ART-312** 🔴 ✅ **`libpfs3`'s writer can hand one anode number out twice in one operation, and a file
 then silently reads another block's bytes** — *found 2026-09-11 by the task-5 review of the Windows
@@ -766,7 +1255,7 @@ Eliminated on the way, measured: `ArchiveSource::open` (0.55 s over every file i
 folders) and `find_media` (45 ms). Mutations: the size check off fails two tests; the memo lookup
 off, and the memo ignoring a changed file, fail one each; `osinstall_plan` put back to blocking is
 named by the guard; three plan-gate mutations each fail the update-mode test. What is left is
-[ART-302](#open).
+[ART-302](#fixed).
 
 **ART-298** 🟠 ✅ **Locale 3.9's Turkish slice was refused on the owner's tree — and the tick list
 had offered it** — *found 2026-09-10 by the owner; fixed the same night on `art-owner-findings-0910`*
@@ -799,7 +1288,7 @@ and now checking the claim in both directions. **Real material**:
 placed; newer first, the row reads `OvertakenBy` and the slice is refused over the 32 catalogs. Both
 arms of the control measured: without the fonts declaration the slice is refused over 50 fonts;
 without the catalogs declaration BB2's catalogs are refused over 32. Mutation: the chain check off
-fails its test. The refusal's own sentence is [ART-300](#open).
+fails its test. The refusal's own sentence is [ART-300](#fixed).
 
 **ART-299** 🟠 ✅ **After a run the Build tab said "no update ticked" and "replaces 0 files" while it
 was still finding out — and offered Build over that** — *found 2026-09-10 in the owner's screenshot;

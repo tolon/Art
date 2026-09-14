@@ -46,31 +46,50 @@
 //!
 //! The date is different: a disc *does* record one (`IsoEntry::date`, when
 //! the disc did not leave it blank), so it is genuinely read, through the
-//! same `amiga_from_unix` conversion `IsoSource::metadata` already uses.
-//! Only when the disc itself left it blank does this fall back to
-//! `AmigaDate::default()` — the Amiga epoch, and the same declared-default
-//! reasoning as the other two fields, for a value that is absent rather
-//! than zero.
+//! clock the source was opened with, as local wall time (ART-317), the same
+//! conversion `IsoSource::metadata` makes. Only when the disc itself left it
+//! blank does this fall back to `AmigaDate::default()` — the Amiga epoch, and
+//! the same declared-default reasoning as the other two fields, for a value
+//! that is absent rather than zero.
 
 use std::path::Path;
 
 use crate::core::adf::bcpl::AmigaDate;
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::iso::{IsoImage, IsoWalkEntry, MAX_WALK_DEPTH, MAX_WALK_ENTRIES};
 use crate::core::volume::write::file::default_protection;
-use crate::core::volume::write::layout::amiga_from_unix;
 
 use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 
 /// [`MediaSource`] for an ISO9660 disc — a CD or DVD image, Joliet-aware
 /// through [`IsoImage`] itself.
-#[derive(Debug)]
+///
+/// `Debug` is hand-written, not derived — `clock: &'static dyn AmigaClock`
+/// cannot derive it, the same reason `VolumeWriter` and `NativeFormatter`
+/// carry none at all (ART-317). This one is kept, narrower, because
+/// `Result::unwrap_err` on a `CdSource::open` result needs it (`source_cd.rs`
+/// and `scan.rs`'s own tests both call it), the same shape
+/// `scan_cache::CachedSource` already uses for its own unformattable field.
 pub struct CdSource {
     image: IsoImage,
     /// The whole disc, walked once at [`open`](Self::open) —
     /// `IsoWalkEntry::path` is already `/`-separated and relative to the
     /// disc's own root, exactly what [`MediaEntry::path`] promises.
     entries: Vec<IsoWalkEntry>,
+    /// What turns the disc's own recorded instant into the wall time a
+    /// recipe reads (ART-317) — see this module's own doc, "The date is
+    /// different".
+    clock: &'static dyn AmigaClock,
+}
+
+impl std::fmt::Debug for CdSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CdSource")
+            .field("volume_name", &self.image.volume_name())
+            .field("entries", &self.entries.len())
+            .finish()
+    }
 }
 
 impl CdSource {
@@ -97,7 +116,7 @@ impl CdSource {
     /// them ("this medium cannot be used" against "ART's own limit, which
     /// could be raised"). `IsoImage::open`'s own errors above still come back
     /// as `Malformed`, because a disc that fails *there* really is broken.
-    pub fn open(path: &Path) -> CoreResult<Self> {
+    pub fn open(path: &Path, clock: &'static dyn AmigaClock) -> CoreResult<Self> {
         let image = IsoImage::open(path)?;
         let walk = image.walk()?;
         // `LimitExceeded`, not `Malformed` — ART-158. Such a disc is
@@ -127,6 +146,7 @@ impl CdSource {
         Ok(Self {
             image,
             entries: walk.entries,
+            clock,
         })
     }
 
@@ -147,13 +167,17 @@ impl CdSource {
     /// `protection` and `comment` come from the entry's Amiga `AS` System
     /// Use entry when it has one — see this module's own doc on why that is
     /// a measured value and not a declared default any more.
-    fn to_media_entry(walked: &IsoWalkEntry) -> MediaEntry {
+    fn to_media_entry(clock: &dyn AmigaClock, walked: &IsoWalkEntry) -> MediaEntry {
         MediaEntry {
             path: walked.path.clone(),
             is_dir: walked.entry.is_dir,
             size: walked.entry.bytes,
             protection: walked.entry.protection.unwrap_or_else(default_protection),
-            date: walked.entry.date.map(amiga_from_unix).unwrap_or_default(),
+            date: walked
+                .entry
+                .date
+                .map(|unix| clock.amiga_from_unix(unix))
+                .unwrap_or_default(),
             comment: walked.entry.comment.clone().unwrap_or_default(),
         }
     }
@@ -226,7 +250,8 @@ impl MediaSource for CdSource {
         if normalized.is_empty() {
             return Ok(Some(Self::root_entry()));
         }
-        Ok(Self::find_by_path(&self.entries, &normalized).map(Self::to_media_entry))
+        Ok(Self::find_by_path(&self.entries, &normalized)
+            .map(|walked| Self::to_media_entry(self.clock, walked)))
     }
 
     fn walk(&mut self, path: &str) -> CoreResult<Vec<MediaEntry>> {
@@ -236,7 +261,11 @@ impl MediaSource for CdSource {
             // resolved by name — is never itself one of `self.entries`
             // (`IsoImage::walk` lists a directory's contents, not the
             // directory). So the whole disc is exactly every entry there is.
-            return Ok(self.entries.iter().map(Self::to_media_entry).collect());
+            return Ok(self
+                .entries
+                .iter()
+                .map(|walked| Self::to_media_entry(self.clock, walked))
+                .collect());
         }
         // Nothing on the disc by that name: an empty `Vec`, not an error —
         // the trait's own contract, and the same answer `AdfSource::walk`
@@ -294,7 +323,7 @@ impl MediaSource for CdSource {
             .entries
             .iter()
             .filter(|e| starts_with_ignoring_case(&e.path, &prefix))
-            .map(Self::to_media_entry)
+            .map(|walked| Self::to_media_entry(self.clock, walked))
             .collect())
     }
 
@@ -395,7 +424,7 @@ mod tests {
         let path = folder.join("deep.iso");
         std::fs::write(&path, bytes).unwrap();
 
-        let err = CdSource::open(&path).unwrap_err();
+        let err = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap_err();
         assert_eq!(err.code(), "ART-LIMIT-EXCEEDED");
         assert!(
             matches!(err, CoreError::LimitExceeded { .. }),
@@ -423,7 +452,7 @@ mod tests {
         // terminator — keep those and cut everything the root points at.
         std::fs::write(&path, &bytes[..19 * 2048]).unwrap();
 
-        let err = CdSource::open(&path).unwrap_err();
+        let err = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-MALFORMED", "{err}");
         assert!(
             !matches!(err, CoreError::LimitExceeded { .. }),
@@ -436,8 +465,40 @@ mod tests {
     #[test]
     fn a_disc_answers_with_the_volume_name_recorded_inside_it() {
         let (_guard, path) = disc("volume");
-        let source = CdSource::open(&path).unwrap();
+        let source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
         assert_eq!(source.volume_name(), "AmigaOS3.9");
+    }
+
+    /// ART-317: a disc's recording date is an instant; an install tree gets it
+    /// as local wall time.
+    #[test]
+    fn a_disc_recording_date_is_read_as_local_wall_time() {
+        use crate::core::clock::{AmigaClock, FixedClock, UtcClock};
+        static PLUS_TWO: FixedClock = FixedClock {
+            now: 0,
+            offset: 7_200,
+        };
+        let (_guard, path) = disc("local-time");
+        let mut utc = CdSource::open(&path, &UtcClock).unwrap();
+        let mut local = CdSource::open(&path, &PLUS_TWO).unwrap();
+        let file = utc
+            .walk("")
+            .unwrap()
+            .into_iter()
+            .find(|e| !e.is_dir)
+            .expect("a file on the disc");
+        assert_ne!(
+            file.date,
+            AmigaDate::default(),
+            "the fixture carries a recording date"
+        );
+        let same = local.entry(&file.path).unwrap().unwrap();
+        assert_eq!(
+            PLUS_TWO.unix_from_amiga(same.date),
+            UtcClock.unix_from_amiga(file.date),
+            "same instant"
+        );
+        assert_ne!(same.date, file.date);
     }
 
     /// A recipe's `from` is a `/`-separated path from the media's own root,
@@ -445,7 +506,7 @@ mod tests {
     #[test]
     fn a_deep_path_is_found_and_read() {
         let (_guard, path) = disc("deep");
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
 
         let entry = source
             .entry("OS-Version3.9/Workbench3.5/C/List")
@@ -464,7 +525,7 @@ mod tests {
     #[test]
     fn walk_returns_paths_from_the_discs_own_root() {
         let (_guard, path) = disc("walk");
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
 
         let entries = source.walk("OS-Version3.9/Workbench3.5/C").unwrap();
         let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();
@@ -479,7 +540,7 @@ mod tests {
     #[test]
     fn a_path_the_disc_does_not_hold_is_absent_rather_than_an_error() {
         let (_guard, path) = disc("absent");
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
 
         assert!(source.entry("OS-Version3.9/NotThere").unwrap().is_none());
         assert!(source.walk("OS-Version3.9/NotThere").unwrap().is_empty());
@@ -506,7 +567,7 @@ mod tests {
         let path = folder.join("os39.iso");
         std::fs::write(&path, bytes).unwrap();
 
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
         assert!(source
             .entry("AmigaOS 3.9 Manual/index.html")
             .unwrap()
@@ -527,7 +588,7 @@ mod tests {
     #[test]
     fn an_empty_path_entry_resolves_to_the_root_directory() {
         let (_guard, path) = disc("root-entry");
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
 
         let entry = source.entry("").unwrap().unwrap();
         assert!(entry.is_dir);
@@ -544,7 +605,7 @@ mod tests {
     #[test]
     fn read_refuses_a_path_that_names_a_drawer() {
         let (_guard, path) = disc("read-wrong-kind");
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
 
         let err = source.read("OS-Version3.9/Workbench3.5/C").unwrap_err();
         assert!(err.to_string().contains("not a file"), "{err}");
@@ -561,7 +622,7 @@ mod tests {
     #[test]
     fn walk_refuses_a_path_that_names_a_file() {
         let (_guard, path) = disc("walk-a-file");
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
 
         let err = source
             .walk("OS-Version3.9/Workbench3.5/C/List")
@@ -580,7 +641,7 @@ mod tests {
     #[test]
     fn read_of_the_root_says_it_is_a_drawer_not_that_it_is_absent() {
         let (_guard, path) = disc("read-root");
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
 
         let err = source.read("").unwrap_err();
         assert!(
@@ -622,7 +683,7 @@ mod tests {
         let path = folder.join("os39.iso");
         std::fs::write(&path, bytes).unwrap();
 
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
         // The disc's own (Joliet) tree spells this `Storage/Aux`; a `from`
         // written in the recipe's own uppercase convention must still find
         // it, through all three trait methods.
@@ -661,7 +722,7 @@ mod tests {
         let path = folder.join("os39.iso");
         std::fs::write(&path, bytes).unwrap();
 
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
         let entry = source.entry("Same").unwrap().unwrap();
         assert_eq!(entry.path, "Same", "the exactly-cased entry, not \"SAME\"");
         assert_eq!(source.read("Same").unwrap(), b"exact-bytes");
@@ -704,7 +765,7 @@ mod tests {
         let path = folder.join("os39.iso");
         std::fs::write(&path, bytes).unwrap();
 
-        let mut source = CdSource::open(&path).unwrap();
+        let mut source = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap();
         for asked in ["Locale", "locale", "LOCALE"] {
             let mut walked: Vec<String> = source
                 .walk(asked)

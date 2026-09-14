@@ -39,7 +39,7 @@ use crate::core::archive::extract::{extract_selection, ExtractOutcome, Wanted};
 use crate::core::archive::tree::ArchiveTree;
 use crate::core::archive::{ArchiveBackend, ArchiveEntry};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::volume::write::copy::{HostFolder, OverwritePolicy};
 use crate::error::AppResult;
@@ -298,9 +298,9 @@ pub fn archive_extract(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying out of {}", file.display());
+    let title = JobTitle::new("components.jobBar.title.copyOutOf").text("source", &file.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_out_folder(&file, &dir, &name, &destination, policy, progress);
 
         let record = user_operation("Copy folder out of an archive")
@@ -428,14 +428,15 @@ pub fn archive_copy_to_volume(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying an archive into {}", image.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copyArchiveInto").text("target", &image.display());
 
     // Resolved here rather than inside the job: a scratch root that has
     // gone away is the user's to fix, and they should hear it from the
     // button they pressed (ART-196).
     let scratch_root = crate::scratch::root()?;
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_into_volume(
             &source,
             &dir,

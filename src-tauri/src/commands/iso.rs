@@ -30,9 +30,10 @@ use super::volume_write::{
     folder_destination, run_copy_in_folder_with, CopyOptions, OnCancel, VolumeWriteResult,
     VOLUME_WRITE_EVENT,
 };
+use crate::core::clock::AmigaClock;
 use crate::core::error::CoreResult;
 use crate::core::iso::{IsoImage, IsoSource, SectorLayout};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::volume::write::copy::{ExtractReport, OverwritePolicy};
 use crate::error::AppResult;
@@ -172,7 +173,7 @@ fn extract_file(
                 e.protection
                     .unwrap_or_else(crate::core::volume::write::file::default_protection),
                 e.date
-                    .map(crate::core::volume::write::layout::amiga_from_unix)
+                    .map(|unix| crate::tools::local_time::LOCAL_TIME.amiga_from_unix(unix))
                     .unwrap_or_default(),
                 e.comment.as_deref().unwrap_or_default(),
             )
@@ -259,7 +260,14 @@ fn copy_out_tree(
     let destination = folder_destination(dest_dir, name)?;
 
     let image = IsoImage::open(iso_path)?;
-    image.extract_tree(extent, length, &destination, policy, progress)
+    image.extract_tree(
+        extent,
+        length,
+        &destination,
+        policy,
+        &crate::tools::local_time::LOCAL_TIME,
+        progress,
+    )
 }
 
 /// F5 out of a disc, to a local folder — a job because a disc's directory
@@ -297,9 +305,10 @@ pub fn iso_extract(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying out of {}", iso_path.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copyOutOf").text("source", &iso_path.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_out_tree(
             &iso_path,
             extent,
@@ -407,9 +416,10 @@ pub fn iso_copy_to_volume(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying a disc into {}", image.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copyDiscInto").text("target", &image.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = (|| -> CoreResult<_> {
             let disc = IsoImage::open(&source_iso)?;
             let source = disc_source(

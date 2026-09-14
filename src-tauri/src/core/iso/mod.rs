@@ -29,13 +29,13 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::volume::write::copy::{
     host_target, sidecar_for, CopySource, ExtractReport, HostTarget, OverwritePolicy,
 };
 use crate::core::volume::write::file::default_protection;
-use crate::core::volume::write::layout::amiga_from_unix;
 use crate::core::volume::write::plan::SourceEntry;
 use crate::core::volume::write::uaem::Sidecar;
 
@@ -422,6 +422,7 @@ impl IsoImage {
         length: u32,
         dest: &Path,
         policy: OverwritePolicy,
+        clock: &dyn AmigaClock,
         sink: &dyn ProgressSink,
     ) -> CoreResult<ExtractReport> {
         let mut report = ExtractReport::default();
@@ -440,6 +441,7 @@ impl IsoImage {
             0,
             policy,
             &mut visited,
+            clock,
             sink,
             &mut report,
         )?;
@@ -455,6 +457,7 @@ impl IsoImage {
         depth: usize,
         policy: OverwritePolicy,
         visited: &mut HashSet<u32>,
+        clock: &dyn AmigaClock,
         sink: &dyn ProgressSink,
         report: &mut ExtractReport,
     ) -> CoreResult<()> {
@@ -501,6 +504,7 @@ impl IsoImage {
                         depth + 1,
                         policy,
                         visited,
+                        clock,
                         sink,
                         report,
                     )?;
@@ -542,7 +546,10 @@ impl IsoImage {
                 .then(|| {
                     sidecar_for(
                         entry.protection.unwrap_or_else(default_protection),
-                        entry.date.map(amiga_from_unix).unwrap_or_default(),
+                        entry
+                            .date
+                            .map(|unix| clock.amiga_from_unix(unix))
+                            .unwrap_or_default(),
                         entry.comment.as_deref().unwrap_or_default(),
                     )
                 })
@@ -792,7 +799,7 @@ impl CopySource for IsoSource {
     /// deliberate: absent is not the same as `----rwed`, but AmigaDOS has no
     /// third state, and inventing restrictive bits for a disc that recorded
     /// none would break more than it protects.
-    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
+    fn metadata(&self, relative: &str, clock: &dyn AmigaClock) -> CoreResult<Option<Sidecar>> {
         let Some(found) = self.entries.iter().find(|e| e.path == relative) else {
             return Ok(None);
         };
@@ -807,7 +814,11 @@ impl CopySource for IsoSource {
         }
         Ok(Some(Sidecar {
             protection: found.entry.protection.unwrap_or_else(default_protection),
-            date: found.entry.date.map(amiga_from_unix).unwrap_or_default(),
+            date: found
+                .entry
+                .date
+                .map(|unix| clock.amiga_from_unix(unix))
+                .unwrap_or_default(),
             comment: found.entry.comment.clone().unwrap_or_default(),
         }))
     }
@@ -2073,7 +2084,14 @@ pub(crate) mod tests {
         let (extent, length) = iso.root();
         let out = d.join("out");
         let report = iso
-            .extract_tree(extent, length, &out, OverwritePolicy::Skip, &NoProgress)
+            .extract_tree(
+                extent,
+                length,
+                &out,
+                OverwritePolicy::Skip,
+                &crate::core::clock::UtcClock,
+                &NoProgress,
+            )
             .unwrap();
 
         // Every file here carries either non-default bits, a comment, or a
@@ -2083,6 +2101,40 @@ pub(crate) mod tests {
         let sidecar = fs::read_to_string(out.join("Startup-Sequence.uaem")).unwrap();
         assert!(sidecar.starts_with("-s--rwed "), "{sidecar}");
         assert!(sidecar.trim_end().ends_with("the boot script"), "{sidecar}");
+
+        // ART-317: the disc's recording date is an instant, written as the
+        // wall time in force under each reader's own clock.
+        static PLUS_TWO: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+            now: 0,
+            offset: 7_200,
+        };
+        let plus_two_out = out.join("plus-two");
+        iso.extract_tree(
+            extent,
+            length,
+            &plus_two_out,
+            OverwritePolicy::Skip,
+            &PLUS_TWO,
+            &NoProgress,
+        )
+        .unwrap();
+
+        use crate::core::clock::{AmigaClock, UtcClock};
+        let utc = crate::core::volume::write::uaem::parse(
+            &fs::read_to_string(out.join("Startup-Sequence.uaem")).unwrap(),
+        )
+        .unwrap();
+        let local = crate::core::volume::write::uaem::parse(
+            &fs::read_to_string(plus_two_out.join("Startup-Sequence.uaem")).unwrap(),
+        )
+        .unwrap();
+        assert_ne!(utc.date, local.date);
+        assert_eq!(
+            PLUS_TWO.unix_from_amiga(local.date),
+            UtcClock.unix_from_amiga(utc.date),
+            "same instant"
+        );
+
         fs::remove_dir_all(&d).ok();
     }
 
@@ -2098,11 +2150,43 @@ pub(crate) mod tests {
         // `copy.rs` turns this `Sidecar` into the `FileMeta` the volume
         // writer stores, so `s` and `p` surviving here is `s` and `p`
         // surviving the copy (ART-078).
-        let startup = source.metadata("Startup-Sequence").unwrap().unwrap();
+        let startup = source
+            .metadata("Startup-Sequence", &crate::core::clock::UtcClock)
+            .unwrap()
+            .unwrap();
         assert_eq!(startup.protection, 0x40);
         assert_eq!(startup.comment, "the boot script");
-        let assign = source.metadata("Assign").unwrap().unwrap();
+        let assign = source
+            .metadata("Assign", &crate::core::clock::UtcClock)
+            .unwrap()
+            .unwrap();
         assert_eq!(assign.protection, 0x20);
+
+        // ART-317: a disc's recording date is an instant, read as local wall time.
+        static PLUS_TWO: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+            now: 0,
+            offset: 7_200,
+        };
+        use crate::core::clock::{AmigaClock, UtcClock};
+        let utc = source
+            .metadata("Startup-Sequence", &UtcClock)
+            .unwrap()
+            .unwrap();
+        let local = source
+            .metadata("Startup-Sequence", &PLUS_TWO)
+            .unwrap()
+            .unwrap();
+        assert_ne!(
+            utc.date,
+            crate::core::adf::bcpl::AmigaDate::default(),
+            "the fixture carries a date"
+        );
+        assert_eq!(
+            local.date,
+            PLUS_TWO.amiga_from_unix(UtcClock.unix_from_amiga(utc.date))
+        );
+        assert_ne!(local.date, utc.date);
+
         fs::remove_dir_all(&d).ok();
     }
 
@@ -2118,7 +2202,14 @@ pub(crate) mod tests {
         let (extent, length) = iso.root();
         let out = d.join("out");
         let report = iso
-            .extract_tree(extent, length, &out, OverwritePolicy::Skip, &NoProgress)
+            .extract_tree(
+                extent,
+                length,
+                &out,
+                OverwritePolicy::Skip,
+                &crate::core::clock::UtcClock,
+                &NoProgress,
+            )
             .unwrap();
         assert!(report.files_written > 0);
         assert_eq!(report.sidecars_written, 0, "{report:?}");
@@ -2369,7 +2460,14 @@ pub(crate) mod tests {
         let (extent, length) = iso.root();
 
         let report = iso
-            .extract_tree(extent, length, &dest, OverwritePolicy::Skip, &NoProgress)
+            .extract_tree(
+                extent,
+                length,
+                &dest,
+                OverwritePolicy::Skip,
+                &crate::core::clock::UtcClock,
+                &NoProgress,
+            )
             .unwrap();
         assert_eq!(report.files_written, 3, "{report:?}");
         assert_eq!(report.directories_created, 1, "TOOLS");
@@ -2401,6 +2499,7 @@ pub(crate) mod tests {
                 LOGICAL_SECTOR_SIZE as u32,
                 &dest,
                 OverwritePolicy::Skip,
+                &crate::core::clock::UtcClock,
                 &NoProgress,
             )
             .unwrap_err();
@@ -2428,7 +2527,14 @@ pub(crate) mod tests {
         fs::write(dest.join("README.TXT"), b"an older copy").unwrap();
 
         let skipped = iso
-            .extract_tree(extent, length, &dest, OverwritePolicy::Skip, &NoProgress)
+            .extract_tree(
+                extent,
+                length,
+                &dest,
+                OverwritePolicy::Skip,
+                &crate::core::clock::UtcClock,
+                &NoProgress,
+            )
             .unwrap();
         assert_eq!(
             fs::read(dest.join("README.TXT")).unwrap(),
@@ -2447,6 +2553,7 @@ pub(crate) mod tests {
                 length,
                 &dest,
                 OverwritePolicy::Overwrite,
+                &crate::core::clock::UtcClock,
                 &NoProgress,
             )
             .unwrap();
@@ -2500,7 +2607,14 @@ pub(crate) mod tests {
         let (extent, length) = iso.root();
 
         let report = iso
-            .extract_tree(extent, length, &dest, OverwritePolicy::Skip, &NoProgress)
+            .extract_tree(
+                extent,
+                length,
+                &dest,
+                OverwritePolicy::Skip,
+                &crate::core::clock::UtcClock,
+                &NoProgress,
+            )
             .unwrap();
 
         // SUB is created once and not descended into: without the guard the
@@ -2560,7 +2674,10 @@ pub(crate) mod tests {
             b"Hello from the disc.\n"
         );
         // And the recording date still reaches the volume.
-        assert!(source.metadata("README.TXT").unwrap().is_some());
+        assert!(source
+            .metadata("README.TXT", &crate::core::clock::UtcClock)
+            .unwrap()
+            .is_some());
 
         fs::remove_dir_all(&d).ok();
     }

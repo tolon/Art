@@ -67,6 +67,7 @@ amiga-retro-toolkit/
 │   │   ├── tools/               #   platform-specific: launches external programs
 │   │   │   ├── hst_imager.rs   #     the VolumeFormatter that shells out (outside core/)
 │   │   │   ├── recycle_bin.rs  #     the HostRecycler: IFileOperation, also outside core/
+│   │   │   ├── local_time.rs   #     the AmigaClock: chrono::Local, also outside core/
 │   │   │   └── winuae_launcher.rs #  the EmulatorLauncher: spawns winuae64.exe (ART-274)
 │   │   └── core/               #   AMIGA CORE (platform-independent)
 │   │       ├── error.rs        #     CoreError
@@ -122,12 +123,13 @@ is the PFS3 implementation — the volume format `core/preload` (G3 route
 native) writes and reads on a PiStorm card, with SD-2's OS install engine
 (G5) as its newest and largest consumer — and the one LGPL-3.0-or-later
 dependency inside `core/`. Since ART-310 it is **ART's own patched copy**,
-`src-tauri/vendor/libpfs3` (`0.1.3+art.2`, reached through `[patch.crates-io]`
-while `Cargo.toml` still pins `=0.1.3`): only `src/format.rs` (ART-310) and `src/writer.rs` (ART-312) differ from the
-release, and `ART-PATCH.md` beside it says what, why and how to re-vendor
+`src-tauri/vendor/libpfs3` (`0.1.3+art.4`, reached through `[patch.crates-io]`
+while `Cargo.toml` still pins `=0.1.3`): only `src/format.rs`, `src/writer.rs` and `src/error.rs` differ from the
+release (ART-310 to ART-316, ART-317), and `ART-PATCH.md` beside it says what, why and how to re-vendor
 (`cargo update -p libpfs3 --precise`, which Cargo does not do on its own). A
 change there is a change to ART's tree and updates `ART-PATCH.md` in the same
-commit. Its writer is 0.1.3's apart from ART-312's fix, with the anode ceiling ART-311 records.
+commit. Its anode ceiling is pfs3aio's since ART-311; its deldir write path follows pfs3aio's own
+layout since ART-318, and `NativeFormatter` formats every PFS3 volume with the deldir on (ART-316).
 It is weak copyleft, compatible with ART's own GPL-3.0-or-later, but noted
 deliberately against the project's preference for permissive dependencies,
 because `core/` is meant to be promotable to a standalone crate. It never
@@ -139,16 +141,18 @@ Concretely: if a `core/` module needs to do something platform-specific (open
 a file dialog, detect a USB drive, launch WinUAE), it exposes a **trait**, and
 the implementation lives outside the core.
 
-There are five live instances: `MirrorClient` (`core/sources/mirror.rs` →
+There are six live instances: `MirrorClient` (`core/sources/mirror.rs` →
 `net/http_mirror.rs`, the network), `VolumeFormatter` (below), `HostRecycler`
 (`core/hostfs.rs` → `tools/recycle_bin.rs`, which is how a file the user deletes goes to the
 Windows Recycle Bin rather than into a recovery mechanism ART invented — ART-080),
 `EmulatorLauncher` (`core/amigainstall/run.rs` → `tools/winuae_launcher.rs`, which is how ART
-starts and ends the WinUAE process a run or a first-boot rehearsal drives), and
-`VolumeSession` (`core/whdload/install.rs` → `commands/whdload.rs`, ART-242): one WHDLoad
+starts and ends the WinUAE process a run or a first-boot rehearsal drives), `AmigaClock`
+(`core/clock.rs` → `tools/local_time.rs`, ART-317), the local UTC offset in force on a given
+date, so every Amiga date ART makes from an instant is local wall time as AmigaDOS stamps it;
+and `VolumeSession` (`core/whdload/install.rs` → `commands/whdload.rs`, ART-242): one WHDLoad
 pack's disk write — create the drawer, copy its contents, place its icon — run inside a single
 opened, backed-up-once, committed-once volume session. Its implementation lives in
-`commands/` rather than `tools/`, unlike the other four, because what it wraps
+`commands/` rather than `tools/`, unlike the other five, because what it wraps
 (`commands/volume_write.rs::with_volume`, the session/backup/write-strategy machinery) is
 itself still a command-layer helper rather than a `core/` module — promoting `with_volume`
 into `core/` is a round of its own, so `CommandVolumeSession` is the thin seam that lets
@@ -831,7 +835,18 @@ Nothing in the build catches a `Phrase` pointing at a key nobody added either,
 so `src/i18n/phrase-keys.test.ts` enumerates every variant of every such mapper
 and asserts it resolves to a real leaf.
 
-Rust-side strings (`CoreError` messages, `WhdloadRefusal.reason` /
+A background job's title is the one place Rust *code* names a catalogue key
+itself: `JobTitle::new("components.jobBar.title.…")` with `.text(name, value)`
+and `.count(n)`, serialised to the `Phrase` shape and rendered by
+`JobBar.tsx` (ART-301). The keys are written out in `JOB_TITLE_KEYS`
+(`src/lib/jobs.ts`). `src/i18n/job-title-keys.test.ts` reads the Rust sources
+and holds the two to each other in both directions, including the values each
+sentence interpolates. A new job adds its key there and to both catalogues.
+`src-tauri/src/core/distro/registry.json` names catalogue keys too (for
+example `distro.note.caffeineos.download`) — as JSON *data* a recipe carries,
+not a key a line of Rust reaches for.
+
+Other Rust-side strings (`CoreError` messages, `WhdloadRefusal.reason` /
 `.suggestion`) are not in this system yet and stay English whatever the chosen
 language — ART-060.
 

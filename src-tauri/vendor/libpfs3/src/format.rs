@@ -4,7 +4,12 @@
 //! Ported from pfs3aio/format.c and amitools PFSFormat.py.
 //!
 //! Modified by ART on 2026-09-13 (ART-310): the super index level and the
-//! reserved anodes 0-4. `ART-PATCH.md` in this crate's root says what and why.
+//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent,
+//! (ART-314) names — `rext.fnsize` writes 107, not 32, (ART-316) the deldir;
+//! on 2026-09-14, the final review (M6): `pfs3_name_limit`, the one name-limit
+//! rule `writer::Writer` and ART's `core::preload::native` both call;
+//! on 2026-09-14 (ART-317): a caller-supplied datestamp;
+//! `ART-PATCH.md` in this crate's root says what and why.
 //!
 //! Format sequence:
 //! 1. Write boot block (PFS\1 magic)
@@ -15,6 +20,7 @@
 //! 6. Allocate and write the super index block (SUPERINDEX mode only), the
 //!    anode index block and the anode block (anodes 0-4 reserved, ANODE_ROOTDIR)
 //! 7. Write root directory block (empty)
+//! 8. Write the two deldir blocks (enable_deldir only)
 
 use crate::error::{Error, Result};
 use crate::io::BlockDevice;
@@ -25,6 +31,12 @@ use crate::util::current_amiga_datestamp;
 pub struct FormatOptions {
     pub volume_name: String,
     pub enable_deldir: bool,
+    /// The format's datestamp as (days, minutes, ticks) since 1978-01-01: the
+    /// rootblock's creation date (0x0C), the extension's root date (0x10) and
+    /// each new deldir block's date (0x1A), which pfs3aio's `NewDeldirBlock`
+    /// copies from the rootblock. `None` stamps the current time as 0.1.3 did,
+    /// which is UTC. Added by ART for ART-317: AmigaDOS reads it as local time.
+    pub datestamp: Option<(u16, u16, u16)>,
 }
 
 impl Default for FormatOptions {
@@ -32,8 +44,27 @@ impl Default for FormatOptions {
         Self {
             volume_name: "Untitled".into(),
             enable_deldir: false,
+            datestamp: None,
         }
     }
+}
+
+/// ART-314: the `rext.fnsize` a format writes — the length limit, plus one, of
+/// every name on the volume. pfs3aio's own format writes 32 (`format.c:520`)
+/// and cuts every name to `fnsize - 1` bytes; hst-imager formats 107, the
+/// longest this crate's directory entries hold.
+pub const FORMAT_FNSIZE: u16 = 107;
+
+/// ART-314/M6 (final review): the longest name a PFS3 volume with this
+/// `fnsize` can store and find again — pfs3aio cuts every name to
+/// `fnsize - 1` bytes, on create and on lookup, before a compare that needs
+/// equal lengths (`directory.c:1489-1490,721-722`, `assroutines.c:163`), and
+/// this crate's own directory entries hold at most 107 whatever `fnsize`
+/// says. The one rule: `writer::Writer::check_name_len` and ART's
+/// `core::preload::native::pfs3_name_limit` both call it, rather than each
+/// repeating `saturating_sub(1).min(107)` on its own.
+pub fn pfs3_name_limit(fnsize: u16) -> usize {
+    usize::from(fnsize).saturating_sub(1).min(107)
 }
 
 /// Result of a successful format operation.
@@ -109,9 +140,14 @@ pub fn format_with_size(
     if supermode {
         options |= MODE_SUPERINDEX;
     }
+    // ART-316: pfs3aio's format turns the deldir on after making it
+    // (`format.c:249-255`, `MODE_DELDIR | MODE_SUPERDELDIR`).
+    if opts.enable_deldir {
+        options |= MODE_DELDIR | MODE_SUPERDELDIR;
+    }
 
-    // Timestamp (current time as Amiga datestamp)
-    let (cday, cmin, ctick) = current_amiga_datestamp();
+    // Timestamp (current time as Amiga datestamp, unless the caller supplied one)
+    let (cday, cmin, ctick) = opts.datestamp.unwrap_or_else(current_amiga_datestamp);
 
     // Index geometry — same formula as Rootblock::index_per_block()
     let index_per_block = (resblocksize / 4).saturating_sub(3);
@@ -163,6 +199,17 @@ pub fn format_with_size(
 
     // 5. Allocate root directory block
     let rootdir_blk = firstreserved + alloc.alloc()? * rescluster;
+
+    // 5b. ART-316: the deldir's two blocks, allocated after the root directory
+    //     as pfs3aio's SetDeldir(2) does (`format.c:249-253`, `directory.c:4614-4622`).
+    let deldir_blks: Vec<u32> = if opts.enable_deldir {
+        vec![
+            firstreserved + alloc.alloc()? * rescluster,
+            firstreserved + alloc.alloc()? * rescluster,
+        ]
+    } else {
+        Vec::new()
+    };
 
     // Build rootblock + reserved bitmap
     let rb_size = rblkcluster as usize * bs;
@@ -236,11 +283,21 @@ pub fn format_with_size(
     put_u16(&mut rext, 0x10, cday);
     put_u16(&mut rext, 0x12, cmin);
     put_u16(&mut rext, 0x14, ctick);
-    put_u16(&mut rext, 0x38, 32); // fnsize
+    put_u16(&mut rext, 0x38, FORMAT_FNSIZE); // fnsize (ART-314)
     if let Some(sb_blk) = sb_blk {
         // superindex[0] names the super index block, never the anode index
         // block: every reader walks SB -> IB -> AB.
         put_u32(&mut rext, 0x40, sb_blk); // superindex[0]
+    }
+    // ART-316: pfs3aio's SetDeldir — deldirroving = old size × 31 = 0,
+    // deldirsize = 2, deldir[seqnr] = each block (`directory.c:4467,4627-4633`;
+    // offsets `blocks.h:444-456`).
+    if !deldir_blks.is_empty() {
+        put_u16(&mut rext, 0x34, 0); // deldirroving
+        put_u16(&mut rext, 0x36, deldir_blks.len() as u16); // deldirsize
+        for (seq, &blk) in deldir_blks.iter().enumerate() {
+            put_u32(&mut rext, 0x90 + seq * 4, blk); // deldir[seq]
+        }
     }
     write_reserved_blocks(dev, rext_blk as u64, &rext, rescluster, bs)?;
 
@@ -317,13 +374,30 @@ pub fn format_with_size(
     put_u32(&mut an, an_off + 8, 0); // next = EOF
     write_reserved_blocks(dev, anode_blk as u64, &an, rescluster, bs)?;
 
-    // Write root directory block (empty)
+    // Write root directory block (empty). ART-313: the root's own blocks carry
+    // parent 0 — pfs3aio's format.c:548 `MakeDirBlock(blocknr, anodenr, anodenr, 0, g)`,
+    // and GetParent treats 0 as "this is the root". 0.1.3 wrote ANODE_ROOTDIR here.
     let mut dir = vec![0u8; resblocksize as usize];
     put_u16(&mut dir, 0x00, DBLKID);
     put_u32(&mut dir, 0x04, 1); // datestamp
     put_u32(&mut dir, 0x0C, ANODE_ROOTDIR);
-    put_u32(&mut dir, 0x10, ANODE_ROOTDIR); // parent = self
+    put_u32(&mut dir, 0x10, 0); // parent: none, this is the root
     write_reserved_blocks(dev, rootdir_blk as u64, &dir, rescluster, bs)?;
+
+    // ART-316: each deldir block as pfs3aio's NewDeldirBlock leaves it
+    // (`directory.c:4466-4479`, layout `blocks.h:381-396`): id DD, seqnr,
+    // protection DELENTRY_PROT (5, `blocks.h:607`), the rootblock's creation date.
+    for (seq, &blk) in deldir_blks.iter().enumerate() {
+        let mut dd = vec![0u8; resblocksize as usize];
+        put_u16(&mut dd, 0x00, DELDIRID);
+        put_u32(&mut dd, 0x04, 1); // datestamp
+        put_u32(&mut dd, 0x08, seq as u32); // seqnr
+        put_u32(&mut dd, 0x16, 5); // protection
+        put_u16(&mut dd, 0x1A, cday);
+        put_u16(&mut dd, 0x1C, cmin);
+        put_u16(&mut dd, 0x1E, ctick);
+        write_reserved_blocks(dev, blk as u64, &dd, rescluster, bs)?;
+    }
 
     dev.flush()?;
 

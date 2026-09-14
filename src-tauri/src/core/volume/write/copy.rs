@@ -24,12 +24,13 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::security::safe_join;
 use crate::core::volume::{BlockDevice, VolumeGeometry};
 
-use super::layout::{amiga_from_unix, BlockSet, PROTECT_OFFSET};
+use super::layout::{BlockSet, PROTECT_OFFSET};
 use super::plan::{order_for_creation, SourceEntry};
 use super::uaem::{self, Sidecar};
 use super::{DeleteProtection, FileMeta, OverwriteProtection, VolumeWriter};
@@ -85,7 +86,12 @@ pub trait CopySource {
     ///
     /// A Windows folder answers from a `.uaem` sidecar if one is there, and
     /// from the file's own mtime otherwise.
-    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>>;
+    ///
+    /// A host mtime or a disc's recording date is an instant; `clock` turns
+    /// it into the wall time AmigaDOS stores, with the offset in force on
+    /// that date (ART-317). A `.uaem` date is already wall time and is used
+    /// as written.
+    fn metadata(&self, relative: &str, clock: &dyn AmigaClock) -> CoreResult<Option<Sidecar>>;
 
     /// Things the source declined to read at all, and why.
     ///
@@ -211,7 +217,7 @@ fn copy_one(
     }
 
     let data = source.read(&entry.relative)?;
-    let sidecar = source.metadata(&entry.relative)?;
+    let sidecar = source.metadata(&entry.relative, writer.clock())?;
     let meta = FileMeta {
         protection: sidecar.as_ref().map(|s| s.protection),
         date: sidecar.as_ref().map(|s| s.date),
@@ -346,9 +352,9 @@ impl CopySource for HostFolder {
         Ok(std::fs::read(path)?)
     }
 
-    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
+    fn metadata(&self, relative: &str, clock: &dyn AmigaClock) -> CoreResult<Option<Sidecar>> {
         let path = self.resolve(relative)?;
-        host_metadata(&path, self.read_sidecars)
+        host_metadata(&path, self.read_sidecars, clock)
     }
 }
 
@@ -358,7 +364,11 @@ impl CopySource for HostFolder {
 /// Shared by every `CopySource` that reads the host filesystem — `HostFolder`
 /// and `HostSelection` alike — so a `.uaem` sidecar means the same thing
 /// regardless of which one found it.
-fn host_metadata(path: &Path, read_sidecars: bool) -> CoreResult<Option<Sidecar>> {
+fn host_metadata(
+    path: &Path,
+    read_sidecars: bool,
+    clock: &dyn AmigaClock,
+) -> CoreResult<Option<Sidecar>> {
     // A sidecar written by ART or WinUAE is the better source: it holds the
     // bits and comment the host filesystem threw away.
     if read_sidecars {
@@ -385,7 +395,7 @@ fn host_metadata(path: &Path, read_sidecars: bool) -> CoreResult<Option<Sidecar>
 
     Ok(modified.map(|unix| Sidecar {
         protection: super::file::default_protection(),
-        date: amiga_from_unix(unix),
+        date: clock.amiga_from_unix(unix),
         comment: String::new(),
     }))
 }
@@ -676,9 +686,9 @@ impl CopySource for HostSelection {
         Ok(std::fs::read(path)?)
     }
 
-    fn metadata(&self, relative: &str) -> CoreResult<Option<Sidecar>> {
+    fn metadata(&self, relative: &str, clock: &dyn AmigaClock) -> CoreResult<Option<Sidecar>> {
         let path = self.resolve(relative)?;
-        host_metadata(&path, self.read_sidecars)
+        host_metadata(&path, self.read_sidecars, clock)
     }
 }
 
@@ -2375,5 +2385,132 @@ mod tests {
             ""
         )
         .is_some());
+    }
+
+    /// ART-317, the season rule: a host file modified in January (UTC+2) and
+    /// copied in July (UTC+3) carries 14:00 — its own day's offset. Today's
+    /// offset would give 15:00, and UTC 12:00.
+    #[test]
+    fn a_winter_mtime_copied_in_summer_keeps_its_winter_local_time() {
+        static SEASONS: crate::core::clock::SeasonalClock = crate::core::clock::SeasonalClock {
+            now: 1_784_116_800,
+            switch_at: 1_774_746_000,
+            before: 7_200,
+            after: 10_800,
+        };
+        let fixture = Fixture::new("dst-mtime");
+        fixture.put("Winter.txt", b"written in January");
+        let winter = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_768_478_400);
+        std::fs::File::options()
+            .write(true)
+            .open(fixture.source.join("Winter.txt"))
+            .unwrap()
+            .set_modified(winter)
+            .unwrap();
+
+        let folder = HostFolder::new(&fixture.source, false);
+        let mut device = fixture.device();
+        let mut writer = VolumeWriter::open_with_clock(
+            &mut device,
+            fixture.geometry,
+            &fixture.image,
+            0,
+            &SEASONS,
+        )
+        .unwrap();
+        copy_into_volume(&mut writer, 0, &folder, OverwritePolicy::Skip, &NoProgress).unwrap();
+
+        let block = writer.find(0, "Winter.txt").unwrap().unwrap().block;
+        assert_eq!(
+            writer.attributes(block).unwrap().date,
+            crate::core::adf::bcpl::AmigaDate {
+                days: 17_546,
+                mins: 14 * 60,
+                ticks: 0
+            },
+            "UTC+2, the offset on the file's own date"
+        );
+    }
+
+    /// ART-317, the other half. A `.uaem` date is zone-less wall time
+    /// (`uaem.rs:206` `amiga_from_civil`, no UTC step), so it goes in as read.
+    /// Extracted back out, it renders as the same text. On a UTC+3 clock, an
+    /// offset applied on either leg moves 12:00 to 15:00 or 09:00.
+    #[test]
+    fn a_uaem_date_round_trips_without_an_offset() {
+        static PLUS_THREE: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+            now: 1_784_116_800,
+            offset: 10_800,
+        };
+        let written = crate::core::adf::bcpl::AmigaDate {
+            days: 17_546,
+            mins: 12 * 60,
+            ticks: 0,
+        };
+
+        let fixture = Fixture::new("uaem-no-offset");
+        fixture.put("Game.slave", b"slave bytes");
+        fixture.put(
+            "Game.slave.uaem",
+            b"-sp-rwed 2026-01-15 12:00:00.00 keep me\n",
+        );
+        {
+            let folder = HostFolder::new(&fixture.source, true);
+            let mut device = fixture.device();
+            let mut writer = VolumeWriter::open_with_clock(
+                &mut device,
+                fixture.geometry,
+                &fixture.image,
+                0,
+                &PLUS_THREE,
+            )
+            .unwrap();
+            copy_into_volume(&mut writer, 0, &folder, OverwritePolicy::Skip, &NoProgress).unwrap();
+            let block = writer.find(0, "Game.slave").unwrap().unwrap().block;
+            assert_eq!(
+                writer.attributes(block).unwrap().date,
+                written,
+                "in: the sidecar's text, unshifted"
+            );
+        }
+
+        let out = fixture.dir.join("out");
+        {
+            let device = fixture.device();
+            extract_from_volume(
+                &device,
+                &fixture.geometry,
+                0,
+                &out,
+                true,
+                OverwritePolicy::Overwrite,
+                &NoProgress,
+            )
+            .unwrap();
+        }
+        let text = std::fs::read_to_string(out.join("Game.slave.uaem")).unwrap();
+        assert!(
+            text.starts_with("-sp-rwed 2026-01-15 12:00:00.00 "),
+            "out: {text:?}"
+        );
+
+        let second = Fixture::new("uaem-no-offset-2");
+        let folder = HostFolder::new(&out, true);
+        let mut device = second.device();
+        let mut writer = VolumeWriter::open_with_clock(
+            &mut device,
+            second.geometry,
+            &second.image,
+            0,
+            &PLUS_THREE,
+        )
+        .unwrap();
+        copy_into_volume(&mut writer, 0, &folder, OverwritePolicy::Skip, &NoProgress).unwrap();
+        let block = writer.find(0, "Game.slave").unwrap().unwrap().block;
+        assert_eq!(
+            writer.attributes(block).unwrap().date,
+            written,
+            "back in: still unshifted"
+        );
     }
 }

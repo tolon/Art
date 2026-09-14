@@ -1120,6 +1120,17 @@ pub fn by_id(id: &str) -> CoreResult<Package> {
         .ok_or_else(|| CoreError::InvalidInput(format!("ART ships no package '{id}'")))
 }
 
+/// Every package in `catalogue` whose own `overrides` names `id` — the
+/// packages that write over it and so must go on after it. The one answer
+/// `chain`'s `OvertakenBy` row and `apply::add_package_staging_in`'s refusal
+/// both read, so the two cannot come to disagree (ART-300).
+pub fn overriders_of<'a>(catalogue: &'a [Package], id: &str) -> Vec<&'a Package> {
+    catalogue
+        .iter()
+        .filter(|other| other.component.overrides.iter().any(|over| over == id))
+        .collect()
+}
+
 /// [`order`]'s own machinery, parameterised over the package list — so a
 /// test can hand it a small, hand-built [`Package`] set that contains a
 /// cycle, rather than only ever exercising it through the three shipped,
@@ -1347,6 +1358,21 @@ pub fn order_with_installed(chosen: &[String], installed: &[String]) -> CoreResu
 mod tests {
     use super::*;
     use crate::core::osinstall::RuleKind;
+
+    /// ART-300. The packages whose own `overrides` name a package — the
+    /// declaration both the chain row and `add_package`'s refusal read.
+    #[test]
+    fn the_packages_that_override_one_are_found_by_their_declaration() {
+        let one = crate::core::osinstall::fixtures::package_test_package();
+        let two = crate::core::osinstall::fixtures::package_test_package_two();
+        let catalogue = vec![one, two];
+        let names: Vec<&str> = overriders_of(&catalogue, "test-package")
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(names, vec!["test-package-two"]);
+        assert!(overriders_of(&catalogue, "test-package-two").is_empty());
+    }
 
     /// One minimal package JSON with the `releases` list spelled by the
     /// caller — for the two gate tests below, which are about the field and

@@ -16,11 +16,13 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.2`): 0.1.3's format left out the super index level and left
-//! anodes 0–4 unreserved (ART-310), and its writer handed one anode number
-//! out twice in an operation that allocated twice (ART-312); `format.rs` and
-//! `writer.rs` differ. The writer's other limits below (ART-113, ART-116) and
-//! its anode ceiling (ART-311) still hold.
+//! (`0.1.3+art.4`): its format and writer differ from 0.1.3 — the super index
+//! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
+//! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
+//! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
+//! writes it (ART-316, ART-318), pfs3aio's anode
+//! ceiling (ART-311), and a caller-supplied datestamp (ART-317); `ART-PATCH.md`
+//! there lists each. The writer's other limits below (ART-113, ART-116) still hold.
 //!
 //! ## `import_filesystem` refuses
 //!
@@ -105,6 +107,7 @@ use crate::core::adf::blocks::{
 use crate::core::adf::bootblock::BootBlock;
 use crate::core::adf::checksum::block_checksum;
 use crate::core::card::{read_card, AmigaArea, CardImage};
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::preload::amiga_names::AmigaNames;
@@ -117,19 +120,42 @@ use crate::core::volume::write::{dir, uaem, write_refusal, FileMeta, VolumeWrite
 use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version of the `libpfs3` ART builds: the vendored copy in
-/// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patch,
-/// `+art.2`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patches,
+/// `+art.4`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
 /// version, so this is kept in sync by hand, the same trade-off ART already
 /// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
 /// constant as which implementation did the work, and
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.2";
+const LIBPFS3_VERSION: &str = "0.1.3+art.4";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
-pub struct NativeFormatter;
+/// Every date it writes comes from `clock` (ART-317).
+pub struct NativeFormatter {
+    clock: &'static dyn AmigaClock,
+}
+
+impl NativeFormatter {
+    pub const fn new(clock: &'static dyn AmigaClock) -> Self {
+        Self { clock }
+    }
+
+    /// UTC, for tests whose subject is not the date.
+    #[cfg(test)]
+    pub const UTC: Self = Self::new(&crate::core::clock::UtcClock);
+}
+
+/// An [`AmigaDate`] as libpfs3's (days, minutes, ticks). PFS3 stores days as
+/// a `u16`, which lasts until 2157, so a later day clamps rather than wraps.
+fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
+    (
+        u16::try_from(date.days).unwrap_or(u16::MAX),
+        date.mins as u16,
+        date.ticks as u16,
+    )
+}
 
 impl VolumeFormatter for NativeFormatter {
     fn probe(&self) -> CoreResult<ToolVersion> {
@@ -188,7 +214,10 @@ impl VolumeFormatter for NativeFormatter {
                 let device = ArtBlockDevice::new(region);
                 let opts = libpfs3::format::FormatOptions {
                     volume_name: checked_name,
-                    enable_deldir: false,
+                    // ART-316/318: pfs3aio's two-block deldir, as the Amiga's own
+                    // format makes it (the owner's decision, 2026-09-14).
+                    enable_deldir: true,
+                    datestamp: Some(pfs3_datestamp(self.clock.amiga_now())),
                 };
                 libpfs3::format::format_with_size(&device, total_blocks as u64, &opts)
                     .map_err(from_pfs3)?;
@@ -200,7 +229,12 @@ impl VolumeFormatter for NativeFormatter {
                 if let Some(reason) = write_refusal(&geometry) {
                     return Err(CoreError::UnsupportedFormat(reason));
                 }
-                format_ffs_volume(&mut region, &geometry, &checked_name)?;
+                format_ffs_volume(
+                    &mut region,
+                    &geometry,
+                    &checked_name,
+                    self.clock.amiga_now(),
+                )?;
             }
             DosFamily::Other => {
                 return Err(CoreError::UnsupportedFormat(format!(
@@ -228,7 +262,13 @@ impl VolumeFormatter for NativeFormatter {
     ) -> CoreResult<()> {
         let planned = plan_copy(image, slot, drive, source)?;
         match family_of(planned.dos) {
-            DosFamily::Pfs3 => match non_ascii_refusal(&planned.entries) {
+            DosFamily::Pfs3 => match non_ascii_refusal(&planned.entries).or_else(|| {
+                // ART-314: against the volume `format_partition` is about to write.
+                long_name_refusal(
+                    &planned.entries,
+                    pfs3_name_limit(libpfs3::format::FORMAT_FNSIZE),
+                )
+            }) {
                 Some(err) => Err(err),
                 None => Ok(()),
             },
@@ -256,10 +296,11 @@ impl VolumeFormatter for NativeFormatter {
 
         match family_of(dos) {
             DosFamily::Pfs3 => copy_in_pfs3(
-                image, offset, length, block_size, drive, source, &entries, sink,
+                image, offset, length, block_size, drive, source, &entries, sink, self.clock,
             ),
             DosFamily::Ffs => copy_in_ffs(
                 image, offset, length, block_size, dos, reserved, drive, source, &entries, sink,
+                self.clock,
             ),
             DosFamily::Other => Err(unsupported_family(dos)),
         }
@@ -345,6 +386,11 @@ pub(crate) fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
             CoreError::InvalidInput(format!("not enough room on this PFS3 volume: {detail}"))
         }
         libpfs3::error::Error::Io(io) => CoreError::Io(io),
+        libpfs3::error::Error::NameTooLong { name, max, .. } => CoreError::Pfs3NamesTooLong {
+            paths: vec![name],
+            more: 0,
+            max_bytes: max,
+        },
         other => CoreError::Malformed {
             format: "pfs3".into(),
             detail: other.to_string(),
@@ -514,6 +560,7 @@ fn format_ffs_volume(
     device: &mut dyn BlockDeviceMut,
     geometry: &VolumeGeometry,
     volume_name: &str,
+    now: AmigaDate,
 ) -> CoreResult<()> {
     let bs = geometry.block_size;
     let total_blocks = geometry.total_blocks;
@@ -570,7 +617,6 @@ fn format_ffs_volume(
     if let Some(first_ext) = ext_blocks.first() {
         put_u32(&mut root, 416, *first_ext);
     }
-    let now = current_amiga_date();
     put_u32(&mut root, 420, now.days);
     put_u32(&mut root, 424, now.mins);
     put_u32(&mut root, 428, now.ticks);
@@ -634,24 +680,6 @@ fn put_u32(buf: &mut [u8], offset: usize, value: u32) {
 
 fn put_i32(buf: &mut [u8], offset: usize, value: i32) {
     buf[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-}
-
-/// The clock, as an Amiga timestamp. Mirrors the private helper of the same
-/// shape in `core/adf/create.rs`, which is not `pub` and belongs to a
-/// fixed-geometry (floppy) creator this module does not otherwise depend on.
-fn current_amiga_date() -> AmigaDate {
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(crate::core::adf::bcpl::AMIGA_EPOCH_UNIX);
-
-    let secs_since_amiga = (now_unix - crate::core::adf::bcpl::AMIGA_EPOCH_UNIX).max(0);
-    let days = (secs_since_amiga / 86_400) as u32;
-    let rem_secs = secs_since_amiga % 86_400;
-    let mins = (rem_secs / 60) as u32;
-    let ticks = ((rem_secs % 60) * 50) as u32;
-
-    AmigaDate { days, mins, ticks }
 }
 
 // ---------------------------------------------------------------------------
@@ -719,6 +747,38 @@ fn non_ascii_refusal(entries: &[CopyEntry]) -> Option<CoreError> {
             .map(str::to_string)
             .collect(),
         more,
+    })
+}
+
+/// ART-314: the longest name a PFS3 volume with this `fnsize` can store and
+/// find again — M6 (final review): the one rule lives in
+/// `libpfs3::format::pfs3_name_limit`, which the vendored writer's own
+/// `check_name_len` calls too, so there is one rule instead of two copies.
+fn pfs3_name_limit(fnsize: u16) -> usize {
+    libpfs3::format::pfs3_name_limit(fnsize)
+}
+
+/// The ART-314 refusal, or `None`: every entry whose own name is longer than
+/// `max_bytes`, bounded the way [`non_ascii_refusal`] bounds its list. Bytes
+/// equal characters here, because non-ASCII names are refused before this.
+fn long_name_refusal(entries: &[CopyEntry], max_bytes: usize) -> Option<CoreError> {
+    let offending: Vec<&str> = entries
+        .iter()
+        .filter(|entry| leaf_name(&entry.relative).len() > max_bytes)
+        .map(|entry| entry.relative.as_str())
+        .collect();
+    if offending.is_empty() {
+        return None;
+    }
+    let more = offending.len().saturating_sub(MAX_NAMED_NON_ASCII);
+    Some(CoreError::Pfs3NamesTooLong {
+        paths: offending
+            .into_iter()
+            .take(MAX_NAMED_NON_ASCII)
+            .map(str::to_string)
+            .collect(),
+        more,
+        max_bytes,
     })
 }
 
@@ -833,6 +893,7 @@ fn copy_in_pfs3(
     source: &Path,
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<CopySummary> {
     // ART-113: refused before the volume is even opened, let alone written
     // to — see the module doc comment and `non_ascii_entries`'s own.
@@ -854,6 +915,12 @@ fn copy_in_pfs3(
             "'{volume_label}' already has files on it. NativeFormatter only fills a volume \
              immediately after formatting it — format '{volume_label}' first."
         )));
+    }
+
+    // ART-314: by name, against what this volume says it can store, before the
+    // writer opens — nothing has been written yet.
+    if let Some(refusal) = long_name_refusal(entries, pfs3_name_limit(vol.fnsize())) {
+        return Err(refusal);
     }
 
     // Binding requirement 5: the fit check, before the first byte, with real
@@ -899,6 +966,7 @@ fn copy_in_pfs3(
 
     let total = entries.len() as u64;
     for (done, entry) in entries.iter().enumerate() {
+        writer.set_entry_date(Some(pfs3_datestamp(clock.amiga_now())));
         // Between whole files, never mid-write (§54; module docs above).
         if sink.is_cancelled() {
             return Err(CoreError::Cancelled);
@@ -986,15 +1054,17 @@ fn copy_in_ffs(
     source: &Path,
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<CopySummary> {
     let mut region = FileRegionMut::open(image, offset, length, block_size)?;
     let total_blocks = region.total_blocks();
     let geometry = VolumeGeometry::new(block_size, total_blocks, reserved, dos)?;
 
-    // `VolumeWriter::open` requires an already-formatted, matching bootblock —
-    // exactly the state `format_partition` leaves the volume in, and exactly
-    // why `copy_in` never precedes `format_partition` in the plan (mod.rs).
-    let mut writer = VolumeWriter::open(&mut region, geometry, image, offset)?;
+    // `VolumeWriter::open_with_clock` requires an already-formatted, matching
+    // bootblock — exactly the state `format_partition` leaves the volume in,
+    // and exactly why `copy_in` never precedes `format_partition` in the plan
+    // (mod.rs).
+    let mut writer = VolumeWriter::open_with_clock(&mut region, geometry, image, offset, clock)?;
 
     let existing = writer.list(0)?;
     if !existing.is_empty() {
@@ -1096,6 +1166,7 @@ mod tests {
     use super::*;
     use crate::core::jobs::NoProgress;
     use crate::core::osinstall::fixtures;
+    use crate::core::preload::pfs3_test_device::MemDevice;
     use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
 
     /// Several tests share a tag (`"pds3"`, for instance) because they are
@@ -1248,7 +1319,7 @@ mod tests {
 
     fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         (_guard, image)
@@ -1258,7 +1329,7 @@ mod tests {
     fn formatted_pds3_image_of(mb: u32) -> (crate::core::ScratchDir, PathBuf) {
         let (_guard, path) =
             card_with_partition(&format!("pds3-{mb}mb"), AmigaHardDiskFs::Pfs3DirectScsi, mb);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&path, None, 1, "Work", &NoProgress)
             .unwrap();
         (_guard, path)
@@ -1300,7 +1371,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&path, None, 1, "Work", &NoProgress)
             .unwrap();
         (_guard, path)
@@ -1379,6 +1450,153 @@ mod tests {
         }
     }
 
+    fn be16(b: &[u8], at: usize) -> u16 {
+        u16::from_be_bytes([b[at], b[at + 1]])
+    }
+
+    fn be32(b: &[u8], at: usize) -> u32 {
+        u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
+    }
+
+    /// **ART-313.** Every directory block in a PFS3 partition's reserved area,
+    /// read straight off the image as `(anodenr, parent)`: `anodenr` (0x0C) is
+    /// the directory's own first anode on every one of its blocks, and `parent`
+    /// (0x10) is what pfs3aio's `GetParent` reads. Not through `libpfs3`'s
+    /// reader, which never reads `parent` at all.
+    fn dir_block_parents(image: &Path) -> Vec<(u32, u32)> {
+        use std::io::{Read, Seek, SeekFrom};
+        let offset = partition_offset(image);
+        let mut file = std::fs::File::open(image).unwrap();
+        let mut sectors = |sector: u32, len: usize| -> Vec<u8> {
+            file.seek(SeekFrom::Start(offset + u64::from(sector) * 512))
+                .unwrap();
+            let mut buf = vec![0u8; len];
+            file.read_exact(&mut buf).unwrap();
+            buf
+        };
+        // Rootblock: lastreserved 0x34, firstreserved 0x38, reserved_blksize 0x40.
+        let root = sectors(2, 512);
+        let lastreserved = be32(&root, 0x34);
+        let resblk = usize::from(be16(&root, 0x40));
+        let rescluster = (resblk / 512) as u32;
+        let mut found = Vec::new();
+        let mut blk = be32(&root, 0x38);
+        while blk + rescluster - 1 <= lastreserved {
+            let block = sectors(blk, resblk);
+            if &block[0..2] == b"DB" {
+                found.push((be32(&block, 0x0C), be32(&block, 0x10)));
+            }
+            blk += rescluster;
+        }
+        found
+    }
+
+    /// **ART-318.** One used deldir entry as pfs3aio's handler reads it
+    /// (`blocks.h:368-379`): the name is the `name_len` bytes after the length
+    /// byte at 0x0E.
+    #[derive(Debug, PartialEq)]
+    struct RawDelEntry {
+        slot: usize,
+        anodenr: u32,
+        fsize: u32,
+        date: Vec<u8>,
+        name_len: u8,
+        name: Vec<u8>,
+        fsizex: u16,
+    }
+
+    /// **ART-318.** The deldir straight off the image: `rext.deldirroving`, and
+    /// every entry with a nonzero `anodenr` in every block `rext.deldir[..deldirsize]`
+    /// names, 31 to a block (`blocks.h:611`). Not through `libpfs3`'s reader.
+    fn raw_deldir(image: &Path) -> (u16, Vec<RawDelEntry>) {
+        let offset = partition_offset(image) as usize;
+        let raw = std::fs::read(image).unwrap();
+        let sector = |n: u32, len: usize| {
+            let at = offset + n as usize * 512;
+            raw[at..at + len].to_vec()
+        };
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let mut entries = Vec::new();
+        for b in 0..usize::from(be16(&ext, 0x36)) {
+            let dd = sector(be32(&ext, 0x90 + b * 4), resblk);
+            assert_eq!(&dd[0..2], b"DD", "deldir[{b}] must be a deldir block");
+            for e in 0..31 {
+                let at = 32 + e * 32;
+                let anodenr = be32(&dd, at);
+                if anodenr == 0 {
+                    continue;
+                }
+                let len = usize::from(dd[at + 14]).min(17);
+                entries.push(RawDelEntry {
+                    slot: b * 31 + e,
+                    anodenr,
+                    fsize: be32(&dd, at + 4),
+                    date: dd[at + 8..at + 14].to_vec(),
+                    name_len: dd[at + 14],
+                    name: dd[at + 15..at + 15 + len].to_vec(),
+                    fsizex: be16(&dd, at + 30),
+                });
+            }
+        }
+        (be16(&ext, 0x34), entries)
+    }
+
+    /// A PFS3 volume of `total_blocks` formatted in memory by the vendored
+    /// `libpfs3`, with the deldir off (Task 7 turns it on for `NativeFormatter`;
+    /// these fill and bounds tests do not depend on it).
+    fn formatted_in_memory(dev: &MemDevice, total_blocks: u64) -> libpfs3::format::FormatResult {
+        libpfs3::format::format_with_size(
+            dev,
+            total_blocks,
+            &libpfs3::format::FormatOptions {
+                volume_name: "Work".into(),
+                enable_deldir: false,
+                datestamp: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// Write `dirs` directories of `per_dir` files, every file with its own
+    /// content, through one `libpfs3` writer; drop it; reopen the volume from
+    /// the device — which knows only what reached it — and return every file
+    /// that does not read back as its own bytes, with the time the writes took.
+    fn fill_and_read_back(
+        dev: &MemDevice,
+        dirs: usize,
+        per_dir: usize,
+    ) -> (Vec<String>, std::time::Duration) {
+        let mut written = Vec::with_capacity(dirs * per_dir);
+        let started = std::time::Instant::now();
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            for d in 0..dirs {
+                let dir = format!("D{d:03}");
+                w.create_dir(&dir).unwrap_or_else(|e| panic!("{dir}: {e}"));
+                for f in 0..per_dir {
+                    let name = format!("{dir}/F{f:05}");
+                    let content = format!("{name}-unique-content");
+                    w.write_file(&name, content.as_bytes())
+                        .unwrap_or_else(|e| panic!("{name}: {e}"));
+                    written.push((name, content));
+                }
+            }
+        }
+        let took = started.elapsed();
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let wrong = written
+            .into_iter()
+            .filter(|(name, content)| {
+                vol.read_file(name).ok().as_deref() != Some(content.as_bytes())
+            })
+            .map(|(name, _)| name)
+            .collect();
+        (wrong, took)
+    }
+
     /// The pieces needed to reopen a formatted `DOS\3` partition's volume for
     /// verification, without going through `NativeFormatter` a second time.
     fn ffs_region(image: &Path) -> (FileRegionMut, VolumeGeometry, u64) {
@@ -1435,7 +1653,7 @@ mod tests {
     #[test]
     fn it_formats_a_pfs3_partition_and_reads_the_volume_name_back() {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
 
@@ -1465,7 +1683,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1494,7 +1712,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1513,7 +1731,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         assert_eq!(summary.files, 1);
@@ -1584,7 +1802,7 @@ mod tests {
         std::fs::write(tree.join("C/Assign"), b"assign\n").unwrap();
         std::fs::write(tree.join("Readme"), b"hello from ART\n").unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         assert_eq!((summary.files, summary.directories), (2, 1));
@@ -1646,6 +1864,746 @@ mod tests {
         );
     }
 
+    /// **ART-313.** pfs3aio's directory blocks name the directory that holds
+    /// theirs: the root's own blocks carry `parent` 0 (`format.c:548`), a
+    /// directory in the root carries 5 (`directory.c:1652-1655,1707-1708`),
+    /// and a continuation block copies the parent of the block it grew from
+    /// (`directory.c:3176,3204`). 0.1.3 wrote the root with 5 and gave every
+    /// continuation block the directory's own anode. 60-byte names make an
+    /// 82-byte entry, 12 to a 1024-byte block, so 20 of them give the root, `D`
+    /// and `D/E` a second block each.
+    #[test]
+    fn pfs3_directory_blocks_carry_their_containing_directorys_anode_as_parent() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let long = |prefix: &str, i: usize| format!("{prefix}{i:0>59}");
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.create_dir("D").unwrap();
+            w.create_dir("D/E").unwrap();
+            for i in 0..20 {
+                w.write_file(&long("R", i), b"r").unwrap();
+                w.write_file(&format!("D/{}", long("F", i)), b"d").unwrap();
+                w.write_file(&format!("D/E/{}", long("G", i)), b"e")
+                    .unwrap();
+            }
+            drop(w.into_volume());
+        }
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        let d = vol.lookup("D").unwrap().unwrap().anode;
+        let e = vol.lookup("D/E").unwrap().unwrap().anode;
+        let blocks = dir_block_parents(&image);
+        let root = libpfs3::ondisk::ANODE_ROOTDIR;
+        for (dir, expected, label) in [(root, 0, "root"), (d, root, "D"), (e, d, "D/E")] {
+            let parents: Vec<u32> = blocks
+                .iter()
+                .filter(|(anodenr, _)| *anodenr == dir)
+                .map(|(_, parent)| *parent)
+                .collect();
+            assert!(
+                parents.len() >= 2,
+                "{label}: expected a continuation block, found {} block(s)",
+                parents.len()
+            );
+            assert!(
+                parents.iter().all(|&p| p == expected),
+                "{label} (anode {dir}): every directory block's parent must be {expected}, read {parents:?}"
+            );
+        }
+    }
+
+    /// **ART-315.** pfs3aio and hst-imager leave the data bitmap's tail bits —
+    /// the bits past the partition's last block — set, i.e. free; only a block
+    /// below the partition's end may be handed out (pfs3aio `allocation.c:344`).
+    /// A write asking for one block more than the volume holds must be refused
+    /// as disk full, and nothing may reach past the partition. 48 000 blocks is
+    /// small mode with 46 590 data blocks: the last bitmap block uses 6 110 of
+    /// its 8 096 bits.
+    #[test]
+    fn a_pfs3_allocation_never_hands_out_a_block_past_the_partition() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        let data_blocks = formatted_in_memory(&dev, TOTAL).data_blocks as u32;
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let bits_per_bmb = (resblk as u32 / 4 - 3) * 32;
+        let last_seq = (data_blocks - 1) / bits_per_bmb;
+        // bitmapindex[0] at 0x60 -> the last bitmap block.
+        let bmi = dev.read(u64::from(be32(&root, 0x60)), resblk);
+        let bm_blk = u64::from(be32(&bmi, 12 + last_seq as usize * 4));
+        let mut bm = dev.read(bm_blk, resblk);
+        let used_bits = data_blocks - last_seq * bits_per_bmb;
+        assert!(
+            used_bits < bits_per_bmb,
+            "the last bitmap block must have tail bits"
+        );
+        for bit in used_bits..bits_per_bmb {
+            let at = 12 + (bit / 32) as usize * 4;
+            let word = be32(&bm, at) | (0x8000_0000 >> (bit % 32));
+            bm[at..at + 4].copy_from_slice(&word.to_be_bytes());
+        }
+        dev.patch(bm_blk, &bm);
+
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+        let one_too_many = vec![0x5Au8; (data_blocks as usize + 1) * 512];
+        let err = w.write_file("Big", &one_too_many).unwrap_err();
+        assert!(
+            matches!(err, libpfs3::error::Error::DiskFull(_)),
+            "expected disk full, got: {err}"
+        );
+        assert_eq!(
+            dev.refused(),
+            Vec::<u64>::new(),
+            "a write reached past the partition's end ({TOTAL})"
+        );
+    }
+
+    /// **ART-315, the free side.** Freeing a data block past the partition's
+    /// end must change nothing: its bitmap bit is exactly a tail bit the
+    /// allocator must never find set, and counting it into `blocksfree` claims
+    /// a block that does not exist. File `A`'s one extent (anode 6, the first
+    /// user anode, in the format's anode block) is pointed at block `TOTAL`
+    /// raw, then `A` is deleted.
+    #[test]
+    fn freeing_a_pfs3_block_past_the_partition_changes_nothing() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("A", b"one block").unwrap();
+        }
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        // rootblock.indexblocks[0] (0x60 + 5 × 4) -> IB -> index[0] -> AB.
+        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), resblk);
+        let ab_blk = u64::from(be32(&ib, 12));
+        let mut ab = dev.read(ab_blk, resblk);
+        let at = 16 + 6 * 12;
+        assert_eq!(be32(&ab, at), 1, "anode 6 must be A's one-block extent");
+        ab[at + 4..at + 8].copy_from_slice(&(TOTAL as u32).to_be_bytes());
+        dev.patch(ab_blk, &ab);
+
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let free_before = vol.free_blocks();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+        w.delete("A").unwrap();
+        assert_eq!(
+            w.into_volume().free_blocks(),
+            free_before,
+            "blocksfree counted block {TOTAL}, past the partition, as freed"
+        );
+
+        let root = dev.read(2, 512);
+        let bitmapstart = be32(&root, 0x34) + 1;
+        let rel = TOTAL as u32 - bitmapstart;
+        let bits_per_bmb = (resblk as u32 / 4 - 3) * 32;
+        let bmi = dev.read(u64::from(be32(&root, 0x60)), resblk);
+        let bm = dev.read(
+            u64::from(be32(&bmi, 12 + (rel / bits_per_bmb) as usize * 4)),
+            resblk,
+        );
+        let bit = rel % bits_per_bmb;
+        assert_eq!(
+            be32(&bm, 12 + (bit / 32) as usize * 4) & (0x8000_0000 >> (bit % 32)),
+            0,
+            "the bitmap bit for block {TOTAL}, past the partition, was set free"
+        );
+    }
+
+    /// **ART-314, the vendored crate.** ART's format writes `fnsize` 107, as
+    /// hst-imager's does, and the writer refuses a name longer than the
+    /// `fnsize - 1` = 106 bytes pfs3aio can find again — instead of storing it
+    /// and leaving it unopenable — before anything is written. 106 bytes is
+    /// written and read back.
+    #[test]
+    fn a_pfs3_name_longer_than_fnsize_minus_one_is_refused_before_anything_is_written() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image) as usize;
+        let before = std::fs::read(&image).unwrap();
+        // Rootblock at partition sector 2: extension 0x58; rext.fnsize at 0x38.
+        let ext = be32(&before[offset + 2 * 512..], 0x58) as usize;
+        assert_eq!(
+            be16(&before[offset + ext * 512..], 0x38),
+            107,
+            "rext.fnsize"
+        );
+
+        let too_long = "T".repeat(107);
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset as u64).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let err = w.write_file(&too_long, b"x").unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    libpfs3::error::Error::NameTooLong {
+                        len: 107,
+                        max: 106,
+                        ..
+                    }
+                ),
+                "write_file: {err}"
+            );
+            let err = w.create_dir(&too_long).unwrap_err();
+            assert!(
+                matches!(err, libpfs3::error::Error::NameTooLong { .. }),
+                "create_dir: {err}"
+            );
+        }
+        assert!(
+            std::fs::read(&image).unwrap() == before,
+            "a refused name changed the image"
+        );
+
+        let longest = "L".repeat(106);
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset as u64).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file(&longest, b"kept").unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::open(&image, offset as u64).unwrap();
+        assert_eq!(vol.read_file(&longest).unwrap(), b"kept");
+    }
+
+    /// **ART-314, ART's side.** A tree holding a name longer than the volume
+    /// can store is refused by name — in `can_copy_in`, so the partition is
+    /// never formatted for a copy that would stop partway, and in `copy_in`
+    /// before the volume is written.
+    #[test]
+    fn a_pfs3_name_too_long_for_the_volume_is_refused_by_name_before_anything_is_written() {
+        let (_guard, image) = formatted_pds3_image();
+        let before = std::fs::read(&image).unwrap();
+        let (_guard, tree) = fixtures::scratch("copy-in-long-name");
+        let long = format!("{}.info", "N".repeat(102)); // 107 bytes
+        std::fs::create_dir_all(tree.join("Drawer")).unwrap();
+        std::fs::write(tree.join("Drawer").join(&long), b"x").unwrap();
+        std::fs::write(tree.join("Short"), b"y").unwrap();
+
+        let err = NativeFormatter::UTC
+            .can_copy_in(&image, None, "DH0", &tree)
+            .unwrap_err();
+        let CoreError::Pfs3NamesTooLong {
+            paths,
+            more,
+            max_bytes,
+        } = err
+        else {
+            panic!("can_copy_in: expected Pfs3NamesTooLong, got {err}");
+        };
+        assert_eq!(
+            (paths, more, max_bytes),
+            (vec![format!("Drawer/{long}")], 0, 106)
+        );
+
+        let err = NativeFormatter::UTC
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+        assert!(
+            matches!(&err, CoreError::Pfs3NamesTooLong { max_bytes: 106, .. }),
+            "copy_in: {err}"
+        );
+        assert!(
+            format!("{err}").contains(&format!("Drawer/{long}")),
+            "{err}"
+        );
+        assert_eq!(err.code(), "ART-PFS3-NAME-TOO-LONG");
+        assert!(
+            std::fs::read(&image).unwrap() == before,
+            "nothing may be written"
+        );
+    }
+
+    /// **ART-311, small mode.** 22 000 files in 110 directories — with the
+    /// directories and their continuation blocks, ~22 700 anodes — go past the
+    /// one anode index block the format makes (253 × 84 − 6 = 21 246 anodes).
+    /// pfs3aio makes the next index block on demand and names it in the
+    /// rootblock (`anodes.c:740-761`); every file must read back from a volume
+    /// reopened off the device, which sees only what the rootblock names.
+    /// 48 000 blocks: small mode, 46 590 data blocks, 1 408 reserved.
+    #[test]
+    fn a_small_pfs3_volume_takes_more_anodes_than_one_index_block_holds() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        let (wrong, took) = fill_and_read_back(&dev, 110, 200);
+        println!("ART-311 small mode: 22 000 files written in {took:?}");
+        assert!(
+            wrong.is_empty(),
+            "{} of 22 000 files do not read back as their own content, first: {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(10)]
+        );
+        let root = dev.read(2, 512);
+        assert_ne!(
+            be32(&root, 0x60 + 5 * 4 + 4),
+            0,
+            "rootblock.indexblocks[1] must name the second index block"
+        );
+        assert_eq!(dev.refused(), Vec::<u64>::new());
+    }
+
+    /// **ART-311, SUPERINDEX mode.** The same 22 000 files on a volume past
+    /// MAXSMALLDISK, past the 256 anode blocks the old search stopped at
+    /// (256 × 84 − 6 = 21 498 anodes). 10 444 896 blocks is the partition
+    /// `formatted_large_pds3_image` makes, held sparse in memory.
+    #[test]
+    fn a_superindex_pfs3_volume_takes_more_anodes_than_256_anode_blocks_hold() {
+        const TOTAL: u64 = 10_444_896;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        let (wrong, took) = fill_and_read_back(&dev, 110, 200);
+        println!("ART-311 SUPERINDEX mode: 22 000 files written in {took:?}");
+        assert!(
+            wrong.is_empty(),
+            "{} of 22 000 files do not read back as their own content, first: {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(10)]
+        );
+        assert_eq!(dev.refused(), Vec::<u64>::new());
+    }
+
+    /// **ART-311, a second super block.** At 1024-byte reserved blocks one
+    /// super block addresses 253² = 64 009 anode blocks, so the 16-bit anode
+    /// block range reaches `superindex[1]`. Filling that many is not a test, so
+    /// the volume is made to look full: the format's super block names its one
+    /// index block 253 times, that index block names its one anode block 253
+    /// times, and anodes 6–83 are taken. The next allocation must make super
+    /// block 1 (pfs3aio `NewSuperBlock`, `anodes.c:844-870`) holding an index
+    /// block numbered 253 across the volume (`anodes.c:592-595,767`), and name
+    /// it in the rootblock extension (`blocks.h:448`, `update.c:240-256`). The
+    /// free reserved blocks it takes hold stale bytes first, as on a used
+    /// volume, so a super block read from the device rather than from the
+    /// writer's own pending write cannot pass.
+    #[test]
+    fn a_superindex_pfs3_volume_makes_its_second_super_block() {
+        const TOTAL: u64 = 10_444_896;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let rescluster = (resblk / 512) as u64;
+        let ext_blk = u64::from(be32(&root, 0x58));
+        let sb0 = u64::from(be32(&dev.read(ext_blk, resblk), 0x40));
+        let mut sb = dev.read(sb0, resblk);
+        let ib0 = be32(&sb, 12);
+        let mut ib = dev.read(u64::from(ib0), resblk);
+        let ab0 = be32(&ib, 12);
+        let mut ab = dev.read(u64::from(ab0), resblk);
+        for k in 6..84 {
+            let at = 16 + k * 12;
+            ab[at..at + 4].copy_from_slice(&1u32.to_be_bytes());
+            ab[at + 4..at + 8].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+        }
+        for i in 0..253 {
+            sb[12 + i * 4..16 + i * 4].copy_from_slice(&ib0.to_be_bytes());
+            ib[12 + i * 4..16 + i * 4].copy_from_slice(&ab0.to_be_bytes());
+        }
+        dev.patch(u64::from(ab0), &ab);
+        dev.patch(u64::from(ib0), &ib);
+        dev.patch(sb0, &sb);
+        // Stale bytes in the first eight free reserved blocks, the ones
+        // `alloc_reserved_block` hands out next (it scans the bitmap from 0).
+        let firstreserved = u64::from(be32(&root, 0x38));
+        let cluster = dev.read(2, usize::from(be16(&root, 0x42)) * 512);
+        let (mut stale, mut idx) = (0, 0u64);
+        while stale < 8 {
+            let word = be32(&cluster, 512 + 12 + (idx / 32) as usize * 4);
+            if word & (0x8000_0000 >> (idx % 32)) != 0 {
+                dev.patch(firstreserved + idx * rescluster, &vec![0xEEu8; resblk]);
+                stale += 1;
+            }
+            idx += 1;
+            assert!(idx < 1 << 20, "no free reserved blocks found");
+        }
+
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("Past64009", b"in the second super block")
+                .unwrap();
+        }
+
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let entry = vol.lookup("Past64009").unwrap().unwrap();
+        assert_eq!(
+            entry.anode >> 16,
+            64_009,
+            "the file's anode is in anode block 64 009"
+        );
+        assert_eq!(
+            vol.read_file("Past64009").unwrap(),
+            b"in the second super block"
+        );
+        let ext = dev.read(ext_blk, resblk);
+        let sb1 = be32(&ext, 0x44);
+        assert_ne!(sb1, 0, "rext.superindex[1] must name the new super block");
+        let sb1 = dev.read(u64::from(sb1), resblk);
+        assert_eq!(
+            (&sb1[0..2], be32(&sb1, 8)),
+            (&b"SB"[..], 1),
+            "super block 1: id, seqnr"
+        );
+        let ib1 = dev.read(u64::from(be32(&sb1, 12)), resblk);
+        assert_eq!(
+            (&ib1[0..2], be32(&ib1, 8)),
+            (&b"IB"[..], 253),
+            "its index block: id, seqnr across the volume"
+        );
+        assert_eq!(dev.refused(), Vec::<u64>::new());
+    }
+
+    /// **ART-316.** `enable_deldir` makes the deldir pfs3aio's format makes:
+    /// `MODE_DELDIR | MODE_SUPERDELDIR` (`format.c:249-255`); two `DD` blocks
+    /// with seqnr 0 and 1, protection `DELENTRY_PROT` 5 at 0x16 and the
+    /// rootblock's creation date at 0x1A (`directory.c:4466-4479`,
+    /// `blocks.h:381-396`), named by `rext.deldir[0..2]` at 0x90, `deldirsize`
+    /// 2 at 0x36 and `deldirroving` 0 at 0x34 (`directory.c:4627-4633`,
+    /// `blocks.h:431-456`), both taken out of the reserved area. Without the
+    /// option the format is unchanged. Both modes.
+    #[test]
+    fn a_pfs3_format_with_the_deldir_makes_pfs3aios_two_deldir_blocks() {
+        for total in [48_000u64, 10_444_896] {
+            let format = |deldir: bool| {
+                let dev = MemDevice::with_end(total);
+                libpfs3::format::format_with_size(
+                    &dev,
+                    total,
+                    &libpfs3::format::FormatOptions {
+                        volume_name: "Work".into(),
+                        enable_deldir: deldir,
+                        datestamp: None,
+                    },
+                )
+                .unwrap();
+                dev
+            };
+            let (off, on) = (format(false), format(true));
+            let (root_off, root) = (off.read(2, 512), on.read(2, 512));
+            let resblk = usize::from(be16(&root, 0x40));
+            let (ext_off, ext) = (
+                off.read(u64::from(be32(&root_off, 0x58)), resblk),
+                on.read(u64::from(be32(&root, 0x58)), resblk),
+            );
+
+            assert_eq!(
+                be32(&root_off, 0x04) & (8 | 256),
+                0,
+                "{total}: off, no deldir flags"
+            );
+            assert_eq!(
+                (be16(&ext_off, 0x36), be32(&ext_off, 0x90)),
+                (0, 0),
+                "{total}: off, no deldir"
+            );
+            assert_eq!(
+                be32(&root, 0x04) & (8 | 256),
+                8 | 256,
+                "{total}: MODE_DELDIR | MODE_SUPERDELDIR"
+            );
+            assert_eq!(
+                be32(&root, 0x3C) + 2,
+                be32(&root_off, 0x3C),
+                "{total}: the deldir takes two reserved blocks"
+            );
+            assert_eq!(
+                (be16(&ext, 0x34), be16(&ext, 0x36), be32(&ext, 0x98)),
+                (0, 2, 0),
+                "{total}: deldirroving, deldirsize, deldir[2]"
+            );
+            let firstreserved = be32(&root, 0x38);
+            let cluster = on.read(2, usize::from(be16(&root, 0x42)) * 512);
+            for seq in 0..2u32 {
+                let blk = be32(&ext, 0x90 + seq as usize * 4);
+                assert_ne!(blk, 0, "{total}: deldir[{seq}]");
+                let dd = on.read(u64::from(blk), resblk);
+                assert_eq!(&dd[0..2], b"DD", "{total}: deldir[{seq}] id");
+                assert_eq!(
+                    (be32(&dd, 0x08), be32(&dd, 0x16)),
+                    (seq, 5),
+                    "{total}: deldir[{seq}] seqnr, protection"
+                );
+                assert_eq!(
+                    &dd[0x1A..0x20],
+                    &root[0x0C..0x12],
+                    "{total}: deldir[{seq}] creation date is the rootblock's"
+                );
+                let idx = (blk - firstreserved) / (resblk as u32 / 512);
+                assert_eq!(
+                    be32(&cluster, 512 + 12 + (idx / 32) as usize * 4)
+                        & (0x8000_0000 >> (idx % 32)),
+                    0,
+                    "{total}: deldir[{seq}] must be marked used in the reserved bitmap"
+                );
+            }
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(on.clone())).unwrap();
+            assert!(
+                vol.list_deldir().unwrap().is_empty(),
+                "{total}: an empty deldir"
+            );
+        }
+    }
+
+    /// **ART-316/318, cards.** `NativeFormatter` formats PFS3 with pfs3aio's
+    /// deldir on (the owner's decision, 2026-09-14), so a file deleted on the
+    /// Amiga lands where it can be undeleted.
+    #[test]
+    fn native_pfs3_format_turns_the_deldir_on() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image) as usize;
+        let raw = std::fs::read(&image).unwrap();
+        let root = &raw[offset + 2 * 512..];
+        assert_eq!(
+            be32(root, 0x04) & (8 | 256),
+            8 | 256,
+            "MODE_DELDIR | MODE_SUPERDELDIR"
+        );
+        let ext = &raw[offset + be32(root, 0x58) as usize * 512..];
+        assert_eq!(be16(ext, 0x36), 2, "deldirsize");
+    }
+
+    /// **ART-318.** A deleted file goes into the deldir as pfs3aio's
+    /// `DeleteObject` puts it there (`directory.c:1799-1830,4489-4564`): the slot
+    /// at `deldirroving`, which then advances; `anodenr`, `fsize`, the file's own
+    /// date, a length byte and at most `DELENTRYFNSIZE - 1` name bytes — 17 in
+    /// the build pfs3aio's `makefile:21` makes (`LARGE_FILE_SIZE=0`,
+    /// `blocks.h:100-105`), the last two in what the struct calls `fsizex`; the
+    /// file's data blocks freed and its anodes kept. `libpfs3`'s reader lists it
+    /// by that name and at its real size, not reading those name bytes as size
+    /// (`GetDDFileSize`, `directory.c:3688`).
+    #[test]
+    fn a_deleted_pfs3_file_goes_into_pfs3aios_deldir_entry() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let name = "A-long-deleted-name.txt"; // 23 bytes
+        let (anode, date, free_before) = {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("Short", b"s").unwrap();
+            let free_before = w.vol.free_blocks();
+            w.write_file(name, &[0xC3u8; 700]).unwrap(); // two data blocks
+            let e = w.vol.lookup(name).unwrap().unwrap();
+            let date = [e.creation_day, e.creation_minute, e.creation_tick]
+                .iter()
+                .flat_map(|v| v.to_be_bytes())
+                .collect::<Vec<u8>>();
+            w.delete(name).unwrap();
+            (e.anode, date, free_before)
+        };
+
+        let (roving, entries) = raw_deldir(&image);
+        assert_eq!(
+            entries,
+            vec![RawDelEntry {
+                slot: 0,
+                anodenr: anode,
+                fsize: 700,
+                date,
+                name_len: 17,
+                name: b"A-long-deleted-na".to_vec(),
+                fsizex: u16::from_be_bytes(*b"na"),
+            }],
+            "the deldir entry, raw"
+        );
+        assert_eq!(roving, 1, "deldirroving advances past the slot it gave out");
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        assert_eq!(
+            vol.free_blocks(),
+            free_before,
+            "the file's two data blocks are free again"
+        );
+        let chain = vol.get_anode_chain(anode).unwrap();
+        assert_eq!(
+            chain.iter().map(|a| a.clustersize).sum::<u32>(),
+            2,
+            "its anodes are kept for undelete"
+        );
+        let listed: Vec<(String, u64)> = vol
+            .list_deldir()
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.filename.clone(), e.file_size()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![("A-long-deleted-na".to_string(), 700)],
+            "the reader's name, and its size without the name bytes in `fsizex`"
+        );
+    }
+
+    /// **ART-318.** A two-block deldir holds 62 files; the 63rd delete takes slot
+    /// 0 again, where `deldirroving` wrapped to, and the file it evicts loses its
+    /// anodes — only its anodes, its blocks having been freed at its own delete
+    /// (`AllocDeldirSlot`, `directory.c:4497-4518`).
+    #[test]
+    fn the_pfs3_deldir_roves_and_the_63rd_delete_evicts_slot_zero() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let mut anodes = Vec::new();
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            for i in 0..63 {
+                let name = format!("F{i:02}");
+                w.write_file(&name, name.as_bytes()).unwrap();
+                anodes.push(w.vol.lookup(&name).unwrap().unwrap().anode);
+                w.delete(&name).unwrap();
+            }
+        }
+
+        let (roving, entries) = raw_deldir(&image);
+        let at = |slot: usize| entries.iter().find(|e| e.slot == slot).unwrap();
+        assert_eq!(entries.len(), 62, "a full deldir");
+        assert_eq!(
+            (at(0).anodenr, at(0).name.as_slice()),
+            (anodes[62], &b"F62"[..]),
+            "slot 0 holds the 63rd deleted file"
+        );
+        assert_eq!(
+            at(1).name.as_slice(),
+            &b"F01"[..],
+            "slot 1 still holds the second"
+        );
+        assert_eq!(roving, 1, "deldirroving wrapped to 0 and advanced past it");
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        let evicted = &vol.get_anode_chain(anodes[0]).unwrap()[0];
+        assert_eq!(
+            (evicted.clustersize, evicted.blocknr, evicted.next),
+            (0, 0, 0),
+            "F00's anode is freed when its slot is taken"
+        );
+    }
+
+    /// **ART-318.** A deleted file undeletes while its freed blocks are
+    /// untouched, and is refused once a later write has taken them — pfs3aio's
+    /// `IsDelfileValid` (`directory.c:4092-4114`), needed because a delete now
+    /// frees the blocks.
+    #[test]
+    fn a_deleted_pfs3_file_undeletes_until_its_blocks_are_reused() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+
+        w.write_file("Keep", b"keep me").unwrap();
+        w.delete("Keep").unwrap();
+        w.undelete(0, "Kept").unwrap();
+        assert_eq!(w.vol.read_file("Kept").unwrap(), b"keep me");
+
+        w.write_file("Lose", b"lose me").unwrap();
+        w.delete("Lose").unwrap(); // slot 1: roving moved on
+        w.write_file("Taker", b"takes the freed block").unwrap();
+        let err = w.undelete(1, "Lost").unwrap_err();
+        assert!(
+            matches!(&err, libpfs3::error::Error::NotFound(m) if m.contains("reused")),
+            "{err}"
+        );
+        assert!(
+            w.vol.lookup("Lost").unwrap().is_none(),
+            "a refused undelete writes nothing"
+        );
+    }
+
+    /// **ART-318.** A deldir block holds pfs3aio's 31 entries at every reserved
+    /// block size (`blocks.h:611`). Every test volume here has 1024-byte
+    /// reserved blocks, where the computed count is 31 anyway, so this is what
+    /// guards 2048 and 4096 (0.1.3 computed 63 and 127).
+    #[test]
+    fn a_pfs3_deldir_block_holds_31_entries_at_every_reserved_block_size() {
+        assert_eq!(
+            [1024u16, 2048, 4096].map(libpfs3::ondisk::deldir_entries_per_block),
+            [31, 31, 31]
+        );
+    }
+
+    /// **M2 (final review).** `DelDirEntry::parse` must read `fsizex` as the
+    /// size bits 32-47 only on a `MODE_LARGEFILE` volume — pfs3aio's
+    /// `GetDDFileSize` ignores it otherwise (`directory.c:3688`), whatever the
+    /// name's own length. Every volume ART formats is not `MODE_LARGEFILE`.
+    /// The writer never puts bytes at the entry's 0x1E-0x1F on such a volume,
+    /// but a reused slot on a long-used card can carry stale bytes there from
+    /// an earlier, longer name; those bytes must never be read as size.
+    #[test]
+    fn pfs3_deldir_fsizex_is_ignored_off_a_non_largefile_volume() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("A", b"x").unwrap();
+            w.delete("A").unwrap();
+        }
+        // Slot 0: the first deldir block's first entry, DELDIR_HEADER_SIZE (32)
+        // into the block; the entry's own fsizex is at its relative 0x1E.
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let raw = std::fs::read(&image).unwrap();
+            let off = offset as usize;
+            let root = &raw[off + 2 * 512..off + 2 * 512 + 512];
+            let resblk = usize::from(be16(root, 0x40));
+            let ext_blk = be32(root, 0x58) as usize;
+            let ext = &raw[off + ext_blk * 512..off + ext_blk * 512 + resblk];
+            let dd_blk = be32(ext, 0x90) as usize;
+            let entry_off = off as u64 + dd_blk as u64 * 512 + 32 /* header */ + 0x1E;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&image)
+                .unwrap();
+            file.seek(SeekFrom::Start(entry_off)).unwrap();
+            file.write_all(&[0xFFu8, 0xFF]).unwrap();
+        }
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        let listed: Vec<(String, u64)> = vol
+            .list_deldir()
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.filename.clone(), e.file_size()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![("A".to_string(), 1)],
+            "stray bytes past a short name were read as size on a non-LARGEFILE volume"
+        );
+    }
+
+    /// **M3 (final review).** `Writer::open` indexes fixed offsets that only
+    /// fit a 1024/2048/4096-byte reserved block — the rootblock extension's
+    /// superindex write reaches 0x80 (`update_rootblock`), a deldir block's
+    /// entries reach byte 1024 (`move_to_deldir`, `DELENTRIES_PER_BLOCK`
+    /// fixed at 31). A `reserved_blksize` between 64 (`Volume`'s own floor)
+    /// and 1023 must be refused before any of those writes, not panic under
+    /// `panic = "abort"`.
+    #[test]
+    fn pfs3_writer_open_refuses_an_unsupported_reserved_blksize() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&image)
+                .unwrap();
+            // Rootblock reserved_blksize at 0x40 (u16).
+            file.seek(SeekFrom::Start(offset + 2 * 512 + 0x40)).unwrap();
+            file.write_all(&512u16.to_be_bytes()).unwrap();
+        }
+        let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+        match libpfs3::writer::Writer::open(vol) {
+            Ok(_) => panic!("expected a refusal for reserved_blksize 512"),
+            Err(err) => assert!(
+                matches!(err, libpfs3::error::Error::Corrupt(ref m) if m.contains("512")),
+                "expected a typed refusal naming the unsupported reserved_blksize, got: {err}"
+            ),
+        }
+    }
+
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
 
     /// The exact real-world shape ART-113 found: a file whose AmigaDOS name
@@ -1661,7 +2619,7 @@ mod tests {
         let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-file");
         std::fs::write(tree.join("türkçe"), b"data").unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
 
@@ -1691,7 +2649,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("español")).unwrap();
         std::fs::write(tree.join("español").join("Readme"), b"data").unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
 
@@ -1721,7 +2679,7 @@ mod tests {
             std::fs::write(tree.join(format!("é{i}")), b"x").unwrap();
         }
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
 
@@ -1739,13 +2697,13 @@ mod tests {
     #[test]
     fn the_same_non_ascii_name_copies_in_fine_on_ffs() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-ffs");
         std::fs::write(tree.join("türkçe"), b"data").unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .expect("FFS has no such encoding mismatch to refuse");
         assert_eq!(summary.files, 1);
@@ -1769,7 +2727,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1793,7 +2751,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1809,7 +2767,7 @@ mod tests {
     #[test]
     fn copy_in_ffs_never_counts_anything_lost() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-ffs-nothing-lost");
@@ -1820,7 +2778,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1835,7 +2793,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &fixtures::CancelAfter::new(1))
             .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled), "{err}");
@@ -1851,7 +2809,7 @@ mod tests {
         let (_guard, tree) = tree_of_bytes(8 * 1024 * 1024);
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert!(
@@ -1880,7 +2838,7 @@ mod tests {
         let free = pfs3_free_bytes(&image);
         let (_guard, tree) = tree_of_bytes(free as usize);
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .expect("a tree that exactly fits must not be refused");
     }
@@ -1892,7 +2850,7 @@ mod tests {
         let (_guard, tree) = tree_of_bytes(free as usize + 1);
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -1925,7 +2883,7 @@ mod tests {
         }
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -1939,7 +2897,7 @@ mod tests {
     #[test]
     fn an_ffs_tree_that_exactly_fills_the_volume_is_not_refused() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let free = ffs_free_bytes(&image);
@@ -1947,7 +2905,7 @@ mod tests {
         let data_blocks = largest_single_ffs_file_data_blocks(free / block_size as u64, block_size);
         let (_guard, tree) = tree_of_bytes(data_blocks as usize * block_size);
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .expect("a tree that exactly fits must not be refused");
     }
@@ -1955,7 +2913,7 @@ mod tests {
     #[test]
     fn an_ffs_tree_one_block_over_the_limit_is_refused() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let free = ffs_free_bytes(&image);
@@ -1967,7 +2925,7 @@ mod tests {
         let (_guard, tree) = tree_of_bytes(data_blocks as usize * block_size + 1);
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -2015,7 +2973,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2035,14 +2993,14 @@ mod tests {
     #[test]
     fn a_directorys_own_sidecar_is_applied_on_ffs() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-dir-sidecar-ffs");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2058,7 +3016,7 @@ mod tests {
     #[test]
     fn ffs_copy_in_carries_the_protection_bits_out_of_the_uaem_sidecars() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("ffs-copy-in-protection");
@@ -2070,7 +3028,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2086,7 +3044,7 @@ mod tests {
     #[test]
     fn ffs_a_sidecar_is_applied_and_never_copied_as_a_file_of_its_own() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("ffs-copy-in-sidecar-not-a-file");
@@ -2098,7 +3056,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2127,7 +3085,7 @@ mod tests {
     #[test]
     fn format_partition_refuses_a_name_amigados_cannot_store() {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .format_partition(&image, None, 1, "Not/Allowed", &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -2144,13 +3102,13 @@ mod tests {
         let (_guard, image) = formatted_pds3_image();
         let (_guard, tree) = fixtures::scratch("copy-in-populated-pfs3");
         std::fs::write(tree.join("First"), b"one").unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
         let (_guard, second) = fixtures::scratch("copy-in-populated-pfs3-second");
         std::fs::write(second.join("Second"), b"two").unwrap();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &second, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
@@ -2160,18 +3118,18 @@ mod tests {
     #[test]
     fn copy_in_refuses_to_fill_an_already_populated_ffs_volume_again() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-populated-ffs");
         std::fs::write(tree.join("First"), b"one").unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
         let (_guard, second) = fixtures::scratch("copy-in-populated-ffs-second");
         std::fs::write(second.join("Second"), b"two").unwrap();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &second, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
@@ -2184,7 +3142,7 @@ mod tests {
     #[test]
     fn format_ffs_writes_the_requested_volume_name_into_the_root_block() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "MyDisk", &NoProgress)
             .unwrap();
 
@@ -2209,7 +3167,7 @@ mod tests {
     #[test]
     fn a_freshly_formatted_ffs_volume_accepts_a_real_write() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
 
@@ -2227,8 +3185,8 @@ mod tests {
     /// `probe` names which implementation did the work.
     #[test]
     fn probe_names_libpfs3() {
-        let probed = NativeFormatter.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.2 (native, no external tool)");
+        let probed = NativeFormatter::UTC.probe().unwrap();
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.4 (native, no external tool)");
     }
 
     /// `import_filesystem` refuses by name rather than pretend — see the
@@ -2244,7 +3202,7 @@ mod tests {
     #[test]
     fn import_filesystem_refuses_rather_than_guess() {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .import_filesystem(
                 &image,
                 None,
@@ -2265,7 +3223,7 @@ mod tests {
     #[test]
     fn format_partition_refuses_a_filesystem_neither_family_claims() {
         let (_guard, image) = card_with_partition("sfs", AmigaHardDiskFs::Sfs0, 8);
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED", "{err}");
@@ -2380,7 +3338,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(image, None, 1, "Workbench", &NoProgress)
             .unwrap();
 
@@ -2425,7 +3383,7 @@ mod tests {
         std::fs::write(tree.join("C/Extra/Deep.txt"), deep).unwrap();
         std::fs::write(tree.join("DOSDrivers/AUX"), aux).unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2591,11 +3549,11 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Workbench", &NoProgress)
             .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &dist_root, &NoProgress)
             .unwrap();
 
@@ -2614,5 +3572,183 @@ mod tests {
         );
 
         assert!(summary.files > 0, "the real tree must not copy in empty");
+    }
+
+    static PLUS_THREE: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+        now: 1_768_478_400,
+        offset: 10_800,
+    };
+
+    /// ART-317 on PFS3: the root date the format writes and the entry date
+    /// `copy_in` writes are the clock's local time (15:00 at 12:00 UTC, UTC+3).
+    #[test]
+    fn a_pfs3_format_and_copy_in_carry_the_clocks_local_time() {
+        let (_guard, image) = rdb_image_with_one_pds3_partition();
+        let formatter = NativeFormatter::new(&PLUS_THREE);
+        formatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("pfs3-local-time");
+        std::fs::write(tree.join("Readme"), b"hello\n").unwrap();
+        formatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
+        let local = (17_546u16, 900u16, 0u16);
+        let rext = vol.rootblock_ext.as_ref().expect("a rootblock extension");
+        assert_eq!(rext.root_date, local, "root date");
+        let entry = vol
+            .list_dir("")
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "Readme")
+            .unwrap();
+        assert_eq!(
+            (
+                entry.creation_day,
+                entry.creation_minute,
+                entry.creation_tick
+            ),
+            local,
+            "entry date"
+        );
+        let rb = &vol.rootblock;
+        assert_eq!(
+            (rb.creation_day, rb.creation_minute, rb.creation_tick),
+            local,
+            "rootblock date"
+        );
+        // format_partition turns the deldir on (ART-316); a new deldir block carries the
+        // rootblock's date (pfs3aio NewDeldirBlock, `directory.c:4477-4479`).
+        let raw = std::fs::read(&image).unwrap();
+        let at = partition_offset(&image) as usize;
+        let sector =
+            |n: u32, len: usize| raw[at + n as usize * 512..at + n as usize * 512 + len].to_vec();
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let dd = sector(be32(&ext, 0x90), resblk);
+        assert_eq!(
+            (be16(&dd, 0x1A), be16(&dd, 0x1C), be16(&dd, 0x1E)),
+            local,
+            "deldir block date at format"
+        );
+    }
+
+    /// ART-317 on the PFS3 deldir. pfs3aio `directory.c` at 211f7f0 (read, not run):
+    /// `AddToDeldir` copies the deleted entry's own date into the deldir entry
+    /// (`:4546-4548`) and stamps the deldir block and `rext.dd_creation*` with
+    /// `DateStamp()` (`:4556-4560`). So the entry keeps the file's date (wall time,
+    /// never shifted), and the block and the extension carry the delete's own
+    /// local time, from `Writer::set_entry_date`.
+    #[test]
+    fn a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let written = (17_546u16, 900u16, 0u16); // 2026-01-15 15:00, when the file was written
+        let deleted = (17_727u16, 900u16, 0u16); // 2026-07-15 15:00, when it was deleted
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(written));
+            w.write_file("Gone", b"bye").unwrap();
+            w.set_entry_date(Some(deleted));
+            w.delete("Gone").unwrap();
+        }
+
+        let (_, entries) = raw_deldir(&image);
+        let entry = entries
+            .iter()
+            .find(|e| e.name == b"Gone")
+            .expect("Gone is in the deldir");
+        assert_eq!(
+            (
+                be16(&entry.date, 0),
+                be16(&entry.date, 2),
+                be16(&entry.date, 4)
+            ),
+            written,
+            "deldir entry: the file's own date"
+        );
+
+        let raw = std::fs::read(&image).unwrap();
+        let at = offset as usize;
+        let sector =
+            |n: u32, len: usize| raw[at + n as usize * 512..at + n as usize * 512 + len].to_vec();
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let dd = sector(be32(&ext, 0x90), resblk);
+        assert_eq!(
+            (be16(&dd, 0x1A), be16(&dd, 0x1C), be16(&dd, 0x1E)),
+            deleted,
+            "deldir block date"
+        );
+        assert_eq!(
+            (be16(&ext, 0x88), be16(&ext, 0x8A), be16(&ext, 0x8C)),
+            deleted,
+            "rext.dd_creation"
+        );
+    }
+
+    /// ART-317 on FFS: the formatted root and a copied file.
+    #[test]
+    fn an_ffs_format_and_copy_in_carry_the_clocks_local_time() {
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
+        let formatter = NativeFormatter::new(&PLUS_THREE);
+        formatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("ffs-local-time");
+        std::fs::write(tree.join("Readme"), b"hello\n").unwrap();
+        // A sidecar date is wall time already: it must land unshifted (12:00), not 15:00.
+        std::fs::write(tree.join("Old"), b"old\n").unwrap();
+        std::fs::write(tree.join("Old.uaem"), b"----rwed 2026-01-15 12:00:00.00 \n").unwrap();
+        formatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let card = read_card(&image).unwrap();
+        let area = &card.areas[0];
+        let part = &area.rdb.partitions[0];
+        let (offset, length, block_size) = partition_region(area, part).unwrap();
+        let mut region = FileRegionMut::open(&image, offset, length, block_size).unwrap();
+        let dos = DosType::new(part.dostype.to_be_bytes());
+        let geometry =
+            VolumeGeometry::new(block_size, region.total_blocks(), part.reserved, dos).unwrap();
+
+        let mut root = vec![0u8; block_size];
+        region.read_block(geometry.root_block, &mut root).unwrap();
+        let word = |o: usize| u32::from_be_bytes(root[o..o + 4].try_into().unwrap());
+        assert_eq!(
+            (word(420), word(424), word(428)),
+            (17_546, 900, 0),
+            "root date"
+        );
+
+        let writer =
+            VolumeWriter::open_with_clock(&mut region, geometry, &image, offset, &PLUS_THREE)
+                .unwrap();
+        let block = writer.find(0, "Readme").unwrap().unwrap().block;
+        assert_eq!(
+            writer.attributes(block).unwrap().date,
+            AmigaDate {
+                days: 17_546,
+                mins: 900,
+                ticks: 0
+            },
+            "file date"
+        );
+        let old = writer.find(0, "Old").unwrap().unwrap().block;
+        assert_eq!(
+            writer.attributes(old).unwrap().date,
+            AmigaDate {
+                days: 17_546,
+                mins: 720,
+                ticks: 0
+            },
+            ".uaem date, unshifted"
+        );
     }
 }

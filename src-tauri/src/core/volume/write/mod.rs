@@ -49,6 +49,7 @@ pub mod uaem;
 use std::path::{Path, PathBuf};
 
 use crate::core::adf::bcpl::AmigaDate;
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::volume::journal::Journalled;
 use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
@@ -183,6 +184,7 @@ pub struct VolumeWriter<'a> {
     geometry: VolumeGeometry,
     image: PathBuf,
     volume_offset: u64,
+    clock: &'static dyn AmigaClock,
 }
 
 impl<'a> VolumeWriter<'a> {
@@ -190,12 +192,14 @@ impl<'a> VolumeWriter<'a> {
     ///
     /// `image` is the file the volume lives in and `volume_offset` where it
     /// starts inside it — the journal needs both to put blocks back where they
-    /// came from after a crash.
-    pub fn open(
+    /// came from after a crash. `clock` is what every date this writer stamps
+    /// or converts is read against (ART-317).
+    pub fn open_with_clock(
         device: &'a mut dyn BlockDeviceMut,
         geometry: VolumeGeometry,
         image: &Path,
         volume_offset: u64,
+        clock: &'static dyn AmigaClock,
     ) -> CoreResult<Self> {
         if let Some(reason) = write_refusal(&geometry) {
             return Err(CoreError::UnsupportedFormat(reason));
@@ -244,7 +248,31 @@ impl<'a> VolumeWriter<'a> {
             geometry,
             image: image.to_path_buf(),
             volume_offset,
+            clock,
         })
+    }
+
+    /// Tests only (ART-317): the product passes a clock through
+    /// [`open_with_clock`](Self::open_with_clock).
+    #[cfg(test)]
+    pub fn open(
+        device: &'a mut dyn BlockDeviceMut,
+        geometry: VolumeGeometry,
+        image: &Path,
+        volume_offset: u64,
+    ) -> CoreResult<Self> {
+        Self::open_with_clock(
+            device,
+            geometry,
+            image,
+            volume_offset,
+            &crate::core::clock::UtcClock,
+        )
+    }
+
+    /// The clock this writer stamps and converts dates with (ART-317).
+    pub fn clock(&self) -> &'static dyn AmigaClock {
+        self.clock
     }
 
     pub fn geometry(&self) -> &VolumeGeometry {
@@ -479,7 +507,7 @@ impl<'a> VolumeWriter<'a> {
             &checked,
             data,
             meta.protection.unwrap_or_else(file::default_protection),
-            meta.date,
+            meta.date.unwrap_or_else(|| self.clock.amiga_now()),
         )?;
         dir::link_into(
             self.device,
@@ -527,7 +555,7 @@ impl<'a> VolumeWriter<'a> {
         let allocated = allocator.allocate(1)?;
         let block = allocated[0];
 
-        dir::write_dir_header(&mut set, block, parent, &checked)?;
+        dir::write_dir_header(&mut set, block, parent, &checked, self.clock.amiga_now())?;
         dir::link_into(
             self.device,
             &mut set,
@@ -2191,6 +2219,36 @@ mod tests {
             "the bitmap says {used_by_bitmap} blocks are used and the files account for {}",
             owned.len()
         );
+    }
+
+    static PLUS_THREE: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+        now: 1_768_478_400,
+        offset: 10_800,
+    };
+
+    /// ART-317: a drawer and a file ART creates carry the writer's local wall
+    /// time — 15:00 at 12:00 UTC on a UTC+3 clock — not UTC.
+    #[test]
+    fn a_new_drawer_and_a_new_file_carry_the_writers_local_time() {
+        let disk = floppy("local-time");
+        let mut device = disk.device();
+        let mut writer =
+            VolumeWriter::open_with_clock(&mut device, disk.geometry, &disk.path, 0, &PLUS_THREE)
+                .unwrap();
+        let drawer = writer.make_dir(0, "Tools").unwrap().block.unwrap();
+        let file = writer
+            .add_file(0, "Readme", b"hi", FileMeta::default())
+            .unwrap()
+            .block
+            .unwrap();
+
+        let local = AmigaDate {
+            days: 17_546,
+            mins: 15 * 60,
+            ticks: 0,
+        };
+        assert_eq!(writer.attributes(drawer).unwrap().date, local, "drawer");
+        assert_eq!(writer.attributes(file).unwrap().date, local, "file");
     }
 }
 

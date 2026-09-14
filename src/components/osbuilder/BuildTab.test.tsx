@@ -880,7 +880,7 @@ describe("pressing Build", () => {
     act(() => {
       report!({
         id: 11,
-        title: "Building",
+        title: { key: "components.jobBar.title.installRelease", params: { release: "AmigaOS 3.2", target: "Tree" } },
         done: 412,
         total: null,
         message: "",
@@ -908,7 +908,7 @@ describe("pressing Build", () => {
     act(() => {
       report!({
         id: 11,
-        title: "Building",
+        title: { key: "components.jobBar.title.installRelease", params: { release: "AmigaOS 3.2", target: "Tree" } },
         done: 990,
         total: 1980,
         message: "",

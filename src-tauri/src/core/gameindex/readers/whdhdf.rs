@@ -192,7 +192,8 @@ pub fn read_whdload_hardfile(path: &Path) -> CoreResult<HardfileGame> {
     let mut seen = 0usize;
 
     while let Some(dir) = queue.pop() {
-        for found in list_directory_on(&device, dir.block)? {
+        // names only; no date is read
+        for found in list_directory_on(&device, dir.block, &crate::core::clock::UtcClock)? {
             seen += 1;
             if seen > MAX_ENTRIES {
                 return Err(malformed(
@@ -280,7 +281,8 @@ pub fn read_whdload_hardfile(path: &Path) -> CoreResult<HardfileGame> {
         winner.drawer.clone()
     };
     let wanted_icon = format!("{drawer}.info");
-    let icon = list_directory_on(&device, winner.drawer_parent)?
+    // names only; no date is read
+    let icon = list_directory_on(&device, winner.drawer_parent, &crate::core::clock::UtcClock)?
         .into_iter()
         .find(|entry| {
             entry.kind == EntryKind::File && entry.name.eq_ignore_ascii_case(&wanted_icon)
@@ -535,7 +537,7 @@ mod tests {
         let mut queue = vec![geometry.root_block];
         let mut target = None;
         while let Some(block) = queue.pop() {
-            for entry in list_directory_on(&device, block).unwrap() {
+            for entry in list_directory_on(&device, block, &crate::core::clock::UtcClock).unwrap() {
                 match entry.kind {
                     EntryKind::Directory => queue.push(entry.header_block),
                     EntryKind::File if entry.name == file_name => target = Some(entry.header_block),

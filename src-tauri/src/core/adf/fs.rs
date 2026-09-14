@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::blocks::{EntryKind, HeaderBlock};
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::volume::device::SliceDevice;
 use crate::core::volume::write::uaem;
@@ -20,7 +21,8 @@ pub struct FileEntry {
     /// Byte size (0 for directories).
     pub byte_size: u64,
     pub comment: String,
-    /// Unix timestamp (seconds since 1970), derived from the Amiga date.
+    /// Unix timestamp (seconds since 1970 UTC), from the Amiga date read as
+    /// local time through the caller's clock (ART-317).
     pub unix_date: i64,
     /// Block number of this entry's header.
     pub header_block: u32,
@@ -54,7 +56,11 @@ const MAX_SIBLING_VISITS: usize = 4096;
 // existing ADF callers and their tests are untouched.
 
 /// Walk a directory's contents on any volume.
-pub fn list_directory_on(device: &dyn BlockDevice, dir_block: u32) -> CoreResult<Vec<FileEntry>> {
+pub fn list_directory_on(
+    device: &dyn BlockDevice,
+    dir_block: u32,
+    clock: &dyn AmigaClock,
+) -> CoreResult<Vec<FileEntry>> {
     // Reading the header first is what validates `dir_block`: a number straight
     // from the frontend, or from a corrupt image, must not reach the hash-table
     // read as an offset.
@@ -84,7 +90,7 @@ pub fn list_directory_on(device: &dyn BlockDevice, dir_block: u32) -> CoreResult
                 kind: hdr.kind,
                 byte_size: hdr.byte_size,
                 comment: hdr.comment.clone(),
-                unix_date: hdr.date.to_unix(),
+                unix_date: clock.unix_from_amiga(hdr.date),
                 header_block: hdr.header_key,
                 parent: hdr.parent,
                 attrs: uaem::format_bits(hdr.protection),
@@ -120,7 +126,8 @@ pub fn walk_and_count_on(device: &dyn BlockDevice, root_block: u32) -> CoreResul
         if !visited.insert(dir_block) {
             continue;
         }
-        let entries = list_directory_on(device, dir_block)?;
+        // counts only; no date is read
+        let entries = list_directory_on(device, dir_block, &crate::core::clock::UtcClock)?;
         for entry in entries {
             match entry.kind {
                 EntryKind::Directory => {
@@ -175,8 +182,12 @@ fn read_directory_hash_table_on(
 ///
 /// Pass the root block number (usually 880) to list the top level.
 /// `image` is the full ADF byte slice; blocks are `BLOCK_SIZE` bytes each.
-pub fn list_directory(image: &[u8], dir_block: u32) -> CoreResult<Vec<FileEntry>> {
-    list_directory_on(&SliceDevice::floppy(image), dir_block)
+pub fn list_directory(
+    image: &[u8],
+    dir_block: u32,
+    clock: &dyn AmigaClock,
+) -> CoreResult<Vec<FileEntry>> {
+    list_directory_on(&SliceDevice::floppy(image), dir_block, clock)
 }
 
 /// Walk the full directory tree from root and count files and directories.
@@ -190,8 +201,12 @@ pub fn read_header(image: &[u8], block: u32) -> CoreResult<HeaderBlock> {
 }
 
 /// Convenience: list the root directory.
-pub fn list_root(image: &[u8], root_block: u32) -> CoreResult<Vec<FileEntry>> {
-    list_directory(image, root_block)
+pub fn list_root(
+    image: &[u8],
+    root_block: u32,
+    clock: &dyn AmigaClock,
+) -> CoreResult<Vec<FileEntry>> {
+    list_directory(image, root_block, clock)
 }
 
 #[cfg(test)]
@@ -226,11 +241,53 @@ mod tests {
         // two files and their data.
         add_directory(&mut image, root_block, "Tools", root_block + 100);
 
-        let entries = list_directory(&image, root_block).unwrap();
+        let entries = list_directory(&image, root_block, &crate::core::clock::UtcClock).unwrap();
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         assert_eq!(names, vec!["Tools", "Apple.txt", "zebra.txt"]);
         assert_eq!(entries[0].kind, EntryKind::Directory);
         assert!(entries.iter().skip(1).all(|e| e.kind == EntryKind::File));
+    }
+
+    /// ART-317, reading back: a date written on a UTC+3 clock lists as the
+    /// instant it was stamped at. A UTC reader is three hours late — the
+    /// defect's own shape, kept here as the control.
+    #[test]
+    fn a_listed_date_is_the_instant_the_writer_stamped() {
+        use crate::core::clock::{FixedClock, UtcClock};
+        use crate::core::volume::device::FileRegionMut;
+        use crate::core::volume::write::{FileMeta, VolumeWriter};
+        use crate::core::volume::DosType;
+        static PLUS_THREE: FixedClock = FixedClock {
+            now: 1_768_478_400,
+            offset: 10_800,
+        };
+
+        let (bytes, geometry) =
+            crate::core::volume::fixture::ffs_volume(1760, DosType::new(*b"DOS\x01"));
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-adf-fs", "local-time");
+        let path = dir.join("disk.adf");
+        std::fs::write(&path, &bytes).unwrap();
+        {
+            let mut device = FileRegionMut::open(&path, 0, geometry.total_bytes(), 512).unwrap();
+            let mut writer =
+                VolumeWriter::open_with_clock(&mut device, geometry, &path, 0, &PLUS_THREE)
+                    .unwrap();
+            writer
+                .add_file(0, "Readme", b"hi", FileMeta::default())
+                .unwrap();
+        }
+        let device = FileRegionMut::open(&path, 0, geometry.total_bytes(), 512).unwrap();
+        let local = list_directory_on(&device, geometry.root_block, &PLUS_THREE).unwrap();
+        assert_eq!(
+            local[0].unix_date, 1_768_478_400,
+            "same clock: the instant itself"
+        );
+        let utc = list_directory_on(&device, geometry.root_block, &UtcClock).unwrap();
+        assert_eq!(
+            utc[0].unix_date,
+            1_768_478_400 + 10_800,
+            "a UTC reader is three hours late"
+        );
     }
 }
