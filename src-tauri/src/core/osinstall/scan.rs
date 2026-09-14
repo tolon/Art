@@ -445,7 +445,18 @@ pub fn dedupe_identical_disks_cached(
     found: Vec<FoundMedia>,
     cache: &scan_cache::ScanCache,
 ) -> Vec<FoundMedia> {
-    let memo = ShaMemo::process();
+    dedupe_identical_disks_cached_with_memo(found, cache, ShaMemo::process())
+}
+
+/// [`dedupe_identical_disks_cached`], with the memo handed in — so a test
+/// can stand in for "a fresh process" with a [`ShaMemo::default`] of its
+/// own, rather than sharing the one static memo every other test in this
+/// binary reads and writes (ART-302, finding I3).
+pub(crate) fn dedupe_identical_disks_cached_with_memo(
+    found: Vec<FoundMedia>,
+    cache: &scan_cache::ScanCache,
+    memo: &ShaMemo,
+) -> Vec<FoundMedia> {
     dedupe_identical_disks_with(found, &mut |path: &Path| {
         cached_sha256(path, memo, cache, &mut file_sha256)
     })
@@ -454,6 +465,13 @@ pub fn dedupe_identical_disks_cached(
 /// One disc's SHA-256 through the three places it may already be known.
 /// A hash read from the disc is written to the cache; a cache that is off
 /// neither reads nor writes ([`scan_cache::ScanCache::Off`]).
+///
+/// The identity used to decide whether the write is still safe is read
+/// **before** `hasher` runs, not after (finding M1) — `hasher` can take real
+/// time on a large disc image, and a medium replaced mid-hash must not get
+/// the old content's hash filed under whatever identity the file happens to
+/// have once the write finally lands. See
+/// [`scan_cache::ScanCache::store_sha256_if_unchanged`].
 fn cached_sha256(
     path: &Path,
     memo: &ShaMemo,
@@ -464,8 +482,11 @@ fn cached_sha256(
         if let Some(known) = cache.lookup_sha256(p) {
             return Some(known);
         }
+        let before = scan_cache::identity_of(p);
         let hash = hasher(p)?;
-        cache.store_sha256(p, &hash);
+        if let Some(before) = before {
+            cache.store_sha256_if_unchanged(p, &before, &hash);
+        }
         Some(hash)
     })
 }
@@ -1175,6 +1196,29 @@ mod tests {
         let third = cached_sha256(&path, &ShaMemo::default(), &cache, &mut hasher);
         assert_ne!(third, first);
         assert_eq!(calls.get(), 2, "a changed disc is read again");
+    }
+
+    /// ART-302, finding I3(b). The **public** entry point production calls,
+    /// not `cached_sha256` directly: two discs, same name and size, real
+    /// bytes that actually differ. The cache is seeded with the same fake
+    /// hash for both, so a fresh-process dedupe (`ShaMemo::default()`, never
+    /// touching the static process memo) follows the cache's answer rather
+    /// than reading the discs' real, differing bytes.
+    #[test]
+    fn dedupe_identical_disks_cached_follows_the_cached_hash_not_the_disc() {
+        let (_guard, dir) = scratch("dedupe-cached-public");
+        let a = disk_file(&dir, "os39-a.iso", "AmigaOS3.9", 4096, 1);
+        let b = disk_file(&dir, "os39-b.iso", "AmigaOS3.9", 4096, 2);
+        let cache = scan_cache::ScanCache::in_dir(dir.join("cache"));
+        cache.store_sha256(&a.path, "seeded-hash");
+        cache.store_sha256(&b.path, "seeded-hash");
+
+        let kept = dedupe_identical_disks_cached_with_memo(vec![a, b], &cache, &ShaMemo::default());
+        assert_eq!(
+            kept.len(),
+            1,
+            "a fresh process reads the cached hash, not the discs' real, differing bytes"
+        );
     }
 
     /// One folder named twice is one folder. A user who picks their media

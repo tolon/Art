@@ -2355,13 +2355,40 @@ struct Overwrites {
     unrecorded: Vec<String>,
 }
 
+/// `'A'`, `'A' and 'B'`, or `'A', 'B' and 'C'` — never a list that reads as
+/// a single name once more than one newer package is in play (ART-300,
+/// finding I1).
+fn quoted_list(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => format!("'{one}'"),
+        _ => {
+            let (last, rest) = names.split_last().expect("names is non-empty here");
+            let rest = rest
+                .iter()
+                .map(|name| format!("'{name}'"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{rest} and '{last}'")
+        }
+    }
+}
+
 /// The sentence for an overwrite `package` never declared (ART-300).
 ///
-/// When a package that owns the files declares in its own `overrides` that
-/// it replaces `package`, the newer package is already in the tree and the
-/// honest answer is the order — the same declaration `chain`'s
-/// `OvertakenBy` row reads, through the same function. Otherwise the
-/// sentence is the one this refusal always had.
+/// When **every** component that owns the undeclared files declares in its
+/// own `overrides` that it replaces `package`, every one of them is a newer
+/// package already in the tree and the honest answer is the order — the
+/// same declaration `chain`'s `OvertakenBy` row reads, through the same
+/// function. All of them are named, not just one: the shipped catalogue
+/// already has two packages that override `boingbag-39-1` (`boingbag-39-2`
+/// and `boingbags-39-3-4`), and a sentence naming only one would tell the
+/// user to rebuild without a package that is still there.
+///
+/// A **mixed** ownership — some owners are newer overriders, some are not —
+/// gets the plain sentence instead. There, "build the tree again without
+/// the newer ones" would be refused again by the files the other owner
+/// still claims, so naming an order here would be a false instruction.
 fn undeclared_refusal(
     package: &super::package::Package,
     undeclared: &[String],
@@ -2373,16 +2400,21 @@ fn undeclared_refusal(
         .filter(|other| owners.iter().any(|owner| owner == &other.id))
         .map(|other| other.name.as_str())
         .collect();
-    if let Some(first) = newer.first() {
+    if !newer.is_empty() && newer.len() == owners.len() {
+        let list = quoted_list(&newer);
+        let is_are = if newer.len() == 1 { "is" } else { "are" };
+        let replace_s = if newer.len() == 1 {
+            "replaces"
+        } else {
+            "replace"
+        };
         return CoreError::SafetyRefused(format!(
-            "'{}' is older than '{}', which is already in this tree and replaces it ({} file(s): {}) — add '{}' before '{}', or build the tree again without '{}'",
+            "'{}' is older than {list}, which {is_are} already in this tree and {replace_s} it \
+             ({} file(s): {}) — build the tree again adding '{}' before {list}, or without {list}",
             package.name,
-            newer.join("', '"),
             undeclared.len(),
             some_of(undeclared),
             package.name,
-            first,
-            first
         ));
     }
     CoreError::SafetyRefused(format!(
@@ -6992,6 +7024,18 @@ mod tests {
         );
     }
 
+    /// A **second** newer overrider, shaped exactly like [`fixtures::package_test_package_two`]
+    /// (same `overrides: ["base-c", "test-package"]`) but under its own id —
+    /// so a test can put two packages over `test-package` at once without a
+    /// shared fixture growing a third caller that does not need it.
+    fn package_test_package_three() -> crate::core::osinstall::package::Package {
+        let mut three = fixtures::package_test_package_two();
+        three.id = "test-package-three".to_string();
+        three.name = "Test package three".to_string();
+        three.component.id = "test-package-three".to_string();
+        three
+    }
+
     /// ART-300. When the files belong to a package that declares it
     /// overrides this one, the newer package is already in the tree: the
     /// refusal says so and names the order, instead of reading as an
@@ -7010,11 +7054,17 @@ mod tests {
         assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
         let text = err.to_string();
         assert!(
-            text.contains(&format!("'{}' is older than '{}'", one.name, two.name)),
+            text.contains(&format!(
+                "'{}' is older than '{}', which is already in this tree and replaces it",
+                one.name, two.name
+            )),
             "{text}"
         );
         assert!(
-            text.contains(&format!("add '{}' before '{}'", one.name, two.name)),
+            text.contains(&format!(
+                "build the tree again adding '{}' before '{}', or without '{}'",
+                one.name, two.name, two.name
+            )),
             "{text}"
         );
         assert!(
@@ -7025,6 +7075,87 @@ mod tests {
             !text.contains("overrides"),
             "not an instruction to edit a recipe: {text}"
         );
+    }
+
+    /// ART-300, finding I1. Two packages override `test-package` and both
+    /// are already in the tree (both named in `owners`): the sentence names
+    /// both, or it would tell the user to rebuild "without" a package that
+    /// is still there.
+    #[test]
+    fn two_newer_overriders_are_both_named_in_the_order_sentence() {
+        let one = fixtures::package_test_package();
+        let two = fixtures::package_test_package_two();
+        let three = package_test_package_three();
+        let catalogue = vec![one.clone(), two.clone(), three.clone()];
+        let err = undeclared_refusal(
+            &one,
+            &[fixtures::OVERWRITTEN_PATH.to_string()],
+            &[two.id.clone(), three.id.clone()],
+            &catalogue,
+        );
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!(
+                "'{}' is older than '{}' and '{}', which are already in this tree and replace it",
+                one.name, two.name, three.name
+            )),
+            "names both, plural: {text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "adding '{}' before '{}' and '{}'",
+                one.name, two.name, three.name
+            )),
+            "the add-order names both: {text}"
+        );
+        assert!(
+            text.contains(&format!("without '{}' and '{}'", two.name, three.name)),
+            "the without-order names both: {text}"
+        );
+    }
+
+    /// ART-300, finding I1. Mixed owners — one newer overrider (`two`) and
+    /// one owner that never overrode this package at all (`base-c`) — keep
+    /// the plain sentence: "rebuild without `two`" would still be refused
+    /// by the files `base-c` claims, so naming an order here would be a
+    /// false instruction.
+    #[test]
+    fn mixed_owners_with_one_non_overriding_owner_keep_the_plain_sentence() {
+        let one = fixtures::package_test_package();
+        let two = fixtures::package_test_package_two();
+        let catalogue = vec![one.clone(), two.clone()];
+        let err = undeclared_refusal(
+            &one,
+            &[fixtures::OVERWRITTEN_PATH.to_string()],
+            &[two.id.clone(), "base-c".to_string()],
+            &catalogue,
+        );
+        let text = err.to_string();
+        assert!(text.contains("it never declared it may replace"), "{text}");
+        assert!(text.contains("overrides"), "{text}");
+        assert!(!text.contains("is older than"), "{text}");
+    }
+
+    /// ART-300, finding I2. The owner half of the filter really has to run:
+    /// `catalogue` holds a real overrider of `test-package` (`two`), but
+    /// `owners` never names it — only `base-c`, which overrides nothing.
+    /// An unfiltered `overriders_of` result would still find `two` and
+    /// wrongly claim the order sentence for an owner that is not `two` at
+    /// all.
+    #[test]
+    fn a_catalogue_overrider_that_is_not_actually_the_owner_keeps_the_plain_sentence() {
+        let one = fixtures::package_test_package();
+        let two = fixtures::package_test_package_two();
+        let catalogue = vec![one.clone(), two];
+        let err = undeclared_refusal(
+            &one,
+            &[fixtures::OVERWRITTEN_PATH.to_string()],
+            &["base-c".to_string()],
+            &catalogue,
+        );
+        let text = err.to_string();
+        assert!(text.contains("it never declared it may replace"), "{text}");
+        assert!(!text.contains("is older than"), "{text}");
     }
 
     /// No declared overrider: the sentence is the one it was.
@@ -7040,6 +7171,59 @@ mod tests {
         let text = err.to_string();
         assert!(text.contains("it never declared it may replace"), "{text}");
         assert!(text.contains("overrides"), "{text}");
+    }
+
+    /// ART-300, finding I3(a). `undeclared_overwrites` itself, not through
+    /// `add_package`: two undeclared files both owned by `base-c` come back
+    /// as one owner, named once — the count in `undeclared` still says two.
+    #[test]
+    fn undeclared_overwrites_returns_each_owner_once_deduplicated() {
+        let (_guard, dir, media, packages) = package_dirs("undeclared-overwrites-owners");
+        let root = dir.join("dist");
+        let base_only = install_request(&media, &packages, &root, &[]);
+        apply(&planned_over(&base_only), &root, &NoProgress).unwrap();
+        let manifest = read_manifest(&root);
+
+        let mut undeclaring = fixtures::package_test_package();
+        undeclaring.component.overrides.clear();
+
+        let items = vec![
+            PlanItem {
+                component: "test-package".to_string(),
+                media: "TestPack".to_string(),
+                from: "C/LoadModule".to_string(),
+                to: fixtures::OVERWRITTEN_PATH.to_string(),
+                is_dir: false,
+                bytes: 0,
+                decompress: false,
+                merge_icon: false,
+            },
+            PlanItem {
+                component: "test-package".to_string(),
+                media: "TestPack".to_string(),
+                from: "C/OnlyBase".to_string(),
+                to: "C/OnlyBase".to_string(),
+                is_dir: false,
+                bytes: 0,
+                decompress: false,
+                merge_icon: false,
+            },
+        ];
+
+        let overwrites = undeclared_overwrites(&root, &undeclaring, &items, &manifest).unwrap();
+        assert_eq!(
+            overwrites.undeclared,
+            vec![
+                fixtures::OVERWRITTEN_PATH.to_string(),
+                "C/OnlyBase".to_string()
+            ],
+            "both files are undeclared"
+        );
+        assert_eq!(
+            overwrites.owners,
+            vec!["base-c".to_string()],
+            "one owner, named once, not twice"
+        );
     }
 
     /// A file the manifest never recorded is undeclared too — most likely

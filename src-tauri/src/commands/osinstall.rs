@@ -3005,6 +3005,25 @@ mod tests {
         );
     }
 
+    /// ART-302, finding I3(b). `osinstall_slots` really wires the cached
+    /// dedupe in, not the uncached `dedupe_identical_disks` — the literal a
+    /// production call would revert back to. Read from this file's own text,
+    /// the same house pattern as the test above: a table beside the call
+    /// would be a copy, and copies drift.
+    ///
+    /// `wanted` is assembled at runtime, not written out whole, so this
+    /// assertion cannot trivially pass by matching its own source line —
+    /// only the production call site spells the whole thing out in one run.
+    #[test]
+    fn osinstall_slots_dedupes_through_the_scan_cache() {
+        let source = include_str!("osinstall.rs");
+        let wanted = format!("scan::dedupe_identical_disks{}(media, &cache)", "_cached");
+        assert!(
+            source.contains(&wanted),
+            "osinstall_slots must dedupe through the scan cache, not the uncached path"
+        );
+    }
+
     /// **ART-203.** The screen asks this while the folder is being picked, and
     /// a folder picker can only hand back a folder that exists. If an empty
     /// one read as taken, every destination a user could choose would be
@@ -5375,6 +5394,10 @@ mod tests {
             matches!(refused, CoreError::SafetyRefused(_)),
             "{refused:?}"
         );
+        // ART-300. The catalogs are already in the tree and are the newer
+        // package: the refusal names the order rather than reading as an
+        // instruction to edit a recipe.
+        assert!(refused.to_string().contains("is older than"), "{refused}");
     }
 
     /// **The owner's finding of 2026-09-10, measured: "the OS Builder freezes

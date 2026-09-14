@@ -379,6 +379,33 @@ impl ScanCache {
         self.store_with(media_path, |entry| entry.sha256 = Some(sha256.to_string()));
     }
 
+    /// [`Self::store_sha256`], but only if `media_path` still has the
+    /// identity it had in `before` — the identity read **before** `sha256`
+    /// was computed, not the one `store_with` would read now (finding M1).
+    ///
+    /// `sha256` takes real time on a hundreds-of-megabytes disc image, and
+    /// `store_with` stats the file again at store time and keys the entry on
+    /// *that* reading. A medium replaced mid-hash — same path, and by the
+    /// time the write lands, coincidentally the same size and mtime again —
+    /// would otherwise get the old content's hash filed under the new
+    /// content's identity: a wrong answer that reads as a hit forever after,
+    /// exactly the "confident, wrong sentence" this project treats as its
+    /// most expensive defect (CLAUDE.md). Checking the identity has not
+    /// moved between the two reads is what closes that window; a caller
+    /// that never captured `before` has nothing to compare and should call
+    /// [`Self::store_sha256`] instead.
+    pub fn store_sha256_if_unchanged(
+        &self,
+        media_path: &Path,
+        before: &MediaIdentity,
+        sha256: &str,
+    ) {
+        if identity_of(media_path).as_ref() != Some(before) {
+            return;
+        }
+        self.store_sha256(media_path, sha256);
+    }
+
     /// Update this medium's entry, keyed on the identity it has **now**, and
     /// leave every fact `update` does not touch exactly as it was.
     ///
@@ -784,6 +811,43 @@ mod tests {
         let cache = ScanCache::off();
         cache.store_sha256(&medium, "abc");
         assert_eq!(cache.lookup_sha256(&medium), None);
+    }
+
+    /// M1. A medium that changed between the identity a caller captured
+    /// before hashing and the store call must not get that hash filed under
+    /// its new identity — the race `store_sha256_if_unchanged` closes.
+    #[test]
+    fn a_medium_that_changed_since_the_captured_identity_is_not_stored() {
+        let (_guard, dir) = fixtures::scratch("sha256-race");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        let before = identity_of(&medium).unwrap();
+
+        // The medium changes after the identity was captured — the window
+        // `store_sha256_if_unchanged` exists to catch.
+        std::fs::write(&medium, vec![9u8; 8192]).unwrap();
+
+        cache.store_sha256_if_unchanged(&medium, &before, "stale-hash-of-old-content");
+        assert_eq!(
+            cache.lookup_sha256(&medium),
+            None,
+            "a changed medium must not get a stale hash stored under its new identity"
+        );
+    }
+
+    /// The ordinary case: identity unchanged between capture and store, so
+    /// the hash is kept exactly as [`ScanCache::store_sha256`] would keep it.
+    #[test]
+    fn a_medium_unchanged_since_the_captured_identity_is_stored() {
+        let (_guard, dir) = fixtures::scratch("sha256-unchanged");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        let before = identity_of(&medium).unwrap();
+
+        cache.store_sha256_if_unchanged(&medium, &before, "abc123");
+        assert_eq!(cache.lookup_sha256(&medium).as_deref(), Some("abc123"));
     }
 
     /// **One entry, two facts, and neither evicts the other.**
