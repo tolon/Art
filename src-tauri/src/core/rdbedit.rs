@@ -540,6 +540,117 @@ pub fn allocate(
     })
 }
 
+/// The first longword of every AmigaDOS executable.
+pub const HUNK_HEADER: u32 = 0x0000_03F3;
+
+/// hst-imager's per-driver cap (`RdbFsAddCommand.cs:87-91` [5]).
+pub const DRIVER_MAX_BYTES: u64 = 512 * 1024;
+
+/// Whether the chosen file should replace the card's driver (decision 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VersionVerdict {
+    Newer,
+    NotNewer,
+    FileStatesNone,
+}
+
+/// `(version, revision)` compared as a tuple: `19.10` > `19.9`.
+pub fn compare_versions(card: (u16, u16), file: Option<(u16, u16)>) -> VersionVerdict {
+    match file {
+        None => VersionVerdict::FileStatesNone,
+        Some(file) if file > card => VersionVerdict::Newer,
+        Some(_) => VersionVerdict::NotNewer,
+    }
+}
+
+/// A driver goes into LSEGs verbatim, so it must be an executable made of
+/// whole longwords (decision 6, `NOT-EXECUTABLE`).
+pub fn check_driver_bytes(data: &[u8]) -> Result<(), RdbEditRefusal> {
+    let refuse = |detail: String| RdbEditRefusal::NotExecutable { detail };
+    if data.len() < 4 {
+        return Err(refuse(format!(
+            "it is {} bytes, too short to be one",
+            data.len()
+        )));
+    }
+    if !data.len().is_multiple_of(4) {
+        return Err(refuse(format!(
+            "its length, {} bytes, is not a whole number of longwords",
+            data.len()
+        )));
+    }
+    let first = u32::from_be_bytes([data[0], data[1], data[2], data[3]]);
+    if first != HUNK_HEADER {
+        return Err(refuse(format!(
+            "it starts with {first:#010x}, not HUNK_HEADER {HUNK_HEADER:#010x}"
+        )));
+    }
+    Ok(())
+}
+
+/// The inverse of `core::rdb::dos_type_string`: three one-byte characters,
+/// then the last byte in decimal.
+pub fn dostype_from_label(label: &str) -> Option<u32> {
+    let mut chars = label.chars();
+    let mut value = 0u32;
+    for _ in 0..3 {
+        let c = u32::from(chars.next()?);
+        if c > 0xFF {
+            return None;
+        }
+        value = (value << 8) | c;
+    }
+    let last: u8 = chars.as_str().parse().ok()?;
+    Some((value << 8) | u32::from(last))
+}
+
+/// How far past `$VER:` a name is looked for — the same window
+/// `core::rdb::version_from_ver_string` reads.
+const VER_NAME_SCAN_BYTES: usize = 200;
+
+/// The program a driver's `$VER:` string names — `pfs3aio` in
+/// `$VER: pfs3aio 19.2 (2.10.18)` (spec decision 13). The first token after
+/// the marker, split on whitespace and NUL. A token that starts with a digit
+/// and holds a dot is a version, so a string that names no program answers
+/// `None`, as does a file with no marker.
+pub fn program_name_from_ver_string(data: &[u8]) -> Option<String> {
+    const MARKER: &[u8] = b"$VER:";
+    let at = data
+        .windows(MARKER.len())
+        .position(|window| window == MARKER)?;
+    let start = at + MARKER.len();
+    let end = start.saturating_add(VER_NAME_SCAN_BYTES).min(data.len());
+    let token = data
+        .get(start..end)?
+        .split(|b| b.is_ascii_whitespace() || *b == 0)
+        .find(|token| !token.is_empty())?;
+    let is_version = token.first().is_some_and(u8::is_ascii_digit) && token.contains(&b'.');
+    if is_version {
+        return None;
+    }
+    Some(String::from_utf8_lossy(token).into_owned())
+}
+
+/// Whether two program names are one program. ASCII case is not identity.
+pub fn same_program(card: &str, file: &str) -> bool {
+    card.eq_ignore_ascii_case(file)
+}
+
+/// Decision 13: a replace needs the same program on both sides. A file that
+/// names none is left to decision 1 ("no `$VER:` plans no step").
+pub fn check_same_driver(card_payload: &[u8], file: &[u8]) -> Result<(), RdbEditRefusal> {
+    let Some(file_name) = program_name_from_ver_string(file) else {
+        return Ok(());
+    };
+    match program_name_from_ver_string(card_payload) {
+        Some(card) if same_program(&card, &file_name) => Ok(()),
+        card => Err(RdbEditRefusal::DifferentDriver {
+            card,
+            file: file_name,
+        }),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod fixtures {
     //! Card shapes built byte by byte in the test. Nothing here is Amiga
@@ -1390,5 +1501,199 @@ mod alloc_tests {
                 .contains("ART reads only the first 16384 blocks"),
             "{err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod driver_tests {
+    use super::fixtures::*;
+    use super::*;
+    use crate::core::error::RdbEditRefusal;
+    use crate::core::rdb::{dos_type_string, version_from_ver_string};
+
+    /// Decision 1: the tuple, so 19.10 is newer than 19.9; strictly greater
+    /// replaces; equal, older and silent do not.
+    #[test]
+    fn a_file_replaces_the_card_only_when_its_version_is_strictly_greater() {
+        assert_eq!(
+            compare_versions((19, 9), Some((19, 10))),
+            VersionVerdict::Newer
+        );
+        assert_eq!(
+            compare_versions((19, 2), Some((19, 3))),
+            VersionVerdict::Newer
+        );
+        assert_eq!(
+            compare_versions((19, 99), Some((20, 0))),
+            VersionVerdict::Newer
+        );
+        assert_eq!(
+            compare_versions((19, 2), Some((19, 2))),
+            VersionVerdict::NotNewer
+        );
+        assert_eq!(
+            compare_versions((19, 3), Some((19, 2))),
+            VersionVerdict::NotNewer
+        );
+        assert_eq!(
+            compare_versions((19, 2), None),
+            VersionVerdict::FileStatesNone
+        );
+    }
+
+    /// The number compared is the number written: `version_from_ver_string`'s
+    /// `u16` halves, the FSHD's own field.
+    #[test]
+    fn the_fixture_drivers_version_is_read_the_way_the_fshd_stores_it() {
+        assert_eq!(
+            version_from_ver_string(&hunk_driver(1024, "19.10")),
+            Some((19, 10))
+        );
+        let card = walk_strict(&caffeine_like(true)).unwrap().fshds[0].clone();
+        assert_eq!(
+            compare_versions(
+                (card.version, card.revision),
+                version_from_ver_string(&hunk_driver(1024, "19.10"))
+            ),
+            VersionVerdict::Newer
+        );
+    }
+
+    #[test]
+    fn a_hunk_file_of_whole_longwords_is_accepted() {
+        assert_eq!(check_driver_bytes(&hunk_driver(62_604, "19.3")), Ok(()));
+    }
+
+    #[test]
+    fn an_lha_archive_is_not_an_executable_and_the_sentence_says_to_unpack_it() {
+        let mut lha = vec![0u8; 64];
+        lha[..7].copy_from_slice(b"\x2a\x00-lh5-");
+        let err = check_driver_bytes(&lha).unwrap_err();
+        assert!(
+            matches!(err, RdbEditRefusal::NotExecutable { .. }),
+            "{err:?}"
+        );
+        assert_eq!(err.code(), "ART-RDB-EDIT-NOT-EXECUTABLE");
+        let sentence = err.to_string();
+        assert!(
+            sentence.contains("it starts with 0x2a002d6c, not HUNK_HEADER 0x000003f3"),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains("An .lha archive has to be unpacked first"),
+            "{sentence}"
+        );
+    }
+
+    #[test]
+    fn a_length_that_is_not_whole_longwords_is_refused() {
+        let mut driver = hunk_driver(62_604, "19.3");
+        driver.pop();
+        let err = check_driver_bytes(&driver).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("62603 bytes, is not a whole number of longwords"),
+            "{err}"
+        );
+        let err = check_driver_bytes(&[0, 0]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("it is 2 bytes, too short to be one"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_dostype_label_round_trips() {
+        for dos_type in [PDS3, DOS3, SFS0, 0x444F_530A, 0x5046_5303] {
+            assert_eq!(
+                dostype_from_label(&dos_type_string(dos_type)),
+                Some(dos_type),
+                "{dos_type:#x}"
+            );
+        }
+        assert_eq!(dostype_from_label("PD"), None);
+        assert_eq!(dostype_from_label("PDSx"), None);
+        assert_eq!(dostype_from_label("PDS256"), None);
+    }
+
+    /// Decision 13: the first token after `$VER:` is the program; a token
+    /// shaped like a version is not a name.
+    #[test]
+    fn the_program_name_is_the_first_token_after_ver() {
+        assert_eq!(
+            program_name_from_ver_string(&hunk_driver(1024, "19.3")).as_deref(),
+            Some("pfs3aio")
+        );
+        assert_eq!(
+            program_name_from_ver_string(b"$VER: SmartFilesystem 1.293 (18.1.17)").as_deref(),
+            Some("SmartFilesystem")
+        );
+        assert_eq!(
+            program_name_from_ver_string(b"$VER:\0\0pfs3aio.device 4.1").as_deref(),
+            Some("pfs3aio.device")
+        );
+        assert_eq!(program_name_from_ver_string(b"$VER: 19.2 (1.1.26)"), None);
+        assert_eq!(program_name_from_ver_string(b"$VER:    "), None);
+        assert_eq!(program_name_from_ver_string(&[0u8; 512]), None);
+    }
+
+    /// **The case the ruling exists for.** SmartFilesystem 1.293 is "older"
+    /// than pfs3aio 19.3 by the version tuple alone, so a replace would put a
+    /// PFS3 driver under an `SFS\0` header. The names refuse it.
+    #[test]
+    fn an_sfs_driver_on_the_card_is_not_replaced_by_pfs3aio() {
+        let card = named_driver(4096, "SmartFilesystem", "1.293");
+        let file = hunk_driver(62_604, "19.3");
+        assert_eq!(
+            compare_versions((1, 293), Some((19, 3))),
+            VersionVerdict::Newer,
+            "the versions alone would replace it"
+        );
+        let err = check_same_driver(&card, &file).unwrap_err();
+        assert_eq!(
+            err,
+            RdbEditRefusal::DifferentDriver {
+                card: Some("SmartFilesystem".into()),
+                file: "pfs3aio".into()
+            }
+        );
+        assert_eq!(err.code(), "ART-RDB-EDIT-DIFFERENT-DRIVER");
+        let sentence = err.to_string();
+        assert!(
+            sentence.contains("calls itself 'SmartFilesystem'"),
+            "{sentence}"
+        );
+        assert!(sentence.contains("calls itself 'pfs3aio'"), "{sentence}");
+        assert!(sentence.contains("hst-imager can replace it"), "{sentence}");
+    }
+
+    #[test]
+    fn a_card_driver_that_does_not_say_what_it_is_is_not_replaced() {
+        let mut card = hunk_driver(4096, "19.2");
+        card[64..69].copy_from_slice(b"$XXX:");
+        let err = check_same_driver(&card, &hunk_driver(62_604, "19.3")).unwrap_err();
+        assert_eq!(
+            err,
+            RdbEditRefusal::DifferentDriver {
+                card: None,
+                file: "pfs3aio".into()
+            }
+        );
+        assert!(err.to_string().contains("does not say what it is"), "{err}");
+    }
+
+    /// Case is not identity, and a silent file is decision 1's "no step",
+    /// not this refusal.
+    #[test]
+    fn the_same_program_in_another_case_replaces_and_a_silent_file_is_not_this_refusal() {
+        let card = named_driver(4096, "PFS3AIO", "19.2");
+        assert_eq!(
+            check_same_driver(&card, &hunk_driver(62_604, "19.3")),
+            Ok(())
+        );
+        let mut silent = hunk_driver(62_604, "19.3");
+        silent[64..69].copy_from_slice(b"$XXX:");
+        assert_eq!(check_same_driver(&card, &silent), Ok(()));
     }
 }
