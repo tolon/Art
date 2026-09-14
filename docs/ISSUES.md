@@ -26,13 +26,20 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-319** 🔵 **A PFS3 data allocation that runs out of space leaves its bitmap bits taken for the writer's next
-commit** — *found 2026-09-14 while implementing ART-315; reading-derived, not run*
-`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_data_blocks`) · On `DiskFull` after a partial allocation the
-cleared bits stay cleared in memory and the touched bitmap blocks stay in `pending_writes`, without `blocksfree`
-being reduced; the next operation that commits writes them, and those blocks are lost to the volume.
-**Unreachable from ART today:** `copy_in_pfs3` refuses content larger than the free space before writing and stops
-at the first error.
+**ART-319** 🔵 **An error part-way through a PFS3 writer operation leaves pending writes and in-memory
+index/superindex/deldir state for the next commit** — *found 2026-09-14 while implementing ART-315; widened
+2026-09-14 by the final review, M4; reading-derived, not run*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_data_blocks`, `move_to_deldir`, `free_data_blocks`) · Two cases,
+both because `Writer`'s in-memory state (the data bitmap, `pending_writes`) is only written back on a successful
+commit, and an error returned mid-operation leaves it as the failed attempt left it, for whatever the writer does
+next: (1) On `DiskFull` after a partial data allocation the cleared bits stay cleared in memory and the touched
+bitmap blocks stay in `pending_writes`, without `blocksfree` being reduced; the next operation that commits writes
+them, and those blocks are lost to the volume. **Unreachable from ART today:** `copy_in_pfs3` refuses content
+larger than the free space before writing and stops at the first error. (2) ART-318's writer path: `delete_in`
+calls `move_to_deldir` (which can itself write and succeed) and then `free_data_blocks`; if `free_data_blocks`
+fails after `move_to_deldir` succeeded, the file is left both in its directory and in the deldir, in memory, for
+the next commit — a later eviction of that deldir slot then frees a file still reachable from its directory.
+**Unreachable from ART today:** ART never deletes on PFS3.
 
 **ART-317** 🟡 **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
 the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
@@ -228,7 +235,8 @@ the command layer's, and a job could carry a `Phrase` instead. A round of its ow
 *found 2026-09-14 while implementing ART-316; fixed 2026-09-14 on `art-debt-0914`*
 `src-tauri/vendor/libpfs3/src/writer.rs` (`delete_in`, `move_to_deldir`, `write_deldir_entry`, `undelete`) ·
 `src-tauri/vendor/libpfs3/src/ondisk/mod.rs` (`DelDirEntry::parse`, `deldir_entries_per_block`) · pfs3aio stores a
-deldir entry's name as a length byte then at most 15 bytes (`blocks.h:100-105,368-379`, `directory.c:4549-4550`),
+deldir entry's name as a length byte then at most 17 (15 on `MODE_LARGEFILE`) bytes (`blocks.h:100-105,368-379`,
+`directory.c:4549-4550`),
 takes the slot at `deldirroving` and advances it over `deldirsize × 31` slots (`directory.c:4497-4507`), frees only
 the anodes of the file a slot evicts (`:4510-4518`), frees a deleted file's data blocks and keeps its anodes
 (`directory.c:1816-1830`, `allocation.c:520-665`), and refuses to undelete a file whose blocks were reused
@@ -305,12 +313,26 @@ instead of only in small mode.
   confirmed by the fill times reverting to the pre-roving numbers; disclosed. **M6** (`anode_block_full`'s clear
   on free deleted) survived — disclosed: a freed anode's block is passed over as full for the rest of the
   writer's session and a new block made instead, wasteful not wrong, and no ART path deletes through `libpfs3`
-  today. **M7** (`refresh_anode_reader` deleted from the super-block-creation branch) survived — disclosed:
-  nothing in the test's own session walks a chain through the new super block before the volume is reopened
-  (which rebuilds the reader fresh). **M9** (`reserved_needed`'s sum reduced to `dir_blocks + anode_blocks`)
-  survived — a real weak guard, parked for the final review: `pfs3_fits`'s 8-block margin absorbs the one or two
-  index/super blocks this fix adds for every size the suite exercises.
-- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  today. **M7** (`refresh_anode_reader` deleted from the super-block-creation branch) survived — a weak guard,
+  corrected 2026-09-14 by the final review from an earlier "unobservable": it is observable, just not by any
+  test here — it would surface once a chain walk in the same session reaches an anode under a new super block
+  (only reachable past 64 009 anode blocks at 1024-byte reserved blocks), which no test does before the volume
+  is reopened (which rebuilds the reader fresh) and so cannot see the stale copy. **M9** (`reserved_needed`'s sum
+  reduced to `dir_blocks + anode_blocks`) survived — a real weak guard, parked for the final review: `pfs3_fits`'s
+  8-block margin absorbs the one or two index/super blocks this fix adds for every size the suite exercises.
+  **Closed 2026-09-14 by the final review** with a direct arithmetic test,
+  `reserved_needed_counts_the_extra_index_block_past_index_per_block_anode_blocks` (21 246 files at 1024-byte
+  reserved blocks need 253 reserved blocks, 21 247 need 255 — one more anode block *and* one more index block),
+  against which the same mutation was re-run and killed
+  (`` assertion `left == right` failed: 1 root dir block + 253 anode blocks + 1 more index block / left: 254 /
+  right: 255 ``), then restored.
+- **Note, final review (M5):** `update_rootblock`'s comment calling the rootblock write "atomic commit" was wrong
+  — pending writes are flushed in place before it, not copy-on-write, so a new super block named by the rootblock
+  extension write can already be on disk while the on-disk reserved bitmap still marks it free; the rootblock,
+  written last, is a commit *point*, not the moment every earlier write becomes true at once. Not introduced by
+  this fix wave: every reserved block ART's writer touches has worked this way since 0.1.3 — only the comment was
+  corrected.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3292 passed; 0 failed; 58 ignored; 0 measured;
   0 filtered out` twice; fmt and clippy clean.
 - **Not claimed:** the second super block is proved only on a volume made to look full in a test (`MAXSUPER`
   super blocks are reachable only past 64 009 anode blocks at 1024-byte reserved blocks, and never at 2048 or

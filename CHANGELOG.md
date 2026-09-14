@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A file deleted on the Amiga from a PFS3 partition ART formatted can be
-  undeleted.** ART now formats PFS3 with the deleted-files area PFS3's own format
-  makes, and its writer keeps that area the way the Amiga's PFS3 handler reads it.
+- **PFS3 partitions ART formats now carry PFS3's deleted-files area (deldir), in the
+  layout the Amiga's own handler reads.** A file deleted through ART's writer goes into
+  it and can be undeleted through that same writer. Checked only by reading pfs3aio's
+  source and against ART's own reader and hst-imager; undeleting on a real Amiga has not
+  been tried yet.
 
 ### Fixed
 
