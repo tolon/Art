@@ -120,51 +120,6 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
-round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
-drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
-material*
-`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}`
-
-`tooltypes` decodes a `ToolTypes` entry with `String::from_utf8_lossy` rather
-than refusing on invalid UTF-8 — deliberately, because real AmigaDOS text is
-Latin-1, not UTF-8, and a non-ASCII tool type (a `PUBSCREEN` name, say) is
-exactly the case that choice is for. NewIcon's `IM1=`/`IM2=` tool types are a
-different case: their pixel-encoding bytes legitimately run past `0x7F` and
-are not accidental Latin-1 text at all, just bytes that happen not to be valid
-UTF-8 on their own. Decoding one replaces the offending byte(s) with
-`U+FFFD`, and re-encoding that back to UTF-8 does not reproduce the original
-bytes — the round-trip grows the file rather than reproducing it.
-
-**Measured, not theoretical**: 69 of the owner's own 798 real `.info` icons
-carry a NewIcon tool type that trips this. `scripts/icon-oracle-check.py`
-counts them in their own `lossy_tooltypes` bucket, never folded into
-`failed`, and holds them to a weaker but still real invariant — the *text*
-`tooltypes` reads back from a rewritten file must still equal the text that
-was written, even though the underlying bytes cannot be. Text identity holds
-for all 69; byte identity does not, and nothing here claims otherwise.
-
-Left open: fixing it means `tooltypes`/`set_tooltypes` carrying raw bytes
-instead of `String` for a NewIcon-shaped entry, which is a real change to a
-public shape three round's worth of code now depends on, not a one-line fix.
-No tree ART builds writes new NewIcon tool types today.
-
-**Corrected 2026-09-06, by the final whole-branch review**: an earlier version
-of this entry said the loss is felt when a NewIcon-carrying icon "is rewritten
-by `set_tooltypes`, `set_position`, `set_window` or `set_show_all_files`" —
-naming all four of this module's writers. Only one of them can trip it.
-`set_position`, `set_window` and `set_show_all_files` all `bytes.to_vec()` and
-overwrite a fixed, disjoint range of the file; none of them reads or rewrites
-the `ToolTypes` block at all, and the icon oracle proves this byte-for-byte
-across all 798 real icons, the 69 lossy ones included — `set_position` alone
-is what this round's `core/appearance::plan_icons_in_dir` actually calls on a
-NewIcon-carrying icon, and it changes eight bytes at offset 58, nowhere near
-`ToolTypes`. **Only `set_tooltypes` can lose bytes, and only when fed the
-output of `tooltypes()`** — the shape `merge_tooltypes`'s own callers use, not
-anything `plan_icons_in_dir` calls today. The warning now lives on
-`set_tooltypes`'s own doc comment (`core/amigaicon/mod.rs`) so a future caller
-reads it where it applies.
-
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -183,6 +138,54 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-250** 🟡 ✅ **`tooltypes()`'s lossy UTF-8 decode could not byte-for-byte round-trip a NewIcon
+`IM1=`/`IM2=` tool type** — *found 2026-09-06 by the drawer-icons round's icon-oracle run against the owner's own
+AmigaOS 3.9 material; fixed 2026-09-14 on `art-debt-2-0914` (brief
+`.superpowers/sdd/2026-09-14-debt-2-round/art250-brief.md`, design approved in chat, no spec file)*
+`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}` · `tooltypes` decoded a `ToolTypes` entry with
+`String::from_utf8_lossy` and `set_tooltypes` encoded with `tt.as_bytes()` (UTF-8) — real AmigaDOS ToolTypes text
+is ISO-8859-1 (Latin-1), not UTF-8 (confirmed against two secondary sources for the platform's own default
+charset and directly against a real third-party icon library, `bitplane/amigainfo`, which decodes/encodes every
+ToolTypes string, NewIcons included, as Latin-1; see
+`D:\Projeler\Amiga\scratch-0913\art250-research.md`). A NewIcon `IM1=`/`IM2=` pixel-encoding byte runs the full
+`0x20`-`0xFF`, one byte each, so a lone byte above `0x7F` is essentially never valid standalone UTF-8: decoding
+replaced it with `U+FFFD`, and re-encoding that to UTF-8 did not reproduce the original bytes. **Measured on 69 of
+the owner's own 798 real `.info` icons** (`docs/STATUS.md`'s `lossy_tooltypes=69`).
+**Fixed:** both ends now decode and encode as Latin-1 — a private `latin1_decode`/`latin1_encode` pair in
+`core/amigaicon/mod.rs`, the identity cast on code points `0..=255` `core/adf/bcpl.rs` already uses for BCPL
+strings (ART-074) and `core/osinstall/apply.rs::latin1_decode`/`latin1_encode` reimplements independently for
+`S/User-Startup` text — kept as a third, private copy here rather than importing `core::adf::bcpl`, matching
+`apply.rs`'s own choice, because each field's encode behaviour on a character with no Latin-1 byte differs.
+**`set_tooltypes` refuses a character above `U+00FF` by name** (index and text) rather than substituting `?`
+the way `bcpl.rs` does for names — the design point the owner approved, safe because `set_tooltypes` has no
+production caller today (research §1/§5), so no live write could be broken by a refusal, and a future in-tree
+caller composing Turkish (ISO-8859-9, not ISO-8859-1) tool-type text would otherwise get a silent `?` for `ş`,
+`ğ`, `ı`, `İ`. Uses `CoreError::InvalidInput`, the variant that already fits a refused caller input, not
+`CoreError::Malformed` (a *file* that doesn't parse). Three new unit tests in `core/amigaicon/mod.rs`:
+`a_newicon_tooltype_with_high_bytes_round_trips_byte_identical`, `a_latin1_high_byte_decodes_to_its_character`,
+`set_tooltypes_refuses_a_character_with_no_latin1_byte` — each run red before the fix (from_utf8_lossy substituted
+`U+FFFD`; `set_tooltypes` wrote UTF-8 and never refused) and green after. Three mutations, each backed up,
+grep-confirmed and restored (never `git checkout --`): reverting the decode to `from_utf8_lossy` turned the
+round-trip and `é` tests red; encoding with plain `as_bytes()` turned the round-trip and refusal tests red;
+substituting `?` instead of refusing turned only the refusal test red. `cargo fmt --check` and
+`cargo clippy --all-targets -- -D warnings` both clean; `cargo test --lib` run twice, `3326 passed; 0 failed; 59
+ignored` both times; `scripts/control-byte-sweep.py` clean.
+**Oracle, both directions, against the owner's own `E:\amiga\Amigatolon\os39`** (798 real `.info` files, read
+only — the script stages extracted copies under `ART_SCRATCH`, never writes into the source folder): **before**
+(original code, restored from `git show HEAD:...` for the measurement) — `checked=798 failed=0 no_tooltypes=464
+no_drawer_data=702 no_drawer_data2=0 lossy_tooltypes=69`, matching `docs/STATUS.md`'s prior figure exactly;
+**after** — `checked=798 failed=0 no_tooltypes=464 no_drawer_data=702 no_drawer_data2=0`, the `lossy_tooltypes`
+bucket gone because nothing falls into it any more: `set_tooltypes(bytes, tooltypes(bytes))` is now
+byte-identical for all 798 icons, the 69 formerly-lossy ones included. The oracle's own `#[ignore]`d Rust test
+(`round_trip_every_icon_in_a_folder_when_asked`) and `scripts/icon-oracle-check.py` (the `lossy_tooltypes`
+parsing and its explanatory paragraph removed, since the field the test used to print is gone) were both updated
+and both re-run. **Removed**, having nothing left to measure: the `tooltypes_round_trip_losslessly` helper and
+the oracle test's `lossy_tooltypes` counter/branch.
+**Not claimed:** no production code calls `set_tooltypes` today (confirmed in the research note), so this fix
+has no user-visible effect yet and `CHANGELOG.md` is not touched — the defect was real and measured, but nothing
+a user could see was wrong. Also not claimed: the AmigaOS ROM Kernel Reference Manual's own ToolTypes section and
+icon.library's source were not directly read (research note, "What was not independently verified").
 
 **ART-319** 🔵 ✅ **An error part-way through a PFS3 writer operation leaves pending writes and in-memory
 index/superindex/deldir state for the next commit** — *found 2026-09-14 while implementing ART-315; widened
