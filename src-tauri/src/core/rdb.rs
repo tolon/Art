@@ -479,7 +479,7 @@ fn lw(block: &[u8], offset: usize) -> u32 {
 }
 
 /// A DosType as its four printable characters — `PDS\3`, `DOS\1`.
-fn dos_type_string(dos_type: u32) -> String {
+pub(crate) fn dos_type_string(dos_type: u32) -> String {
     format!(
         "{}{}{}{}",
         ((dos_type >> 24) & 0xFF) as u8 as char,

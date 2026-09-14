@@ -7,6 +7,205 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+/// Why ART will not edit an RDB in place (ART-117). Every one is decided
+/// before the first byte is written, and each has its own stable code, so a
+/// user can act on it and a maintainer can find it (§68).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RdbEditRefusal {
+    /// The strict walk could not account for a block (spec decision 5).
+    Unaccounted { block: u32, check: String },
+    /// `rdb_BadBlockList` names a list, which ART does not edit.
+    BadBlocks { first: u32 },
+    /// No room below both bounds, and `RDBBlocksHi` could not be raised
+    /// (decisions 2 and 12).
+    NoRoom {
+        needed: u32,
+        start: u32,
+        free: u32,
+        rdb_blocks_hi: u32,
+        partition_block: Option<u64>,
+        raise: RaiseRefused,
+    },
+    /// Not an Amiga hunk file, or not a whole number of longwords.
+    NotExecutable { detail: String },
+    /// Over the per-driver cap, read from metadata before the file is.
+    DriverTooLarge { bytes: u64, cap: u64 },
+    /// An append whose driver states no `$VER:`.
+    DriverNoVersion,
+    /// A replace whose file names another program than the card's driver,
+    /// or whose card driver names none (spec decision 13).
+    DifferentDriver { card: Option<String>, file: String },
+    /// A dynamic VHD: a write could grow it, and the journal identifies an
+    /// image by size.
+    DynamicVhd,
+    /// An unfinished operation's journal is beside the image.
+    JournalPending { journal: PathBuf },
+    /// No backup location was chosen.
+    NoBackup,
+    /// The chosen backup file already exists (SAFE_CREATE).
+    BackupExists { path: PathBuf },
+}
+
+/// Why decision 12 could not raise `RDBBlocksHi`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RaiseRefused {
+    /// This block above `RDBBlocksHi` is not all zero.
+    NonZeroBlock(u32),
+    /// The raised range would reach this block, where partitions begin by
+    /// `bound`'s reckoning.
+    PastPartitionArea { limit: u64, bound: PartitionBound },
+    /// The raised range would end past what ART reads of a disk.
+    PastWindow { window_blocks: u32 },
+}
+
+/// Which of decision 12's three answers to "where do partitions begin" was the
+/// lowest, so the sentence can say which one stopped the raise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartitionBound {
+    /// `LowCyl` through the PART's own DosEnvec.
+    PartitionEnvec,
+    /// `LowCyl` through the RDB's own heads and sectors.
+    RdbGeometry,
+    /// `rdb_LoCylinder × rdb_CylBlocks`.
+    LoCylinder,
+}
+
+impl RdbEditRefusal {
+    /// The stable id for this refusal.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Unaccounted { .. } => "ART-RDB-EDIT-UNACCOUNTED",
+            Self::BadBlocks { .. } => "ART-RDB-EDIT-BAD-BLOCKS",
+            Self::NoRoom { .. } => "ART-RDB-EDIT-NO-ROOM",
+            Self::NotExecutable { .. } => "ART-RDB-EDIT-NOT-EXECUTABLE",
+            Self::DriverTooLarge { .. } => "ART-RDB-EDIT-DRIVER-TOO-LARGE",
+            Self::DriverNoVersion => "ART-RDB-EDIT-DRIVER-NO-VERSION",
+            Self::DifferentDriver { .. } => "ART-RDB-EDIT-DIFFERENT-DRIVER",
+            Self::DynamicVhd => "ART-RDB-EDIT-DYNAMIC-VHD",
+            Self::JournalPending { .. } => "ART-RDB-EDIT-JOURNAL-PENDING",
+            Self::NoBackup => "ART-RDB-EDIT-NO-BACKUP",
+            Self::BackupExists { .. } => "ART-RDB-EDIT-BACKUP-EXISTS",
+        }
+    }
+}
+
+impl std::fmt::Display for RaiseRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonZeroBlock(block) => write!(f, "block {block} above it is not empty"),
+            Self::PastPartitionArea { limit, bound } => match bound {
+                PartitionBound::PartitionEnvec => write!(
+                    f,
+                    "the first partition begins at block {limit} by its own DosEnvec"
+                ),
+                PartitionBound::RdbGeometry => write!(
+                    f,
+                    "the first partition begins at block {limit} by the RDB's own heads and sectors"
+                ),
+                PartitionBound::LoCylinder => write!(
+                    f,
+                    "rdb_LoCylinder puts the partitionable area at block {limit}"
+                ),
+            },
+            Self::PastWindow { window_blocks } => write!(
+                f,
+                "ART reads only the first {window_blocks} blocks of an Amiga disk"
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for RdbEditRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unaccounted { block, check } => write!(
+                f,
+                "ART edits only an RDB it can account for block by block, and block {block} \
+                 fails: {check}. Nothing was written."
+            ),
+            Self::BadBlocks { first } => write!(
+                f,
+                "this RDB carries a bad-block list (from block {first}), which ART does not \
+                 edit. hst-imager can; back the card up first. Nothing was written."
+            ),
+            Self::NoRoom {
+                needed,
+                start,
+                free,
+                rdb_blocks_hi,
+                partition_block,
+                raise,
+            } => {
+                write!(
+                    f,
+                    "the driver needs {needed} blocks from block {start}, but only {free} are free \
+                     below RDBBlocksHi {rdb_blocks_hi}"
+                )?;
+                if let Some(first) = partition_block {
+                    write!(f, " and the first partition begins at block {first}")?;
+                }
+                write!(
+                    f,
+                    ", and RDBBlocksHi cannot be raised: {raise}. hst-imager rewrites the whole \
+                     RDB and checks neither bound, so back the card up before using it. Nothing \
+                     was written."
+                )
+            }
+            Self::NotExecutable { detail } => write!(
+                f,
+                "the driver is not an Amiga executable: {detail}. An .lha archive has to be \
+                 unpacked first — choose the file inside it. Nothing was written."
+            ),
+            Self::DriverTooLarge { bytes, cap } => write!(
+                f,
+                "the driver is {bytes} bytes, over the {cap}-byte limit ART and hst-imager set \
+                 for a driver in an RDB. Nothing was written."
+            ),
+            Self::DriverNoVersion => write!(
+                f,
+                "the driver does not say what version it is ($VER:). AmigaOS keeps the higher of \
+                 the version in the RDB and the one already loaded, so ART will not write one it \
+                 guessed. Nothing was written."
+            ),
+            Self::DifferentDriver { card: Some(card), file } => write!(
+                f,
+                "the card's driver calls itself '{card}' and the file you chose calls itself \
+                 '{file}'. ART replaces a driver only with a newer copy of the same one; hst-imager \
+                 can replace it — back the card up first. Nothing was written."
+            ),
+            Self::DifferentDriver { card: None, file } => write!(
+                f,
+                "the card's driver does not say what it is ($VER:), so ART cannot tell whether \
+                 '{file}' is a newer copy of it; hst-imager can replace it — back the card up \
+                 first. Nothing was written."
+            ),
+            Self::DynamicVhd => write!(
+                f,
+                "this card is a dynamic VHD. ART edits an RDB only in a raw card or HDF: a write \
+                 can grow a dynamic VHD, and the undo journal identifies its image by size. \
+                 Nothing was written."
+            ),
+            Self::JournalPending { journal } => write!(
+                f,
+                "an unfinished operation's journal is waiting beside this image ({}). Undo it \
+                 first in the File Manager — ART will not write over it. Nothing was written.",
+                journal.display()
+            ),
+            Self::NoBackup => write!(
+                f,
+                "choose where the RDB backup goes before this runs: ART copies the RDB area \
+                 there before it changes a byte. Nothing was written."
+            ),
+            Self::BackupExists { path } => write!(
+                f,
+                "'{}' already exists, and ART never overwrites a file. Choose another name for \
+                 the RDB backup. Nothing was written.",
+                path.display()
+            ),
+        }
+    }
+}
+
 /// Errors produced by the Amiga core engine.
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -271,6 +470,10 @@ pub enum CoreError {
          reopen it (and check it) before writing to it again"
     )]
     Pfs3WriterLocked,
+
+    /// ART-117: an in-place RDB edit refused before anything was written.
+    #[error("{0}")]
+    RdbEditRefused(RdbEditRefusal),
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -339,6 +542,7 @@ impl CoreError {
             Self::LimitExceeded { .. } => "ART-LIMIT-EXCEEDED",
             Self::PayloadPasswordRefused { .. } => "ART-PAYLOAD-PASSWORD",
             Self::Pfs3WriterLocked => "ART-PFS3-WRITER-LOCKED",
+            Self::RdbEditRefused(refusal) => refusal.code(),
         }
     }
 
@@ -477,6 +681,32 @@ mod tests {
                 subject: "iso9660 walk".into(),
                 detail: "x".into(),
             },
+            CoreError::RdbEditRefused(RdbEditRefusal::Unaccounted {
+                block: 1,
+                check: "x".into(),
+            }),
+            CoreError::RdbEditRefused(RdbEditRefusal::BadBlocks { first: 1 }),
+            CoreError::RdbEditRefused(RdbEditRefusal::NoRoom {
+                needed: 1,
+                start: 1,
+                free: 0,
+                rdb_blocks_hi: 1,
+                partition_block: None,
+                raise: RaiseRefused::NonZeroBlock(2),
+            }),
+            CoreError::RdbEditRefused(RdbEditRefusal::NotExecutable { detail: "x".into() }),
+            CoreError::RdbEditRefused(RdbEditRefusal::DriverTooLarge { bytes: 1, cap: 0 }),
+            CoreError::RdbEditRefused(RdbEditRefusal::DriverNoVersion),
+            CoreError::RdbEditRefused(RdbEditRefusal::DifferentDriver {
+                card: None,
+                file: "pfs3aio".into(),
+            }),
+            CoreError::RdbEditRefused(RdbEditRefusal::DynamicVhd),
+            CoreError::RdbEditRefused(RdbEditRefusal::JournalPending {
+                journal: "x".into(),
+            }),
+            CoreError::RdbEditRefused(RdbEditRefusal::NoBackup),
+            CoreError::RdbEditRefused(RdbEditRefusal::BackupExists { path: "x".into() }),
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();
