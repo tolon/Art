@@ -284,8 +284,9 @@ the shipped catalogue.
 
 **ART-301** 🔵 **The job bar's titles are English sentences composed in Rust** — *found 2026-09-10
 in the owner's screenshot*
-`src/components/JobBar.tsx` (`job.title`) · 34 `let title = format!(…)` sites across 18 command
-files. The owner saw *"Adding 1 package(s) to …"* twice on a Turkish screen. The two rows are **two
+`src/components/JobBar.tsx` (`job.title`) · 33 `let title = format!(…)` sites in 17 command files and 7 fixed
+English titles — 40 job titles in 19 files (counted 2026-09-14; the first count, 34 / 18, included a test's
+`let title` in `artwork.rs` and missed the fixed titles). The owner saw *"Adding 1 package(s) to …"* twice on a Turkish screen. The two rows are **two
 runs**, not a double render — 21:22:08 and 21:23:04 in `operations.jsonl`. The refusal under each is
 the core's own sentence and English by design (ART-060); the title is not the core's sentence but
 the command layer's, and a job could carry a `Phrase` instead. A round of its own.
