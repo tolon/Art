@@ -373,6 +373,22 @@ is precisely the case where the file has changed since; gating on it would
 reject every journal worth replaying. Size is the strong invariant instead —
 these writes are in place and never resize the file.
 
+**A leftover journal is one of two kinds, and the header says which.** The
+format is `ARTJRNL\0`, a `u32` version, the geometry and names, then
+self-checksummed entries. ART-117's RDB edit can end written, verified and
+synced with a journal file that will not go; left unmarked, that file would be
+byte-identical to a crash's and the File Manager would offer to undo a finished
+edit. So that path overwrites the version field with `FINISHED_MARK` (`"DONE"`)
+and syncs it **before** it removes the file, and rolls the edit back if the
+mark will not write. `PendingJournal::roll_back` refuses a marked journal,
+`discard` still removes it, `open_rdb` refuses with
+`ART-RDB-EDIT-JOURNAL-FINISHED`, and the capability report carries it as
+`finished_journal` instead of `pending_recovery`. The mark is in the header,
+not a record, so a truncated or damaged entry cannot look like it; an ART build
+from before it reads an unknown version and refuses the file whole — never
+undoes it. The volume writer never marks, so its journals are version 1 as
+before.
+
 ## Workflow Engine design
 
 Every operation in ART is a `Workflow`:
