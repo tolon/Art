@@ -15,6 +15,9 @@
 //! `core/safety`, cancelling can leave work unfinished but never a half-written
 //! file.
 
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::fmt::Display;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -65,12 +68,94 @@ impl JobState {
     }
 }
 
+/// What a job is, as a catalogue key and the values its sentence needs —
+/// never a sentence (ART-301).
+///
+/// The job bar used to show an English sentence the command layer composed
+/// with `format!`, so a Turkish screen said *"Adding 1 package(s) to …"*. The
+/// sentence belongs to the UI's catalogue, in the user's language (§68) — the
+/// reasoning [`JobState::Cancelled`] already follows for its count.
+///
+/// Serialises to exactly the TypeScript `Phrase` shape, `{ "key": …,
+/// "params": { … } }` with `params` left out when empty, so the job bar
+/// renders it with `t(title.key, title.params)`.
+///
+/// **A key is a literal, by construction.** [`JobTitle::new`] takes a
+/// `&'static str` and the field is private. `src/i18n/job-title-keys.test.ts`
+/// reads every `JobTitle::new("…")` in the Rust tree and fails on a key the
+/// catalogue list does not hold, a listed key no Rust site names, or a value
+/// the sentence does not use.
+///
+/// Values are what the user gave or what ART found — a path, a package name,
+/// a release — and are never translated. A count goes in through
+/// [`JobTitle::count`], because i18next chooses `_one` / `_other` only from a
+/// value named `count`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobTitle {
+    /// A `Cow` only so the type can derive `Deserialize`; every key ART
+    /// builds is borrowed from a literal.
+    key: Cow<'static, str>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    params: BTreeMap<String, JobParam>,
+}
+
+/// One value a job title interpolates.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum JobParam {
+    /// A JSON number. Listed first so a number reads back as a count.
+    Count(u64),
+    Text(String),
+}
+
+impl JobTitle {
+    pub fn new(key: &'static str) -> Self {
+        Self {
+            key: Cow::Borrowed(key),
+            params: BTreeMap::new(),
+        }
+    }
+
+    /// A value the sentence names as `{{name}}`, rendered through `Display` —
+    /// pass a path as `&path.display()`.
+    pub fn text(mut self, name: &'static str, value: &dyn Display) -> Self {
+        self.params
+            .insert(name.to_string(), JobParam::Text(value.to_string()));
+        self
+    }
+
+    /// The `{{count}}` that chooses the sentence's plural form.
+    pub fn count(mut self, n: usize) -> Self {
+        self.params
+            .insert("count".to_string(), JobParam::Count(n as u64));
+        self
+    }
+
+    pub fn key(&self) -> &str {
+        &self.key
+    }
+
+    pub fn params(&self) -> &BTreeMap<String, JobParam> {
+        &self.params
+    }
+
+    /// **ART-301 migration bridge — Task 7 of the plan deletes this.** Carries
+    /// a sentence from a call site that has not moved to [`JobTitle::new`] yet.
+    pub(crate) fn untranslated(sentence: &str) -> Self {
+        Self {
+            key: Cow::Owned(sentence.to_string()),
+            params: BTreeMap::new(),
+        }
+    }
+}
+
 /// A snapshot of a job, safe to send to the UI.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobProgress {
     pub id: JobId,
-    /// What this job is, in the user's language: "Scanning collection".
-    pub title: String,
+    /// What this job is: a catalogue key and its values, rendered in the
+    /// user's language by the job bar (ART-301).
+    pub title: JobTitle,
     /// Units completed so far — files, bytes, blocks; whatever the job counts.
     pub done: u64,
     /// Total units, when the job can know it up front. `None` means indefinite,
@@ -194,7 +279,7 @@ mod tests {
     fn fraction_is_none_without_a_total() {
         let mut p = JobProgress {
             id: 1,
-            title: "Scanning".into(),
+            title: JobTitle::new("components.jobBar.title.indexTitles"),
             done: 5,
             total: None,
             message: String::new(),
@@ -235,5 +320,78 @@ mod tests {
             message: "x".into()
         }
         .is_terminal());
+    }
+
+    /// ART-301. The job bar renders a title with `t(title.key, title.params)`,
+    /// so the wire shape is the TypeScript `Phrase` shape, exactly.
+    #[test]
+    fn a_job_title_serializes_to_the_phrase_shape() {
+        let title = JobTitle::new("components.jobBar.title.copyOutOf").text("source", &"DH0.hdf");
+        assert_eq!(
+            serde_json::to_value(&title).unwrap(),
+            serde_json::json!({
+                "key": "components.jobBar.title.copyOutOf",
+                "params": { "source": "DH0.hdf" }
+            })
+        );
+    }
+
+    /// A count travels as a JSON number named `count` — the shape
+    /// `JobTitle.params` declares on the TypeScript side, and the name
+    /// i18next reads to choose `_one` or `_other`.
+    #[test]
+    fn a_count_is_sent_as_a_number_named_count() {
+        let title = JobTitle::new("components.jobBar.title.downloadPackages").count(1);
+        assert_eq!(
+            serde_json::to_value(&title).unwrap(),
+            serde_json::json!({
+                "key": "components.jobBar.title.downloadPackages",
+                "params": { "count": 1 }
+            })
+        );
+    }
+
+    /// Nothing to interpolate sends no `params` at all — `Phrase.params?`.
+    #[test]
+    fn a_title_without_values_sends_no_params_field() {
+        let title = JobTitle::new("components.jobBar.title.syncAminet");
+        assert_eq!(
+            serde_json::to_value(&title).unwrap(),
+            serde_json::json!({ "key": "components.jobBar.title.syncAminet" })
+        );
+    }
+
+    /// The event the job bar receives carries the phrase, not a sentence.
+    #[test]
+    fn a_job_progress_sends_its_title_as_a_phrase_not_a_sentence() {
+        let progress = JobProgress {
+            id: 7,
+            title: JobTitle::new("components.jobBar.title.addPackages")
+                .count(2)
+                .text("target", &"E:/tree"),
+            done: 0,
+            total: None,
+            message: String::new(),
+            state: JobState::Running,
+        };
+        let sent = serde_json::to_value(&progress).unwrap();
+        assert_eq!(
+            sent["title"],
+            serde_json::json!({
+                "key": "components.jobBar.title.addPackages",
+                "params": { "count": 2, "target": "E:/tree" }
+            })
+        );
+    }
+
+    /// `JobProgress` derives `Deserialize`, so the title must read back as
+    /// itself — a count as a count, a text as a text.
+    #[test]
+    fn a_title_reads_back_as_itself() {
+        let title = JobTitle::new("components.jobBar.title.previewPackages")
+            .count(3)
+            .text("target", &"Work.hdf");
+        let back: JobTitle = serde_json::from_value(serde_json::to_value(&title).unwrap()).unwrap();
+        assert_eq!(back, title);
     }
 }
