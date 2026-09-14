@@ -16,13 +16,13 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.3`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.4`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
-//! writes it (ART-316, ART-318), and pfs3aio's anode
-//! ceiling (ART-311); `ART-PATCH.md` there lists each. The writer's other
-//! limits below (ART-113, ART-116) still hold.
+//! writes it (ART-316, ART-318), pfs3aio's anode
+//! ceiling (ART-311), and a caller-supplied datestamp (ART-317); `ART-PATCH.md`
+//! there lists each. The writer's other limits below (ART-113, ART-116) still hold.
 //!
 //! ## `import_filesystem` refuses
 //!
@@ -107,6 +107,7 @@ use crate::core::adf::blocks::{
 use crate::core::adf::bootblock::BootBlock;
 use crate::core::adf::checksum::block_checksum;
 use crate::core::card::{read_card, AmigaArea, CardImage};
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::preload::amiga_names::AmigaNames;
@@ -120,18 +121,41 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version of the `libpfs3` ART builds: the vendored copy in
 /// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patches,
-/// `+art.3`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// `+art.4`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
 /// version, so this is kept in sync by hand, the same trade-off ART already
 /// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
 /// constant as which implementation did the work, and
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.3";
+const LIBPFS3_VERSION: &str = "0.1.3+art.4";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
-pub struct NativeFormatter;
+/// Every date it writes comes from `clock` (ART-317).
+pub struct NativeFormatter {
+    clock: &'static dyn AmigaClock,
+}
+
+impl NativeFormatter {
+    pub const fn new(clock: &'static dyn AmigaClock) -> Self {
+        Self { clock }
+    }
+
+    /// UTC, for tests whose subject is not the date.
+    #[cfg(test)]
+    pub const UTC: Self = Self::new(&crate::core::clock::UtcClock);
+}
+
+/// An [`AmigaDate`] as libpfs3's (days, minutes, ticks). PFS3 stores days as
+/// a `u16`, which lasts until 2157, so a later day clamps rather than wraps.
+fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
+    (
+        u16::try_from(date.days).unwrap_or(u16::MAX),
+        date.mins as u16,
+        date.ticks as u16,
+    )
+}
 
 impl VolumeFormatter for NativeFormatter {
     fn probe(&self) -> CoreResult<ToolVersion> {
@@ -193,6 +217,7 @@ impl VolumeFormatter for NativeFormatter {
                     // ART-316/318: pfs3aio's two-block deldir, as the Amiga's own
                     // format makes it (the owner's decision, 2026-09-14).
                     enable_deldir: true,
+                    datestamp: Some(pfs3_datestamp(self.clock.amiga_now())),
                 };
                 libpfs3::format::format_with_size(&device, total_blocks as u64, &opts)
                     .map_err(from_pfs3)?;
@@ -204,7 +229,12 @@ impl VolumeFormatter for NativeFormatter {
                 if let Some(reason) = write_refusal(&geometry) {
                     return Err(CoreError::UnsupportedFormat(reason));
                 }
-                format_ffs_volume(&mut region, &geometry, &checked_name)?;
+                format_ffs_volume(
+                    &mut region,
+                    &geometry,
+                    &checked_name,
+                    self.clock.amiga_now(),
+                )?;
             }
             DosFamily::Other => {
                 return Err(CoreError::UnsupportedFormat(format!(
@@ -266,10 +296,11 @@ impl VolumeFormatter for NativeFormatter {
 
         match family_of(dos) {
             DosFamily::Pfs3 => copy_in_pfs3(
-                image, offset, length, block_size, drive, source, &entries, sink,
+                image, offset, length, block_size, drive, source, &entries, sink, self.clock,
             ),
             DosFamily::Ffs => copy_in_ffs(
                 image, offset, length, block_size, dos, reserved, drive, source, &entries, sink,
+                self.clock,
             ),
             DosFamily::Other => Err(unsupported_family(dos)),
         }
@@ -529,6 +560,7 @@ fn format_ffs_volume(
     device: &mut dyn BlockDeviceMut,
     geometry: &VolumeGeometry,
     volume_name: &str,
+    now: AmigaDate,
 ) -> CoreResult<()> {
     let bs = geometry.block_size;
     let total_blocks = geometry.total_blocks;
@@ -585,7 +617,6 @@ fn format_ffs_volume(
     if let Some(first_ext) = ext_blocks.first() {
         put_u32(&mut root, 416, *first_ext);
     }
-    let now = current_amiga_date();
     put_u32(&mut root, 420, now.days);
     put_u32(&mut root, 424, now.mins);
     put_u32(&mut root, 428, now.ticks);
@@ -649,24 +680,6 @@ fn put_u32(buf: &mut [u8], offset: usize, value: u32) {
 
 fn put_i32(buf: &mut [u8], offset: usize, value: i32) {
     buf[offset..offset + 4].copy_from_slice(&value.to_be_bytes());
-}
-
-/// The clock, as an Amiga timestamp. Mirrors the private helper of the same
-/// shape in `core/adf/create.rs`, which is not `pub` and belongs to a
-/// fixed-geometry (floppy) creator this module does not otherwise depend on.
-fn current_amiga_date() -> AmigaDate {
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(crate::core::adf::bcpl::AMIGA_EPOCH_UNIX);
-
-    let secs_since_amiga = (now_unix - crate::core::adf::bcpl::AMIGA_EPOCH_UNIX).max(0);
-    let days = (secs_since_amiga / 86_400) as u32;
-    let rem_secs = secs_since_amiga % 86_400;
-    let mins = (rem_secs / 60) as u32;
-    let ticks = ((rem_secs % 60) * 50) as u32;
-
-    AmigaDate { days, mins, ticks }
 }
 
 // ---------------------------------------------------------------------------
@@ -880,6 +893,7 @@ fn copy_in_pfs3(
     source: &Path,
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<CopySummary> {
     // ART-113: refused before the volume is even opened, let alone written
     // to — see the module doc comment and `non_ascii_entries`'s own.
@@ -952,6 +966,7 @@ fn copy_in_pfs3(
 
     let total = entries.len() as u64;
     for (done, entry) in entries.iter().enumerate() {
+        writer.set_entry_date(Some(pfs3_datestamp(clock.amiga_now())));
         // Between whole files, never mid-write (§54; module docs above).
         if sink.is_cancelled() {
             return Err(CoreError::Cancelled);
@@ -1039,15 +1054,17 @@ fn copy_in_ffs(
     source: &Path,
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<CopySummary> {
     let mut region = FileRegionMut::open(image, offset, length, block_size)?;
     let total_blocks = region.total_blocks();
     let geometry = VolumeGeometry::new(block_size, total_blocks, reserved, dos)?;
 
-    // `VolumeWriter::open` requires an already-formatted, matching bootblock —
-    // exactly the state `format_partition` leaves the volume in, and exactly
-    // why `copy_in` never precedes `format_partition` in the plan (mod.rs).
-    let mut writer = VolumeWriter::open(&mut region, geometry, image, offset)?;
+    // `VolumeWriter::open_with_clock` requires an already-formatted, matching
+    // bootblock — exactly the state `format_partition` leaves the volume in,
+    // and exactly why `copy_in` never precedes `format_partition` in the plan
+    // (mod.rs).
+    let mut writer = VolumeWriter::open_with_clock(&mut region, geometry, image, offset, clock)?;
 
     let existing = writer.list(0)?;
     if !existing.is_empty() {
@@ -1302,7 +1319,7 @@ mod tests {
 
     fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         (_guard, image)
@@ -1312,7 +1329,7 @@ mod tests {
     fn formatted_pds3_image_of(mb: u32) -> (crate::core::ScratchDir, PathBuf) {
         let (_guard, path) =
             card_with_partition(&format!("pds3-{mb}mb"), AmigaHardDiskFs::Pfs3DirectScsi, mb);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&path, None, 1, "Work", &NoProgress)
             .unwrap();
         (_guard, path)
@@ -1354,7 +1371,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&path, None, 1, "Work", &NoProgress)
             .unwrap();
         (_guard, path)
@@ -1536,6 +1553,7 @@ mod tests {
             &libpfs3::format::FormatOptions {
                 volume_name: "Work".into(),
                 enable_deldir: false,
+                datestamp: None,
             },
         )
         .unwrap()
@@ -1635,7 +1653,7 @@ mod tests {
     #[test]
     fn it_formats_a_pfs3_partition_and_reads_the_volume_name_back() {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
 
@@ -1665,7 +1683,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1694,7 +1712,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1713,7 +1731,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         assert_eq!(summary.files, 1);
@@ -1784,7 +1802,7 @@ mod tests {
         std::fs::write(tree.join("C/Assign"), b"assign\n").unwrap();
         std::fs::write(tree.join("Readme"), b"hello from ART\n").unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
         assert_eq!((summary.files, summary.directories), (2, 1));
@@ -2066,7 +2084,7 @@ mod tests {
         std::fs::write(tree.join("Drawer").join(&long), b"x").unwrap();
         std::fs::write(tree.join("Short"), b"y").unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .can_copy_in(&image, None, "DH0", &tree)
             .unwrap_err();
         let CoreError::Pfs3NamesTooLong {
@@ -2082,7 +2100,7 @@ mod tests {
             (vec![format!("Drawer/{long}")], 0, 106)
         );
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert!(
@@ -2258,6 +2276,7 @@ mod tests {
                     &libpfs3::format::FormatOptions {
                         volume_name: "Work".into(),
                         enable_deldir: deldir,
+                        datestamp: None,
                     },
                 )
                 .unwrap();
@@ -2600,7 +2619,7 @@ mod tests {
         let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-file");
         std::fs::write(tree.join("türkçe"), b"data").unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
 
@@ -2630,7 +2649,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("español")).unwrap();
         std::fs::write(tree.join("español").join("Readme"), b"data").unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
 
@@ -2660,7 +2679,7 @@ mod tests {
             std::fs::write(tree.join(format!("é{i}")), b"x").unwrap();
         }
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
 
@@ -2678,13 +2697,13 @@ mod tests {
     #[test]
     fn the_same_non_ascii_name_copies_in_fine_on_ffs() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-non-ascii-ffs");
         std::fs::write(tree.join("türkçe"), b"data").unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .expect("FFS has no such encoding mismatch to refuse");
         assert_eq!(summary.files, 1);
@@ -2708,7 +2727,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2732,7 +2751,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2748,7 +2767,7 @@ mod tests {
     #[test]
     fn copy_in_ffs_never_counts_anything_lost() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-ffs-nothing-lost");
@@ -2759,7 +2778,7 @@ mod tests {
         )
         .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2774,7 +2793,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C/Assign"), b"x").unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &fixtures::CancelAfter::new(1))
             .unwrap_err();
         assert!(matches!(err, CoreError::Cancelled), "{err}");
@@ -2790,7 +2809,7 @@ mod tests {
         let (_guard, tree) = tree_of_bytes(8 * 1024 * 1024);
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert!(
@@ -2819,7 +2838,7 @@ mod tests {
         let free = pfs3_free_bytes(&image);
         let (_guard, tree) = tree_of_bytes(free as usize);
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .expect("a tree that exactly fits must not be refused");
     }
@@ -2831,7 +2850,7 @@ mod tests {
         let (_guard, tree) = tree_of_bytes(free as usize + 1);
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -2864,7 +2883,7 @@ mod tests {
         }
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -2878,7 +2897,7 @@ mod tests {
     #[test]
     fn an_ffs_tree_that_exactly_fills_the_volume_is_not_refused() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let free = ffs_free_bytes(&image);
@@ -2886,7 +2905,7 @@ mod tests {
         let data_blocks = largest_single_ffs_file_data_blocks(free / block_size as u64, block_size);
         let (_guard, tree) = tree_of_bytes(data_blocks as usize * block_size);
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .expect("a tree that exactly fits must not be refused");
     }
@@ -2894,7 +2913,7 @@ mod tests {
     #[test]
     fn an_ffs_tree_one_block_over_the_limit_is_refused() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let free = ffs_free_bytes(&image);
@@ -2906,7 +2925,7 @@ mod tests {
         let (_guard, tree) = tree_of_bytes(data_blocks as usize * block_size + 1);
         let before = std::fs::read(&image).unwrap();
 
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -2954,7 +2973,7 @@ mod tests {
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2974,14 +2993,14 @@ mod tests {
     #[test]
     fn a_directorys_own_sidecar_is_applied_on_ffs() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-dir-sidecar-ffs");
         std::fs::create_dir_all(tree.join("C")).unwrap();
         std::fs::write(tree.join("C.uaem"), "--p-rwed 2021-04-13 02:43:13.68 \n").unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -2997,7 +3016,7 @@ mod tests {
     #[test]
     fn ffs_copy_in_carries_the_protection_bits_out_of_the_uaem_sidecars() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("ffs-copy-in-protection");
@@ -3009,7 +3028,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -3025,7 +3044,7 @@ mod tests {
     #[test]
     fn ffs_a_sidecar_is_applied_and_never_copied_as_a_file_of_its_own() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("ffs-copy-in-sidecar-not-a-file");
@@ -3037,7 +3056,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -3066,7 +3085,7 @@ mod tests {
     #[test]
     fn format_partition_refuses_a_name_amigados_cannot_store() {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .format_partition(&image, None, 1, "Not/Allowed", &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
@@ -3083,13 +3102,13 @@ mod tests {
         let (_guard, image) = formatted_pds3_image();
         let (_guard, tree) = fixtures::scratch("copy-in-populated-pfs3");
         std::fs::write(tree.join("First"), b"one").unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
         let (_guard, second) = fixtures::scratch("copy-in-populated-pfs3-second");
         std::fs::write(second.join("Second"), b"two").unwrap();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &second, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
@@ -3099,18 +3118,18 @@ mod tests {
     #[test]
     fn copy_in_refuses_to_fill_an_already_populated_ffs_volume_again() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let (_guard, tree) = fixtures::scratch("copy-in-populated-ffs");
         std::fs::write(tree.join("First"), b"one").unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
         let (_guard, second) = fixtures::scratch("copy-in-populated-ffs-second");
         std::fs::write(second.join("Second"), b"two").unwrap();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &second, &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
@@ -3123,7 +3142,7 @@ mod tests {
     #[test]
     fn format_ffs_writes_the_requested_volume_name_into_the_root_block() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "MyDisk", &NoProgress)
             .unwrap();
 
@@ -3148,7 +3167,7 @@ mod tests {
     #[test]
     fn a_freshly_formatted_ffs_volume_accepts_a_real_write() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
 
@@ -3166,8 +3185,8 @@ mod tests {
     /// `probe` names which implementation did the work.
     #[test]
     fn probe_names_libpfs3() {
-        let probed = NativeFormatter.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.3 (native, no external tool)");
+        let probed = NativeFormatter::UTC.probe().unwrap();
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.4 (native, no external tool)");
     }
 
     /// `import_filesystem` refuses by name rather than pretend — see the
@@ -3183,7 +3202,7 @@ mod tests {
     #[test]
     fn import_filesystem_refuses_rather_than_guess() {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .import_filesystem(
                 &image,
                 None,
@@ -3204,7 +3223,7 @@ mod tests {
     #[test]
     fn format_partition_refuses_a_filesystem_neither_family_claims() {
         let (_guard, image) = card_with_partition("sfs", AmigaHardDiskFs::Sfs0, 8);
-        let err = NativeFormatter
+        let err = NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap_err();
         assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED", "{err}");
@@ -3319,7 +3338,7 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(image, None, 1, "Workbench", &NoProgress)
             .unwrap();
 
@@ -3364,7 +3383,7 @@ mod tests {
         std::fs::write(tree.join("C/Extra/Deep.txt"), deep).unwrap();
         std::fs::write(tree.join("DOSDrivers/AUX"), aux).unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -3530,11 +3549,11 @@ mod tests {
         )
         .unwrap();
 
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Workbench", &NoProgress)
             .unwrap();
 
-        let summary = NativeFormatter
+        let summary = NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &dist_root, &NoProgress)
             .unwrap();
 
@@ -3553,5 +3572,183 @@ mod tests {
         );
 
         assert!(summary.files > 0, "the real tree must not copy in empty");
+    }
+
+    static PLUS_THREE: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+        now: 1_768_478_400,
+        offset: 10_800,
+    };
+
+    /// ART-317 on PFS3: the root date the format writes and the entry date
+    /// `copy_in` writes are the clock's local time (15:00 at 12:00 UTC, UTC+3).
+    #[test]
+    fn a_pfs3_format_and_copy_in_carry_the_clocks_local_time() {
+        let (_guard, image) = rdb_image_with_one_pds3_partition();
+        let formatter = NativeFormatter::new(&PLUS_THREE);
+        formatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("pfs3-local-time");
+        std::fs::write(tree.join("Readme"), b"hello\n").unwrap();
+        formatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let mut vol = libpfs3::volume::Volume::open(&image, partition_offset(&image)).unwrap();
+        let local = (17_546u16, 900u16, 0u16);
+        let rext = vol.rootblock_ext.as_ref().expect("a rootblock extension");
+        assert_eq!(rext.root_date, local, "root date");
+        let entry = vol
+            .list_dir("")
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "Readme")
+            .unwrap();
+        assert_eq!(
+            (
+                entry.creation_day,
+                entry.creation_minute,
+                entry.creation_tick
+            ),
+            local,
+            "entry date"
+        );
+        let rb = &vol.rootblock;
+        assert_eq!(
+            (rb.creation_day, rb.creation_minute, rb.creation_tick),
+            local,
+            "rootblock date"
+        );
+        // format_partition turns the deldir on (ART-316); a new deldir block carries the
+        // rootblock's date (pfs3aio NewDeldirBlock, `directory.c:4477-4479`).
+        let raw = std::fs::read(&image).unwrap();
+        let at = partition_offset(&image) as usize;
+        let sector =
+            |n: u32, len: usize| raw[at + n as usize * 512..at + n as usize * 512 + len].to_vec();
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let dd = sector(be32(&ext, 0x90), resblk);
+        assert_eq!(
+            (be16(&dd, 0x1A), be16(&dd, 0x1C), be16(&dd, 0x1E)),
+            local,
+            "deldir block date at format"
+        );
+    }
+
+    /// ART-317 on the PFS3 deldir. pfs3aio `directory.c` at 211f7f0 (read, not run):
+    /// `AddToDeldir` copies the deleted entry's own date into the deldir entry
+    /// (`:4546-4548`) and stamps the deldir block and `rext.dd_creation*` with
+    /// `DateStamp()` (`:4556-4560`). So the entry keeps the file's date (wall time,
+    /// never shifted), and the block and the extension carry the delete's own
+    /// local time, from `Writer::set_entry_date`.
+    #[test]
+    fn a_pfs3_delete_keeps_the_files_date_and_stamps_the_deldir_with_the_clock() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let written = (17_546u16, 900u16, 0u16); // 2026-01-15 15:00, when the file was written
+        let deleted = (17_727u16, 900u16, 0u16); // 2026-07-15 15:00, when it was deleted
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(written));
+            w.write_file("Gone", b"bye").unwrap();
+            w.set_entry_date(Some(deleted));
+            w.delete("Gone").unwrap();
+        }
+
+        let (_, entries) = raw_deldir(&image);
+        let entry = entries
+            .iter()
+            .find(|e| e.name == b"Gone")
+            .expect("Gone is in the deldir");
+        assert_eq!(
+            (
+                be16(&entry.date, 0),
+                be16(&entry.date, 2),
+                be16(&entry.date, 4)
+            ),
+            written,
+            "deldir entry: the file's own date"
+        );
+
+        let raw = std::fs::read(&image).unwrap();
+        let at = offset as usize;
+        let sector =
+            |n: u32, len: usize| raw[at + n as usize * 512..at + n as usize * 512 + len].to_vec();
+        let root = sector(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ext = sector(be32(&root, 0x58), resblk);
+        let dd = sector(be32(&ext, 0x90), resblk);
+        assert_eq!(
+            (be16(&dd, 0x1A), be16(&dd, 0x1C), be16(&dd, 0x1E)),
+            deleted,
+            "deldir block date"
+        );
+        assert_eq!(
+            (be16(&ext, 0x88), be16(&ext, 0x8A), be16(&ext, 0x8C)),
+            deleted,
+            "rext.dd_creation"
+        );
+    }
+
+    /// ART-317 on FFS: the formatted root and a copied file.
+    #[test]
+    fn an_ffs_format_and_copy_in_carry_the_clocks_local_time() {
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
+        let formatter = NativeFormatter::new(&PLUS_THREE);
+        formatter
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("ffs-local-time");
+        std::fs::write(tree.join("Readme"), b"hello\n").unwrap();
+        // A sidecar date is wall time already: it must land unshifted (12:00), not 15:00.
+        std::fs::write(tree.join("Old"), b"old\n").unwrap();
+        std::fs::write(tree.join("Old.uaem"), b"----rwed 2026-01-15 12:00:00.00 \n").unwrap();
+        formatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let card = read_card(&image).unwrap();
+        let area = &card.areas[0];
+        let part = &area.rdb.partitions[0];
+        let (offset, length, block_size) = partition_region(area, part).unwrap();
+        let mut region = FileRegionMut::open(&image, offset, length, block_size).unwrap();
+        let dos = DosType::new(part.dostype.to_be_bytes());
+        let geometry =
+            VolumeGeometry::new(block_size, region.total_blocks(), part.reserved, dos).unwrap();
+
+        let mut root = vec![0u8; block_size];
+        region.read_block(geometry.root_block, &mut root).unwrap();
+        let word = |o: usize| u32::from_be_bytes(root[o..o + 4].try_into().unwrap());
+        assert_eq!(
+            (word(420), word(424), word(428)),
+            (17_546, 900, 0),
+            "root date"
+        );
+
+        let writer =
+            VolumeWriter::open_with_clock(&mut region, geometry, &image, offset, &PLUS_THREE)
+                .unwrap();
+        let block = writer.find(0, "Readme").unwrap().unwrap().block;
+        assert_eq!(
+            writer.attributes(block).unwrap().date,
+            AmigaDate {
+                days: 17_546,
+                mins: 900,
+                ticks: 0
+            },
+            "file date"
+        );
+        let old = writer.find(0, "Old").unwrap().unwrap().block;
+        assert_eq!(
+            writer.attributes(old).unwrap().date,
+            AmigaDate {
+                days: 17_546,
+                mins: 720,
+                ticks: 0
+            },
+            ".uaem date, unshifted"
+        );
     }
 }

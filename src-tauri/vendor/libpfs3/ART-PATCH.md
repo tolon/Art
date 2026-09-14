@@ -1,4 +1,4 @@
-# `libpfs3` 0.1.3+art.3 — ART's vendored copy
+# `libpfs3` 0.1.3+art.4 — ART's vendored copy
 
 This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART for
 [ART-310](../../../docs/ISSUES.md). ART's build uses it through `[patch.crates-io]` in
@@ -9,8 +9,8 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 | Original | `https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`, SHA-256 `02f457ef99a09ddebf56e454c6a25dc3a6860a602c878489f132a4ca3eed4317` |
 | Upstream source | `metaneutrons/pfs3` commit `33e9ff6ba8462cc4e434dfb6e2783d91b7dd5b14`, `crates/libpfs3` (the crate's `.cargo_vcs_info.json`) |
 | Licence | LGPL-3.0-or-later. `LICENSE` is upstream's own file at that commit, unchanged; the full LGPL-3.0 text is `COPYING.LESSER`; the GPL-3.0 text it builds on is ART's `LICENSE` |
-| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so |
-| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.3`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
+| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so; 2026-09-14, src/format.rs and src/writer.rs for ART-317 |
+| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.4`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
 | Not carried | `tests/`: `GPL-3.0-only` headers, 9.3 MB of fixtures, and a dev-dependency (`sevenz-rust` 0.6) with RUSTSEC-2026-0245 and RUSTSEC-2026-0246. ART's own tests prove the patch (`src-tauri/src/core/preload/native.rs`) |
 
 ## Changes against 0.1.3
@@ -125,6 +125,19 @@ Everything else in the writer is 0.1.3's.
     review: every reserved block ART's writer touches has worked this way since 0.1.3; only the comment was
     wrong.
 
+**`src/format.rs`, `src/writer.rs`** ([ART-317](../../../docs/ISSUES.md); design
+`docs/superpowers/specs/2026-09-14-art-317-local-time-design.md`):
+
+15. **The caller may supply "now" ([ART-317](../../../docs/ISSUES.md)).** `FormatOptions::datestamp` sets the
+    format's date: the rootblock's creation date, the extension's root date and each new deldir block's date,
+    which pfs3aio's `NewDeldirBlock` copies from the rootblock (`directory.c:4477-4479`).
+    `Writer::set_entry_date` sets the date of each new or rewritten directory entry (`build_dir_entry`,
+    `update_dir_entry_size`), and the date a delete stamps on the deldir block and `rext.dd_creation*`
+    (`move_to_deldir`; pfs3aio `AddToDeldir` `DateStamp()`, `directory.c:4556-4560`). A deldir entry's own date
+    is still copied from the deleted entry, as pfs3aio does (`:4546-4548`). `None` keeps 0.1.3's
+    `current_amiga_datestamp()`, which is UTC. AmigaDOS `DateStamp()` is local time with no zone; ART passes the
+    local wall time. pfs3aio read at `211f7f0`, not run. Std-only: the crate still asks no clock but `SystemTime`.
+
 ## Re-vendoring
 
 After replacing this directory, run `cargo update -p libpfs3 --precise <version>` in `src-tauri`: Cargo
@@ -173,7 +186,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
  
 --- a/src/format.rs
 +++ b/src/format.rs
-@@ -3,14 +3,23 @@
+@@ -3,14 +3,24 @@
  //! Creates a new PFS3 filesystem on a block device.
  //! Ported from pfs3aio/format.c and amitools PFSFormat.py.
  //!
@@ -181,7 +194,8 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent,
 +//! (ART-314) names — `rext.fnsize` writes 107, not 32, (ART-316) the deldir;
 +//! on 2026-09-14, the final review (M6): `pfs3_name_limit`, the one name-limit
-+//! rule `writer::Writer` and ART's `core::preload::native` both call.
++//! rule `writer::Writer` and ART's `core::preload::native` both call;
++//! on 2026-09-14 (ART-317): a caller-supplied datestamp;
 +//! `ART-PATCH.md` in this crate's root says what and why.
 +//!
  //! Format sequence:
@@ -198,7 +212,25 @@ carries the format change only; the writer change (ART-312) is not prepared for 
  
  use crate::error::{Error, Result};
  use crate::io::BlockDevice;
-@@ -32,6 +41,24 @@ impl Default for FormatOptions {
+@@ -21,6 +31,12 @@ use crate::util::current_amiga_datestamp;
+ pub struct FormatOptions {
+     pub volume_name: String,
+     pub enable_deldir: bool,
++    /// The format's datestamp as (days, minutes, ticks) since 1978-01-01: the
++    /// rootblock's creation date (0x0C), the extension's root date (0x10) and
++    /// each new deldir block's date (0x1A), which pfs3aio's `NewDeldirBlock`
++    /// copies from the rootblock. `None` stamps the current time as 0.1.3 did,
++    /// which is UTC. Added by ART for ART-317: AmigaDOS reads it as local time.
++    pub datestamp: Option<(u16, u16, u16)>,
+ }
+ 
+ impl Default for FormatOptions {
+@@ -28,10 +44,29 @@ impl Default for FormatOptions {
+         Self {
+             volume_name: "Untitled".into(),
+             enable_deldir: false,
++            datestamp: None,
+         }
      }
  }
  
@@ -223,7 +255,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
  /// Result of a successful format operation.
  #[derive(Debug)]
  pub struct FormatResult {
-@@ -105,6 +132,11 @@ pub fn format_with_size(
+@@ -105,9 +140,14 @@ pub fn format_with_size(
      if supermode {
          options |= MODE_SUPERINDEX;
      }
@@ -233,9 +265,14 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +        options |= MODE_DELDIR | MODE_SUPERDELDIR;
 +    }
  
-     // Timestamp (current time as Amiga datestamp)
-     let (cday, cmin, ctick) = current_amiga_datestamp();
-@@ -146,13 +178,31 @@ pub fn format_with_size(
+-    // Timestamp (current time as Amiga datestamp)
+-    let (cday, cmin, ctick) = current_amiga_datestamp();
++    // Timestamp (current time as Amiga datestamp, unless the caller supplied one)
++    let (cday, cmin, ctick) = opts.datestamp.unwrap_or_else(current_amiga_datestamp);
+ 
+     // Index geometry — same formula as Rootblock::index_per_block()
+     let index_per_block = (resblocksize / 4).saturating_sub(3);
+@@ -146,13 +186,31 @@ pub fn format_with_size(
          bmi_blocknrs.push(firstreserved + idx * rescluster);
      }
  
@@ -268,7 +305,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      // Build rootblock + reserved bitmap
      let rb_size = rblkcluster as usize * bs;
      let mut rb_data = vec![0u8; rb_size];
-@@ -225,9 +275,21 @@ pub fn format_with_size(
+@@ -225,9 +283,21 @@ pub fn format_with_size(
      put_u16(&mut rext, 0x10, cday);
      put_u16(&mut rext, 0x12, cmin);
      put_u16(&mut rext, 0x14, ctick);
@@ -293,7 +330,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      }
      write_reserved_blocks(dev, rext_blk as u64, &rext, rescluster, bs)?;
  
-@@ -267,6 +329,17 @@ pub fn format_with_size(
+@@ -267,6 +337,17 @@ pub fn format_with_size(
          write_reserved_blocks(dev, bm_blknr as u64, &bm, rescluster, bs)?;
      }
  
@@ -311,7 +348,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      // Write anode index block
      let mut anidx = vec![0u8; resblocksize as usize];
      put_u16(&mut anidx, 0, IBLKID);
-@@ -280,20 +353,44 @@ pub fn format_with_size(
+@@ -280,20 +361,44 @@ pub fn format_with_size(
      put_u16(&mut an, 0, ABLKID);
      put_u32(&mut an, 4, 1);
      put_u32(&mut an, 8, 0); // seqnr
@@ -476,7 +513,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  }
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,17 @@
+@@ -6,6 +6,18 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
@@ -489,12 +526,13 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +//! the rootblock extension, the roving anode search; (ART-318) the deldir write path;
 +//! on 2026-09-14, the final review: `Writer::open` refuses a `reserved_blksize`
 +//! other than 1024/2048/4096 (M3); `max_name_bytes` calls the one name-limit
-+//! rule now in `format::pfs3_name_limit` (M6).
++//! rule now in `format::pfs3_name_limit` (M6);
++//! on 2026-09-14 (ART-317): a caller-supplied datestamp;
 +//! `ART-PATCH.md` in this crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -28,8 +39,22 @@ pub struct Writer {
+@@ -28,8 +40,29 @@ pub struct Writer {
      // Mutable state
      res_bitmap: Vec<u32>,
      data_bm: Vec<(u32, Vec<u32>)>, // (blk_num, longs)
@@ -515,10 +553,17 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +    anode_roving: u32,
 +    /// ART-311: `rootblock_ext.superindex` changed; `update_rootblock` writes the extension.
 +    rext_dirty: bool,
++    /// "Now" for this writer, as (days, minutes, ticks): the date of each new or
++    /// rewritten directory entry, and the date a delete stamps on the deldir
++    /// block and `rext.dd_creation*` (pfs3aio `AddToDeldir`, `directory.c:4556-4560`).
++    /// `None` is the current time, as 0.1.3 stamped it (UTC). Added by ART for
++    /// ART-317, whose caller sets local time before each operation. A deldir
++    /// entry's own date is not this: it is copied from the deleted entry.
++    entry_date: Option<(u16, u16, u16)>,
  }
  
  impl Writer {
-@@ -37,6 +62,19 @@ impl Writer {
+@@ -37,6 +70,19 @@ impl Writer {
      pub fn open(vol: Volume) -> Result<Self> {
          let rb = &vol.rootblock;
          let rbs = rb.reserved_blksize as u32;
@@ -538,17 +583,37 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let rescluster = rbs / vol.block_size();
          let firstreserved = rb.firstreserved;
          let numreserved = (rb.lastreserved - firstreserved + 1) / rescluster;
-@@ -57,6 +95,9 @@ impl Writer {
+@@ -57,6 +103,10 @@ impl Writer {
              res_bitmap: Vec::new(),
              data_bm: Vec::new(),
              pending_writes: Vec::new(),
 +            anode_block_full: Vec::new(),
 +            anode_roving: 0,
 +            rext_dirty: false,
++            entry_date: None,
              vol,
          };
          w.load_reserved_bitmap()?;
-@@ -74,6 +115,27 @@ impl Writer {
+@@ -69,11 +119,46 @@ impl Writer {
+         self.vol
+     }
+ 
++    /// "Now" for this writer, as (days, minutes, ticks): the date of each new or
++    /// rewritten directory entry, and the date a delete stamps on the deldir
++    /// block and `rext.dd_creation*` (pfs3aio `AddToDeldir`, `directory.c:4556-4560`).
++    /// `None` is the current time, as 0.1.3 stamped it (UTC). Added by ART for
++    /// ART-317, whose caller sets local time before each operation. A deldir
++    /// entry's own date is not this: it is copied from the deleted entry.
++    pub fn set_entry_date(&mut self, date: Option<(u16, u16, u16)>) {
++        self.entry_date = date;
++    }
++
++    fn entry_datestamp(&self) -> (u16, u16, u16) {
++        self.entry_date.unwrap_or_else(crate::util::current_amiga_datestamp)
++    }
++
+     fn next_datestamp(&mut self) -> u32 {
+         self.datestamp += 1;
          self.datestamp
      }
  
@@ -576,7 +641,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      // ---- High-level API (path-based, for CLI) ----
  
      /// Write a file at the given path. Parent directories must exist.
-@@ -124,6 +186,7 @@ impl Writer {
+@@ -124,6 +209,7 @@ impl Writer {
  
      /// Create a file in a directory identified by anode.
      pub fn write_file_in(&mut self, parent_anode: u32, name: &str, data: &[u8]) -> Result<()> {
@@ -584,7 +649,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          // Check if file already exists — if so, overwrite it
          if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
              let entry_type = entry_data[pos + 1] as i8;
-@@ -144,6 +207,7 @@ impl Writer {
+@@ -144,6 +230,7 @@ impl Writer {
          name: &str,
          data: &[u8],
      ) -> Result<()> {
@@ -592,7 +657,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
  
-@@ -165,6 +229,7 @@ impl Writer {
+@@ -165,6 +252,7 @@ impl Writer {
  
      /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
      pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -600,7 +665,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let dir_blk = self.alloc_reserved_block()?;
          let anodenr = self.alloc_anode(1, dir_blk, 0)?;
  
-@@ -192,6 +257,7 @@ impl Writer {
+@@ -192,6 +280,7 @@ impl Writer {
          name: &str,
          target: &str,
      ) -> Result<()> {
@@ -608,7 +673,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let data = target.as_bytes();
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
-@@ -221,6 +287,7 @@ impl Writer {
+@@ -221,6 +310,7 @@ impl Writer {
      /// Create a hardlink in a parent directory.
      pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
          let (parent_anode, name) = self.split_path(path)?;
@@ -616,7 +681,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
          self.update_rootblock()
      }
-@@ -256,7 +323,9 @@ impl Writer {
+@@ -256,7 +346,9 @@ impl Writer {
          let blk = deldirblocks[block_idx];
          let data = self.read_reserved_raw(blk)?;
          let off = DELDIR_HEADER_SIZE + slot_idx * DELDIR_ENTRY_SIZE;
@@ -627,7 +692,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
              .ok_or_else(|| Error::NotFound("empty deldir slot".into()))?;
  
          // Check destination doesn't already exist
-@@ -266,6 +335,23 @@ impl Writer {
+@@ -266,6 +358,23 @@ impl Writer {
  
          let old_anode = entry.anode;
  
@@ -651,7 +716,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          // Read file data via the anode chain (still intact)
          let file_data = self.vol.read_file_data(old_anode, entry.file_size())?;
  
-@@ -464,7 +550,18 @@ impl Writer {
+@@ -464,7 +573,18 @@ impl Writer {
  
      /// Clear a single anode slot (set all 3 fields to 0).
      fn clear_single_anode(&mut self, anodenr: u32) -> Result<()> {
@@ -671,7 +736,16 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      }
  
      /// Find a directory entry by name, returning (block_number, block_data, entry_offset).
-@@ -595,6 +692,7 @@ impl Writer {
+@@ -565,7 +685,7 @@ impl Writer {
+         }
+ 
+         // Update datestamp
+-        let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();
++        let (cday, cmin, ctick) = self.entry_datestamp();
+         put_u16(&mut data, pos + 10, cday);
+         put_u16(&mut data, pos + 12, cmin);
+         put_u16(&mut data, pos + 14, ctick);
+@@ -595,6 +715,7 @@ impl Writer {
          dst_parent: u32,
          dst_name: &str,
      ) -> Result<()> {
@@ -679,7 +753,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let entries = self.vol.list_dir_by_anode(src_parent)?;
          let entry = entries
              .iter()
-@@ -642,9 +740,13 @@ impl Writer {
+@@ -642,9 +763,13 @@ impl Writer {
              self.free_anode_chain_reserved(target.anode)?;
              self.clear_anode_chain(target.anode)?;
          } else {
@@ -696,7 +770,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  self.clear_anode_chain(target.anode)?;
              }
          }
-@@ -652,86 +754,110 @@ impl Writer {
+@@ -652,86 +777,110 @@ impl Writer {
          self.update_rootblock()
      }
  
@@ -716,10 +790,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +    fn move_to_deldir(&mut self, entry: &crate::ondisk::DirEntry) -> Result<bool> {
 +        if !self.vol.rootblock.has_flag(MODE_DELDIR) || !self.vol.rootblock.has_extension() {
 +            return Ok(false);
-         }
--        let rext = match &self.vol.rootblock_ext {
--            Some(e) => e,
--            None => return false,
++        }
 +        let ext_blk = self.vol.rootblock.extension;
 +        let mut rext = self.read_reserved_raw(ext_blk)?;
 +        let u16_at = |b: &[u8], at: usize| u16::from_be_bytes([b[at], b[at + 1]]);
@@ -728,7 +799,10 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +        let slots = usize::from(u16_at(&rext, 0x36)).min(MAXDELDIR + 1) * DELENTRIES_PER_BLOCK;
 +        if slots == 0 {
 +            return Ok(false);
-+        }
+         }
+-        let rext = match &self.vol.rootblock_ext {
+-            Some(e) => e,
+-            None => return false,
 +        let block_of =
 +            |rext: &[u8], slot: usize| u32_at(rext, 0x90 + (slot / DELENTRIES_PER_BLOCK) * 4);
 +        let roving = usize::from(u16_at(&rext, 0x34));
@@ -806,7 +880,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 -        true
 +        self.write_deldir_entry(&mut data, off, entry);
 +        // The deldir block's date and rext.dd_creation* are now (`directory.c:4556-4560`).
-+        let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();
++        let (cday, cmin, ctick) = self.entry_datestamp();
 +        put_u16(&mut data, 0x1A, cday);
 +        put_u16(&mut data, 0x1C, cmin);
 +        put_u16(&mut data, 0x1E, ctick);
@@ -872,7 +946,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      }
  
      // ---- Data bitmap ----
-@@ -739,9 +865,11 @@ impl Writer {
+@@ -739,9 +888,11 @@ impl Writer {
      fn load_data_bitmap(&mut self) -> Result<()> {
          let no_bmb = {
              let bits_per_bmb = self.index_per_block * 32;
@@ -886,7 +960,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          };
          for seq in 0..no_bmb {
              if let Some(blk) = self.get_bitmap_block_nr(seq)? {
-@@ -778,7 +906,10 @@ impl Writer {
+@@ -778,7 +929,10 @@ impl Writer {
                              .ok_or_else(|| {
                                  Error::Corrupt("block number overflow in bitmap".into())
                              })?;
@@ -898,7 +972,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                              continue; // skip out-of-range bitmap bits
                          }
                          longs[li] &= !(0x8000_0000 >> bit);
-@@ -825,7 +956,9 @@ impl Writer {
+@@ -825,7 +979,9 @@ impl Writer {
      }
  
      fn free_data_block(&mut self, blk: u32) -> Result<()> {
@@ -909,7 +983,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
              return Ok(());
          }
          let rel = blk - self.bitmapstart;
-@@ -896,55 +1029,106 @@ impl Writer {
+@@ -896,55 +1052,106 @@ impl Writer {
  
      // ---- Anode allocation ----
  
@@ -1020,10 +1094,10 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +                // No free anode in this block (pfs3aio clears its bit, `anodes.c:414-416`).
 +                self.anode_block_full[seqnr as usize] = true;
 +                seqnr += 1;
-             }
++            }
 +            if start == 0 {
 +                return Err(Error::DiskFull("no free anode slots".into()));
-+            }
+             }
 +            start = 0;
          }
 -        Err(Error::DiskFull("no free anode slots".into()))
@@ -1053,7 +1127,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      }
  
      /// Allocate a new anode block and register it in the index.
-@@ -964,43 +1148,62 @@ impl Writer {
+@@ -964,43 +1171,62 @@ impl Writer {
          let idx_off = seqnr % ipb;
  
          if self.vol.rootblock.is_large() {
@@ -1130,7 +1204,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  put_u32(&mut sdata, soff, new_idx);
                  put_u32(&mut sdata, 4, self.datestamp);
                  self.write_reserved(super_blk, &sdata)?;
-@@ -1012,8 +1215,14 @@ impl Writer {
+@@ -1012,8 +1238,14 @@ impl Writer {
                  self.write_reserved(idx_blk, &idata)?;
              }
          } else {
@@ -1147,7 +1221,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  .vol
                  .rootblock
                  .indexblocks
-@@ -1021,7 +1230,18 @@ impl Writer {
+@@ -1021,7 +1253,18 @@ impl Writer {
                  .copied()
                  .unwrap_or(0);
              if idx_blk == 0 {
@@ -1167,7 +1241,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
              }
              let mut idata = self.read_reserved_raw(idx_blk)?;
              let entry_off = INDEX_BLOCK_HEADER_SIZE + idx_off as usize * 4;
-@@ -1097,6 +1317,7 @@ impl Writer {
+@@ -1097,6 +1340,7 @@ impl Writer {
                  .anodes
                  .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
  
@@ -1175,7 +1249,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,6 +1325,11 @@ impl Writer {
+@@ -1104,6 +1348,11 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -1187,7 +1261,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  // Find end of entries
                  let mut pos = DIR_BLOCK_HEADER_SIZE;
                  while pos < self.resblocksize as usize {
-@@ -1123,13 +1349,17 @@ impl Writer {
+@@ -1123,13 +1372,17 @@ impl Writer {
                  }
              }
          }
@@ -1207,7 +1281,16 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
              .copy_from_slice(&entry_bytes);
          self.write_reserved(new_blk, &new_data)?;
-@@ -1201,10 +1431,32 @@ impl Writer {
+@@ -1172,7 +1425,7 @@ impl Writer {
+         entry[1] = entry_type as u8;
+         put_u32(&mut entry, 2, anode);
+         put_u32(&mut entry, 6, fsize as u32);
+-        let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();
++        let (cday, cmin, ctick) = self.entry_datestamp();
+         put_u16(&mut entry, 10, cday);
+         put_u16(&mut entry, 12, cmin);
+         put_u16(&mut entry, 14, ctick);
+@@ -1201,10 +1454,32 @@ impl Writer {
      // ---- Rootblock update ----
  
      fn update_rootblock(&mut self) -> Result<()> {
@@ -1241,7 +1324,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let bs = self.vol.block_size() as usize;
          let rblkcluster = self.vol.rootblock.rblkcluster as u32;
          let cluster_size = rblkcluster as usize * bs;
-@@ -1236,6 +1488,25 @@ impl Writer {
+@@ -1236,6 +1511,25 @@ impl Writer {
              }
          }
  
@@ -1267,7 +1350,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          self.vol
              .dev
              .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)?;
-@@ -1286,10 +1557,44 @@ impl Writer {
+@@ -1286,10 +1580,44 @@ impl Writer {
          Ok(())
      }
  

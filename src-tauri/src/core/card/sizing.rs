@@ -465,7 +465,7 @@ fn split_work(rest: u64) -> Vec<(String, Option<u32>, u64)> {
 ///
 /// Every Work partition this plans, on every card size, is past MAXSMALLDISK
 /// (10 241 440 blocks), in PFS3's SUPERINDEX mode. `libpfs3` 0.1.3's format
-/// wrote that mode wrong; ART builds the vendored `0.1.3+art.3`, which writes
+/// wrote that mode wrong; ART builds the vendored `0.1.3+art.4`, which writes
 /// it as pfs3aio does (ART-310, fixed), so the **format** `NativeFormatter`
 /// writes on these partitions is right, and its writer no longer hands one
 /// anode number out twice (ART-312, fixed). Its writer's anode ceiling is
@@ -622,6 +622,7 @@ mod tests {
                 volume_name: "Test".into(),
                 // as NativeFormatter formats a card (ART-316/318)
                 enable_deldir: true,
+                datestamp: None,
             },
         )
         .unwrap();

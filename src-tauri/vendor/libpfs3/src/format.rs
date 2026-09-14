@@ -7,7 +7,8 @@
 //! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent,
 //! (ART-314) names — `rext.fnsize` writes 107, not 32, (ART-316) the deldir;
 //! on 2026-09-14, the final review (M6): `pfs3_name_limit`, the one name-limit
-//! rule `writer::Writer` and ART's `core::preload::native` both call.
+//! rule `writer::Writer` and ART's `core::preload::native` both call;
+//! on 2026-09-14 (ART-317): a caller-supplied datestamp;
 //! `ART-PATCH.md` in this crate's root says what and why.
 //!
 //! Format sequence:
@@ -30,6 +31,12 @@ use crate::util::current_amiga_datestamp;
 pub struct FormatOptions {
     pub volume_name: String,
     pub enable_deldir: bool,
+    /// The format's datestamp as (days, minutes, ticks) since 1978-01-01: the
+    /// rootblock's creation date (0x0C), the extension's root date (0x10) and
+    /// each new deldir block's date (0x1A), which pfs3aio's `NewDeldirBlock`
+    /// copies from the rootblock. `None` stamps the current time as 0.1.3 did,
+    /// which is UTC. Added by ART for ART-317: AmigaDOS reads it as local time.
+    pub datestamp: Option<(u16, u16, u16)>,
 }
 
 impl Default for FormatOptions {
@@ -37,6 +44,7 @@ impl Default for FormatOptions {
         Self {
             volume_name: "Untitled".into(),
             enable_deldir: false,
+            datestamp: None,
         }
     }
 }
@@ -138,8 +146,8 @@ pub fn format_with_size(
         options |= MODE_DELDIR | MODE_SUPERDELDIR;
     }
 
-    // Timestamp (current time as Amiga datestamp)
-    let (cday, cmin, ctick) = current_amiga_datestamp();
+    // Timestamp (current time as Amiga datestamp, unless the caller supplied one)
+    let (cday, cmin, ctick) = opts.datestamp.unwrap_or_else(current_amiga_datestamp);
 
     // Index geometry — same formula as Rootblock::index_per_block()
     let index_per_block = (resblocksize / 4).saturating_sub(3);

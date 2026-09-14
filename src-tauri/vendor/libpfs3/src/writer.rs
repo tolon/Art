@@ -15,7 +15,8 @@
 //! the rootblock extension, the roving anode search; (ART-318) the deldir write path;
 //! on 2026-09-14, the final review: `Writer::open` refuses a `reserved_blksize`
 //! other than 1024/2048/4096 (M3); `max_name_bytes` calls the one name-limit
-//! rule now in `format::pfs3_name_limit` (M6).
+//! rule now in `format::pfs3_name_limit` (M6);
+//! on 2026-09-14 (ART-317): a caller-supplied datestamp;
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -55,6 +56,13 @@ pub struct Writer {
     anode_roving: u32,
     /// ART-311: `rootblock_ext.superindex` changed; `update_rootblock` writes the extension.
     rext_dirty: bool,
+    /// "Now" for this writer, as (days, minutes, ticks): the date of each new or
+    /// rewritten directory entry, and the date a delete stamps on the deldir
+    /// block and `rext.dd_creation*` (pfs3aio `AddToDeldir`, `directory.c:4556-4560`).
+    /// `None` is the current time, as 0.1.3 stamped it (UTC). Added by ART for
+    /// ART-317, whose caller sets local time before each operation. A deldir
+    /// entry's own date is not this: it is copied from the deleted entry.
+    entry_date: Option<(u16, u16, u16)>,
 }
 
 impl Writer {
@@ -98,6 +106,7 @@ impl Writer {
             anode_block_full: Vec::new(),
             anode_roving: 0,
             rext_dirty: false,
+            entry_date: None,
             vol,
         };
         w.load_reserved_bitmap()?;
@@ -108,6 +117,20 @@ impl Writer {
     /// Consume the writer and return the underlying volume.
     pub fn into_volume(self) -> Volume {
         self.vol
+    }
+
+    /// "Now" for this writer, as (days, minutes, ticks): the date of each new or
+    /// rewritten directory entry, and the date a delete stamps on the deldir
+    /// block and `rext.dd_creation*` (pfs3aio `AddToDeldir`, `directory.c:4556-4560`).
+    /// `None` is the current time, as 0.1.3 stamped it (UTC). Added by ART for
+    /// ART-317, whose caller sets local time before each operation. A deldir
+    /// entry's own date is not this: it is copied from the deleted entry.
+    pub fn set_entry_date(&mut self, date: Option<(u16, u16, u16)>) {
+        self.entry_date = date;
+    }
+
+    fn entry_datestamp(&self) -> (u16, u16, u16) {
+        self.entry_date.unwrap_or_else(crate::util::current_amiga_datestamp)
     }
 
     fn next_datestamp(&mut self) -> u32 {
@@ -662,7 +685,7 @@ impl Writer {
         }
 
         // Update datestamp
-        let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();
+        let (cday, cmin, ctick) = self.entry_datestamp();
         put_u16(&mut data, pos + 10, cday);
         put_u16(&mut data, pos + 12, cmin);
         put_u16(&mut data, pos + 14, ctick);
@@ -800,7 +823,7 @@ impl Writer {
         }
         self.write_deldir_entry(&mut data, off, entry);
         // The deldir block's date and rext.dd_creation* are now (`directory.c:4556-4560`).
-        let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();
+        let (cday, cmin, ctick) = self.entry_datestamp();
         put_u16(&mut data, 0x1A, cday);
         put_u16(&mut data, 0x1C, cmin);
         put_u16(&mut data, 0x1E, ctick);
@@ -1402,7 +1425,7 @@ impl Writer {
         entry[1] = entry_type as u8;
         put_u32(&mut entry, 2, anode);
         put_u32(&mut entry, 6, fsize as u32);
-        let (cday, cmin, ctick) = crate::util::current_amiga_datestamp();
+        let (cday, cmin, ctick) = self.entry_datestamp();
         put_u16(&mut entry, 10, cday);
         put_u16(&mut entry, 12, cmin);
         put_u16(&mut entry, 14, ctick);

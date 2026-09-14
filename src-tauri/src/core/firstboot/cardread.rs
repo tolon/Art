@@ -679,12 +679,12 @@ mod tests {
     fn an_oversized_amiga_volume_report_is_refused_not_silently_skipped() {
         let dir = ScratchDir::new("art-firstboot-cardread", "ffs-oversized");
         let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let huge = vec![7u8; (MAX_REPORT_BYTES + 1) as usize];
         let tree = tree_with_report(dir.path(), &huge);
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -696,11 +696,11 @@ mod tests {
     fn an_ffs_volumes_own_report_reads_back_as_the_amiga_volume_source() {
         let dir = ScratchDir::new("art-firstboot-cardread", "ffs-report");
         let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let tree = tree_with_report(dir.path(), b"art-firstboot 1\ndone all\n");
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -713,11 +713,11 @@ mod tests {
     fn a_pfs3_volumes_own_report_reads_back_as_the_amiga_volume_source() {
         let dir = ScratchDir::new("art-firstboot-cardread", "pfs3-report");
         let image = card_with_partition(dir.path(), AmigaHardDiskFs::Pfs3DirectScsi, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         let tree = tree_with_report(dir.path(), b"art-firstboot 1\ndone all\n");
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -759,7 +759,7 @@ mod tests {
     fn a_formatted_amiga_volume_with_neither_copy_is_not_booted() {
         let dir = ScratchDir::new("art-firstboot-cardread", "neither-copy");
         let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         // Nothing copied in: an empty, freshly formatted volume, and no FAT
@@ -812,7 +812,7 @@ mod tests {
     fn a_card_whose_only_amiga_partition_is_corrupt_is_could_not_be_checked() {
         let dir = ScratchDir::new("art-firstboot-cardread", "ffs-corrupt-only");
         let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
         corrupt_root_block(&image, 0, 0);
@@ -839,16 +839,16 @@ mod tests {
     fn a_corrupt_first_partition_does_not_hide_a_good_report_on_the_second() {
         let dir = ScratchDir::new("art-firstboot-cardread", "ffs-corrupt-first");
         let image = card_with_two_partitions(dir.path(), 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 2, "Work", &NoProgress)
             .unwrap();
         corrupt_root_block(&image, 0, 0);
 
         let tree = tree_with_report(dir.path(), b"art-firstboot 1\ndone all\n");
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH1", &tree, &NoProgress)
             .unwrap();
 
@@ -880,13 +880,13 @@ mod tests {
     fn an_ffs_directory_named_like_the_report_is_not_read_as_one() {
         let dir = ScratchDir::new("art-firstboot-cardread", "ffs-report-is-dir");
         let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
 
         let tree = dir.path().join("tree");
         std::fs::create_dir_all(tree.join("S/FirstBoot.log")).unwrap(); // a directory
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -906,12 +906,12 @@ mod tests {
     fn an_intermediate_segment_that_is_a_file_is_not_walked_into() {
         let dir = ScratchDir::new("art-firstboot-cardread", "ffs-s-is-file");
         let image = card_with_partition(dir.path(), AmigaHardDiskFs::FfsStandard, 8);
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
             .unwrap();
 
         let tree = tree_with_s_as_a_file(dir.path());
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -984,11 +984,11 @@ mod tests {
         file.write_all(&rdb.blocks).unwrap();
         drop(file);
 
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&path, Some(area.slot_number()), 1, "Work", &NoProgress)
             .unwrap();
         let tree = tree_with_report(dir.path(), b"art-firstboot 1\ndone all\n");
-        NativeFormatter
+        NativeFormatter::UTC
             .copy_in(&path, Some(area.slot_number()), "DH0", &tree, &NoProgress)
             .unwrap();
 
@@ -1065,7 +1065,7 @@ mod tests {
         file.write_all(&rdb.blocks).unwrap();
         drop(file);
 
-        NativeFormatter
+        NativeFormatter::UTC
             .format_partition(&path, Some(area.slot_number()), 1, "Work", &NoProgress)
             .unwrap();
         corrupt_root_block(&path, 0, 0);
