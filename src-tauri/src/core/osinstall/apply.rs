@@ -2050,26 +2050,29 @@ pub fn add_package_staging_in(
     // one Produce enforces through `plan::detect_collisions`. Add has to
     // reach the same verdict on the same facts, or the two entry points
     // disagree about whether an install is allowed at all.
-    let (undeclared, unrecorded) = undeclared_overwrites(tree_root, package, &items, &manifest)?;
-    if !undeclared.is_empty() {
-        return Err(CoreError::SafetyRefused(format!(
-            "'{}' would write over {} file(s) it never declared it may replace: {} — a package overwrites only what its own `overrides` names",
-            package.id,
-            undeclared.len(),
-            some_of(&undeclared)
-        )));
+    let overwrites = undeclared_overwrites(tree_root, package, &items, &manifest)?;
+    if !overwrites.undeclared.is_empty() {
+        // The shipped catalogue names who replaces whom; a catalogue that
+        // cannot be read costs the better sentence, never the refusal.
+        let catalogue = super::package::packages().unwrap_or_default();
+        return Err(undeclared_refusal(
+            package,
+            &overwrites.undeclared,
+            &overwrites.owners,
+            &catalogue,
+        ));
     }
     // A different problem and a different sentence: these files are in the
     // tree and not in `distribution.json`, so nothing says who put them there
     // and ART cannot tell what it would be replacing. Telling the user to
     // declare an override would be the wrong instruction — there is no
     // component to declare one over.
-    if !unrecorded.is_empty() {
+    if !overwrites.unrecorded.is_empty() {
         return Err(CoreError::SafetyRefused(format!(
             "'{}' would write over {} file(s) that {MANIFEST_FILE_NAME} does not record: {} — ART cannot say what it would be replacing, so it replaces nothing",
             package.id,
-            unrecorded.len(),
-            some_of(&unrecorded)
+            overwrites.unrecorded.len(),
+            some_of(&overwrites.unrecorded)
         )));
     }
 
@@ -2292,14 +2295,14 @@ const VERSION_SEARCH_BOUND: u64 = 1024 * 1024;
 /// Directories are not claims — the same rule `detect_collisions` follows,
 /// where a coinciding `Subtree` destination is a merge point rather than an
 /// overwrite.
-#[allow(clippy::type_complexity)]
 fn undeclared_overwrites(
     tree_root: &Path,
     package: &super::package::Package,
     items: &[PlanItem],
     manifest: &DistributionManifest,
-) -> CoreResult<(Vec<String>, Vec<String>)> {
+) -> CoreResult<Overwrites> {
     let mut undeclared = Vec::new();
+    let mut owners: Vec<String> = Vec::new();
     let mut unrecorded = Vec::new();
     for item in items.iter().filter(|item| !item.is_dir) {
         // The host path, not the AmigaDOS one — a file the tree carries
@@ -2325,11 +2328,69 @@ fn undeclared_overwrites(
             // twice, which is a replacement, not a surprise.
             Some(owner) if owner == package.id => {}
             Some(owner) if package.component.overrides.iter().any(|over| over == owner) => {}
-            Some(_) => undeclared.push(item.to.clone()),
+            Some(owner) => {
+                undeclared.push(item.to.clone());
+                if !owners.iter().any(|o| o == owner) {
+                    owners.push(owner.to_string());
+                }
+            }
             None => unrecorded.push(item.to.clone()),
         }
     }
-    Ok((undeclared, unrecorded))
+    Ok(Overwrites {
+        undeclared,
+        owners,
+        unrecorded,
+    })
+}
+
+/// What [`undeclared_overwrites`] found: the files a package would write over
+/// without having declared it may, who owns them, and the files nothing in
+/// the tree's own manifest claims at all.
+struct Overwrites {
+    undeclared: Vec<String>,
+    /// The components `distribution.json` says own the undeclared files,
+    /// each once, in the order first met.
+    owners: Vec<String>,
+    unrecorded: Vec<String>,
+}
+
+/// The sentence for an overwrite `package` never declared (ART-300).
+///
+/// When a package that owns the files declares in its own `overrides` that
+/// it replaces `package`, the newer package is already in the tree and the
+/// honest answer is the order — the same declaration `chain`'s
+/// `OvertakenBy` row reads, through the same function. Otherwise the
+/// sentence is the one this refusal always had.
+fn undeclared_refusal(
+    package: &super::package::Package,
+    undeclared: &[String],
+    owners: &[String],
+    catalogue: &[super::package::Package],
+) -> CoreError {
+    let newer: Vec<&str> = super::package::overriders_of(catalogue, &package.id)
+        .into_iter()
+        .filter(|other| owners.iter().any(|owner| owner == &other.id))
+        .map(|other| other.name.as_str())
+        .collect();
+    if let Some(first) = newer.first() {
+        return CoreError::SafetyRefused(format!(
+            "'{}' is older than '{}', which is already in this tree and replaces it ({} file(s): {}) — add '{}' before '{}', or build the tree again without '{}'",
+            package.name,
+            newer.join("', '"),
+            undeclared.len(),
+            some_of(undeclared),
+            package.name,
+            first,
+            first
+        ));
+    }
+    CoreError::SafetyRefused(format!(
+        "'{}' would write over {} file(s) it never declared it may replace: {} — a package overwrites only what its own `overrides` names",
+        package.id,
+        undeclared.len(),
+        some_of(undeclared)
+    ))
 }
 
 /// At most this many paths are named in a refusal, with a count for the
@@ -6929,6 +6990,56 @@ mod tests {
             before,
             "a refused add writes nothing at all"
         );
+    }
+
+    /// ART-300. When the files belong to a package that declares it
+    /// overrides this one, the newer package is already in the tree: the
+    /// refusal says so and names the order, instead of reading as an
+    /// instruction to edit a recipe.
+    #[test]
+    fn an_older_package_over_a_newer_one_is_refused_with_the_order() {
+        let one = fixtures::package_test_package();
+        let two = fixtures::package_test_package_two();
+        let catalogue = vec![one.clone(), two.clone()];
+        let err = undeclared_refusal(
+            &one,
+            &[fixtures::OVERWRITTEN_PATH.to_string()],
+            std::slice::from_ref(&two.id),
+            &catalogue,
+        );
+        assert!(matches!(err, CoreError::SafetyRefused(_)), "got {err:?}");
+        let text = err.to_string();
+        assert!(
+            text.contains(&format!("'{}' is older than '{}'", one.name, two.name)),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("add '{}' before '{}'", one.name, two.name)),
+            "{text}"
+        );
+        assert!(
+            text.contains(fixtures::OVERWRITTEN_PATH),
+            "still names the file: {text}"
+        );
+        assert!(
+            !text.contains("overrides"),
+            "not an instruction to edit a recipe: {text}"
+        );
+    }
+
+    /// No declared overrider: the sentence is the one it was.
+    #[test]
+    fn an_undeclared_overwrite_with_no_newer_package_keeps_its_sentence() {
+        let one = fixtures::package_test_package();
+        let err = undeclared_refusal(
+            &one,
+            &[fixtures::OVERWRITTEN_PATH.to_string()],
+            &["base-c".to_string()],
+            std::slice::from_ref(&one),
+        );
+        let text = err.to_string();
+        assert!(text.contains("it never declared it may replace"), "{text}");
+        assert!(text.contains("overrides"), "{text}");
     }
 
     /// A file the manifest never recorded is undeclared too — most likely
