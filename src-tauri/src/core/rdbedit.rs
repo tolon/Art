@@ -781,6 +781,111 @@ pub fn plan_append(
     })
 }
 
+/// Replace the driver for a DosType this RDB carries once (decision 1): the
+/// new blocks are written above everything live, and one pointer moves from
+/// the old FSHD to the new one. The old FSHD and LSEGs stay on disk, unlinked.
+pub fn plan_replace(
+    range: &[u8],
+    walk: &StrictRdb,
+    dos_type: u32,
+    file_version: (u16, u16),
+    driver: &[u8],
+) -> Result<EditPlan, RdbEditRefusal> {
+    check_driver_bytes(driver)?;
+    let label = dos_type_string(dos_type);
+    let matching: Vec<usize> = walk
+        .fshds
+        .iter()
+        .enumerate()
+        .filter(|(_, fs)| fs.dos_type == dos_type)
+        .map(|(index, _)| index)
+        .collect();
+    let at = match matching.as_slice() {
+        [one] => *one,
+        [] => {
+            return Err(unaccounted(
+                walk.rdsk.block,
+                format!("this RDB carries no {label} driver to replace"),
+            ))
+        }
+        [_, second, ..] => {
+            return Err(unaccounted(
+                walk.fshds[*second].block,
+                format!("two FSHDs carry {label}, so ART cannot tell which one AmigaOS loads"),
+            ))
+        }
+    };
+    let old = &walk.fshds[at];
+    let allocation = allocate(range, walk, driver.len())?;
+    let k = allocation.fshd_block;
+
+    let data: Vec<BlockWrite> = build_lseg_chain(driver, k + 1)
+        .into_iter()
+        .enumerate()
+        .map(|(index, bytes)| BlockWrite {
+            block: k + 1 + index as u32,
+            bytes,
+        })
+        .collect();
+    let old_bytes = block_array(range, old.block).ok_or_else(|| missing(old.block))?;
+    let version = (u32::from(file_version.0) << 16) | u32::from(file_version.1);
+    let header = with_long(
+        &with_long(
+            &with_long(&old_bytes, NEXT, old.next),
+            FSHD_VERSION,
+            version,
+        ),
+        FSHD_SEG_LIST_BLOCKS,
+        k + 1,
+    );
+    let rdsk_block = walk.rdsk.block;
+    let rdsk = block_array(range, rdsk_block).ok_or_else(|| missing(rdsk_block))?;
+    let raised = raise_rdsk(&rdsk, &allocation);
+    let link = if at == 0 {
+        BlockWrite {
+            block: rdsk_block,
+            bytes: with_long(&raised, RDSK_FILE_SYS_HEADER_LIST, k),
+        }
+    } else {
+        let previous = &walk.fshds[at - 1];
+        BlockWrite {
+            block: previous.block,
+            bytes: with_long(
+                &block_array(range, previous.block).ok_or_else(|| missing(previous.block))?,
+                NEXT,
+                k,
+            ),
+        }
+    };
+
+    Ok(EditPlan {
+        kind: EditKind::Replace,
+        dos_type,
+        file_version,
+        card_version: Some((old.version, old.revision)),
+        replaced_fshd: Some(old.block),
+        allocation,
+        stages: vec![
+            (Stage::Data, data),
+            (
+                Stage::Header,
+                vec![BlockWrite {
+                    block: k,
+                    bytes: header,
+                }],
+            ),
+            (
+                Stage::HighRdsk,
+                vec![BlockWrite {
+                    block: rdsk_block,
+                    bytes: raised,
+                }],
+            ),
+            (Stage::Link, vec![link]),
+        ],
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod fixtures {
     //! Card shapes built byte by byte in the test. Nothing here is Amiga
@@ -1071,6 +1176,29 @@ pub(crate) mod fixtures {
         let mut range = layout.blocks;
         range.resize(WINDOW_BLOCKS as usize * BLOCK_SIZE, 0);
         range
+    }
+
+    /// The owner's geometry with two small drivers: FSHD 3 (LSEG 4–12) of
+    /// `first`, FSHD 13 (LSEG 14–22) of `second`; `HighRDSKBlock` 22.
+    pub fn two_drivers(first: u32, second: u32) -> Vec<u8> {
+        let spec = |dos_type: u32| FshdSpec {
+            dos_type,
+            version: (19, 2),
+            driver: hunk_driver(4096, "19.2"),
+            name: Some("L:driver"),
+            summed_longs: 128,
+        };
+        build(&Shape {
+            cylinders: 38_488,
+            heads: 12,
+            sectors: 256,
+            rdb_blocks_hi: 6143,
+            lo_cylinder: 2,
+            parts: vec![("SDH0", 2, 535, PDS3), ("SDH1", 536, 36_194, PDS3)],
+            fshds: vec![spec(first), spec(second)],
+            high_rdsk_block: None,
+            total_blocks: WINDOW_BLOCKS,
+        })
     }
 
     /// A plain image: the RDB at byte 0, zero-extended to `total_bytes`.
@@ -1945,5 +2073,105 @@ mod append_plan_tests {
         let high = &stage(&plan, Stage::HighRdsk)[0];
         assert_eq!(long(&high.bytes, RDSK_RDB_BLOCKS_HI), 130);
         assert_eq!(long(&high.bytes, RDSK_HIGH_RDSK_BLOCK), 130);
+    }
+}
+
+#[cfg(test)]
+mod replace_plan_tests {
+    use super::fixtures::*;
+    use super::*;
+    use crate::core::error::RdbEditRefusal;
+
+    fn replace(range: &[u8]) -> EditPlan {
+        plan_replace(
+            range,
+            &walk_strict(range).unwrap(),
+            PDS3,
+            (19, 3),
+            &hunk_driver(62_604, "19.3"),
+        )
+        .unwrap()
+    }
+
+    fn only(plan: &EditPlan, name: Stage) -> BlockWrite {
+        plan.stages.iter().find(|(s, _)| *s == name).unwrap().1[0].clone()
+    }
+
+    /// Decision 3: the new FSHD is the old one's 512 bytes with only `Next`,
+    /// `Version`, `SegListBlocks` and the checksum rewritten.
+    #[test]
+    fn a_replace_keeps_the_old_fshd_bytes_but_version_seg_list_and_checksum() {
+        let range = caffeine_like(true);
+        let plan = replace(&range);
+        assert_eq!(
+            (plan.kind, plan.card_version, plan.replaced_fshd),
+            (EditKind::Replace, Some((19, 2)), Some(3))
+        );
+        let header = only(&plan, Stage::Header);
+        assert_eq!(header.block, 132);
+        let old = block_array(&range, 3).unwrap();
+        for (at, (was, now)) in old.iter().zip(header.bytes.iter()).enumerate() {
+            let rewritten =
+                (8..12).contains(&at) || (36..40).contains(&at) || (72..76).contains(&at);
+            if !rewritten {
+                assert_eq!(was, now, "byte {at}");
+            }
+        }
+        assert_eq!(long(&header.bytes, FSHD_SEG_LIST_BLOCKS), 133);
+        assert_eq!(
+            long(&header.bytes, 1),
+            128,
+            "SummedLongs as the card had it"
+        );
+        let link = only(&plan, Stage::Link);
+        assert_eq!(
+            (link.block, long(&link.bytes, RDSK_FILE_SYS_HEADER_LIST)),
+            (0, 132)
+        );
+        assert!(
+            plan.blocks()
+                .iter()
+                .all(|b| *b == 0 || (132..=260).contains(b)),
+            "the old driver's blocks are not written"
+        );
+    }
+
+    #[test]
+    fn a_replace_after_another_driver_swaps_its_predecessors_next() {
+        let range = two_drivers(DOS3, PDS3);
+        let plan = replace(&range);
+        let link = only(&plan, Stage::Link);
+        assert_eq!((link.block, long(&link.bytes, NEXT)), (3, 23));
+        assert_eq!(long(&only(&plan, Stage::Header).bytes, NEXT), NO_BLOCK);
+    }
+
+    #[test]
+    fn a_replace_before_another_driver_carries_its_next() {
+        let range = two_drivers(PDS3, SFS0);
+        let plan = replace(&range);
+        assert_eq!(long(&only(&plan, Stage::Header).bytes, NEXT), 13);
+        let link = only(&plan, Stage::Link);
+        assert_eq!(
+            (link.block, long(&link.bytes, RDSK_FILE_SYS_HEADER_LIST)),
+            (0, 23)
+        );
+    }
+
+    #[test]
+    fn two_fshds_of_the_target_dostype_are_refused() {
+        let range = two_drivers(PDS3, PDS3);
+        let err = plan_replace(
+            &range,
+            &walk_strict(&range).unwrap(),
+            PDS3,
+            (19, 3),
+            &hunk_driver(62_604, "19.3"),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, RdbEditRefusal::Unaccounted { block: 13, .. }),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("two FSHDs carry PDS3"), "{err}");
     }
 }

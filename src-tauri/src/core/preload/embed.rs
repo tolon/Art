@@ -182,7 +182,7 @@ mod tests {
 
     use super::*;
     use crate::core::rdbedit::fixtures::*;
-    use crate::core::rdbedit::{block_at, plan_append, walk_strict, EditPlan, Stage};
+    use crate::core::rdbedit::{block_at, plan_append, plan_replace, walk_strict, EditPlan, Stage};
     use crate::core::volume::device::FileRegionMut;
     use crate::core::volume::journal::find_journal;
 
@@ -428,6 +428,144 @@ mod tests {
                     .unwrap()
                     .unwrap_or_else(|| panic!("{tag}: no journal"));
                 pending.roll_back().unwrap();
+                assert_eq!(
+                    read_range(&image, 0).unwrap(),
+                    range,
+                    "{tag}: the journal restores the pre-image"
+                );
+            }
+        }
+    }
+
+    fn replace_plan(range: &[u8]) -> (EditPlan, Vec<u8>) {
+        let driver = hunk_driver(62_604, "19.3");
+        let plan =
+            plan_replace(range, &walk_strict(range).unwrap(), PDS3, (19, 3), &driver).unwrap();
+        (plan, driver)
+    }
+
+    /// Spec Testing: 132–260 new; the old driver at 3–131, the stale copy at
+    /// 2048–2179 and the PFS3 blocks from 5120 byte-identical afterwards.
+    #[test]
+    fn a_replace_on_the_caffeine_shape_swaps_one_pointer_and_leaves_the_old_driver_where_it_was() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", "replace-caffeine");
+        let range = caffeine_like(true);
+        let image = write_image(&dir, &range, 16 * 1024 * 1024);
+        let (plan, driver) = replace_plan(&range);
+
+        let mut device = region(&image, 0, &plan);
+        write_journalled(
+            &mut device,
+            &image,
+            0,
+            &range,
+            &plan,
+            &driver,
+            "test replace",
+        )
+        .unwrap_or_else(|failure| panic!("{failure:?}"));
+        drop(device);
+
+        let after = read_range(&image, 0).unwrap();
+        for block in (1..16_384u32).filter(|b| !(132..=260).contains(b)) {
+            assert_eq!(
+                block_at(&after, block),
+                block_at(&range, block),
+                "block {block}"
+            );
+        }
+        let walked = walk_strict(&after).unwrap();
+        assert_eq!(
+            walked
+                .fshds
+                .iter()
+                .map(|f| (f.block, f.version, f.revision))
+                .collect::<Vec<_>>(),
+            vec![(132, 19, 3)]
+        );
+        assert_eq!(walked.fshds[0].payload, driver);
+        assert_eq!(&after[132 * 512 + 172..132 * 512 + 184], b"L:pfs3aio040");
+    }
+
+    #[test]
+    fn a_replace_on_an_art_built_card_raises_rdb_blocks_hi_to_259() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", "replace-art");
+        let range = art_like(true);
+        let image = write_image(&dir, &range, 64 * 1024 * 1024);
+        let (plan, driver) = replace_plan(&range);
+
+        let mut device = region(&image, 0, &plan);
+        write_journalled(
+            &mut device,
+            &image,
+            0,
+            &range,
+            &plan,
+            &driver,
+            "test replace",
+        )
+        .unwrap_or_else(|failure| panic!("{failure:?}"));
+        drop(device);
+
+        let walked = walk_strict(&read_range(&image, 0).unwrap()).unwrap();
+        assert_eq!(
+            (walked.rdsk.rdb_blocks_hi, walked.rdsk.high_rdsk_block),
+            (259, 259)
+        );
+        assert_eq!(walked.fshds[0].block, 131);
+        assert_eq!(walked.first_partition_block(), Some(2016));
+    }
+
+    #[test]
+    fn a_crash_after_any_replace_stage_leaves_a_valid_rdb_and_a_journal_that_restores_it() {
+        for (shape, range) in [
+            ("head", caffeine_like(true)),
+            ("after-dos3", two_drivers(DOS3, PDS3)),
+            ("raise", art_like(true)),
+        ] {
+            let old_chain: Vec<u32> = walk_strict(&range)
+                .unwrap()
+                .fshds
+                .iter()
+                .map(|f| f.block)
+                .collect();
+            for crash_after in [Stage::Data, Stage::Header, Stage::HighRdsk, Stage::Link] {
+                let tag = format!("crash-replace-{shape}-{crash_after:?}");
+                let (_guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", &tag);
+                let image = write_image(&dir, &range, 64 * 1024 * 1024);
+                let (plan, _) = replace_plan(&range);
+                crash_during(&image, 0, &plan, crash_after);
+
+                let after = read_range(&image, 0).unwrap();
+                let walked = walk_strict(&after).unwrap_or_else(|r| panic!("{tag}: {r}"));
+                assert!(
+                    walked
+                        .used
+                        .iter()
+                        .all(|b| *b <= walked.rdsk.high_rdsk_block),
+                    "{tag}"
+                );
+                let chain: Vec<u32> = walked.fshds.iter().map(|f| f.block).collect();
+                let expected: Vec<u32> = if crash_after < Stage::Link {
+                    old_chain.clone()
+                } else {
+                    old_chain
+                        .iter()
+                        .map(|b| {
+                            if Some(*b) == plan.replaced_fshd {
+                                plan.allocation.fshd_block
+                            } else {
+                                *b
+                            }
+                        })
+                        .collect()
+                };
+                assert_eq!(chain, expected, "{tag}");
+                find_journal(&image)
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{tag}: no journal"))
+                    .roll_back()
+                    .unwrap();
                 assert_eq!(
                     read_range(&image, 0).unwrap(),
                     range,
