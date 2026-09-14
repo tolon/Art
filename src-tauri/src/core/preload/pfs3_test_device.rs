@@ -12,7 +12,11 @@
 //! which refuses by sector, this refuses every `write_block`/`write_blocks`
 //! call from a chosen call number on — the shape a commit failing part-way
 //! through needs, since the failing write is not necessarily near the
-//! partition's end.
+//! partition's end. **Unreadable on demand** with [`MemDevice::fail_reads`]
+//! (ART-319, M1 final review): once armed, every `read_block`/`read_blocks`
+//! call fails from then on, whatever `end` or `fail_from_write` say — the
+//! shape a reload needs when the device that held the last commit can no
+//! longer even be read back.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -31,6 +35,10 @@ pub(crate) struct MemDevice {
     /// (1-indexed, against `write_count`) at and after which every write is
     /// refused.
     fail_from_write: Arc<Mutex<Option<u64>>>,
+    /// ART-319 (M1, final review): armed by [`MemDevice::fail_reads`] —
+    /// once set, every `read_block`/`read_blocks` call fails, independent
+    /// of `end` and `fail_from_write`, which affect only writes.
+    reads_fail: Arc<Mutex<bool>>,
 }
 
 impl MemDevice {
@@ -46,7 +54,12 @@ impl MemDevice {
         }
     }
 
-    /// Every sector a write was refused at, in order.
+    /// Every sector a write was refused at, in order. A `with_end` refusal
+    /// records the specific out-of-range sector; a `fail_from_write`
+    /// refusal (M4, final review) records only the call's first block —
+    /// the `block` argument the refused `write_block`/`write_blocks` call
+    /// was made with — not every sector that call would otherwise have
+    /// written.
     pub(crate) fn refused(&self) -> Vec<u64> {
         self.refused.lock().unwrap().clone()
     }
@@ -69,6 +82,15 @@ impl MemDevice {
     /// partition's end.
     pub(crate) fn fail_from_write(&self, at: u64) {
         *self.fail_from_write.lock().unwrap() = Some(at);
+    }
+
+    /// ART-319 (M1, final review): from this call on, every
+    /// `read_block`/`read_blocks` call fails — the shape a reload needs
+    /// when the device that held the last commit can no longer even be
+    /// read back (independent of `with_end`/`fail_from_write`, which
+    /// affect only writes).
+    pub(crate) fn fail_reads(&self) {
+        *self.reads_fail.lock().unwrap() = true;
     }
 
     /// `len` bytes from `sector` on; a sector never written reads as zeros.
@@ -95,11 +117,21 @@ impl MemDevice {
 
 impl libpfs3::io::BlockDevice for MemDevice {
     fn read_block(&self, block: u64, buf: &mut [u8]) -> Result<()> {
+        if *self.reads_fail.lock().unwrap() {
+            return Err(Error::Io(std::io::Error::other(
+                "device unreadable (MemDevice::fail_reads, test)",
+            )));
+        }
         buf.copy_from_slice(&self.read(block, buf.len()));
         Ok(())
     }
 
     fn read_blocks(&self, block: u64, count: u32, buf: &mut [u8]) -> Result<()> {
+        if *self.reads_fail.lock().unwrap() {
+            return Err(Error::Io(std::io::Error::other(
+                "device unreadable (MemDevice::fail_reads, test)",
+            )));
+        }
         let len = count as usize * 512;
         buf[..len].copy_from_slice(&self.read(block, len));
         Ok(())

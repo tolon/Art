@@ -69,9 +69,14 @@ pub struct Writer {
     /// ART-319: set when a commit itself (`update_rootblock`, or
     /// `set_volume_name`'s own direct write) failed part-way — the device may
     /// already be half-written, since a pending write lands in place, not
-    /// copy-on-write (M5). Once set, every later public mutating call
-    /// refuses immediately with `Error::CommitFailed`, before touching
-    /// anything; nothing clears it — the caller must reopen the volume.
+    /// copy-on-write (M5) — or when `discard_to_last_commit`'s own reload
+    /// could not even read the device back (M1, final review), leaving
+    /// nothing safe to fall back to. Once set, every later public mutating
+    /// call refuses immediately with `Error::CommitFailed`, before touching
+    /// anything; nothing clears it — the caller must reopen the volume, by
+    /// building a new `Volume` from the device, not by calling `Writer::open`
+    /// on the `Volume` `into_volume` hands back, which still holds this
+    /// failed attempt's in-memory state (M2, final review).
     poisoned: bool,
 }
 
@@ -125,7 +130,14 @@ impl Writer {
         Ok(w)
     }
 
-    /// Consume the writer and return the underlying volume.
+    /// Consume the writer and return the underlying volume. **M2 (final
+    /// review): if this writer is locked (`self.poisoned`), the `Volume`
+    /// returned here still holds the failed attempt's own in-memory
+    /// rootblock and other state** — `Writer::open` on it has no lock of its
+    /// own and its next commit would write those values. Reopening a locked
+    /// volume means building a fresh `Volume` from the device
+    /// (`Volume::from_device` / `open*`), not calling `Writer::open` on the
+    /// value this returns.
     pub fn into_volume(self) -> Volume {
         self.vol
     }
@@ -180,6 +192,16 @@ impl Writer {
     /// twice reads the identical, still-current state a second time, and an
     /// inner call that already committed (its own `update_rootblock` ran) is
     /// simply what "the last commit" now is for the outer discard to reload.
+    /// Research (`D:\Projeler\Amiga\scratch-0913\art319-pfs3aio-research.md`,
+    /// pfs3aio `211f7f0`): pfs3aio publishes state only at its own commit
+    /// point, the root block write (`update.c:265-270`), and on a failed
+    /// commit explicitly reverses the in-memory bitmap changes it had staged
+    /// (`UndoFreeList`, `update.c:311-328`; the deferred-free list itself,
+    /// `allocation.c:765-799`, with its intent stated in the comment at
+    /// `allocation.c:741-745`) rather than re-reading the disk — this
+    /// crate's writer discards by re-reading instead, because every write of
+    /// this writer already goes through `pending_writes` and only reaches
+    /// disk at that same commit point (see `discard_to_last_commit` below).
     fn guarded<T>(&mut self, op: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
         if self.poisoned {
             return Err(Error::CommitFailed);
@@ -199,12 +221,17 @@ impl Writer {
     /// `move_to_deldir` staging an entry and then `free_data_blocks`
     /// failing) has therefore changed nothing on disk, so reloading from the
     /// device discards exactly the failed attempt's in-memory half-state and
-    /// nothing else. `datestamp` is kept, monotonic, rather than reloaded —
-    /// the disk's own counter can only be lower or equal; `anode_roving`
-    /// (a hint) and `entry_date` (caller-set) are left untouched. If the
-    /// device cannot even be re-read here, there is nothing safe left to
-    /// fall back to, so this locks the writer instead of leaving it running
-    /// on state it could not refresh.
+    /// nothing else — the same commit-point discipline pfs3aio's own
+    /// `UpdateDisk`/`UndoFreeList` keeps (`update.c:265-270,311-328`,
+    /// `allocation.c:741-799`; see `guarded`'s own comment above). `datestamp`
+    /// is kept, monotonic, rather than reloaded — the disk's own counter can
+    /// only be lower or equal; `anode_roving` (a hint) and `entry_date`
+    /// (caller-set) are left untouched. **If the device cannot even be
+    /// re-read here, there is nothing safe left to fall back to, so this
+    /// locks the writer instead of leaving it running on state it could not
+    /// refresh (M1, final review) — even when the operation that triggered
+    /// this discard never itself touched the device** (a refusal that fires
+    /// before any I/O, e.g. `check_name_len`).
     fn discard_to_last_commit(&mut self) {
         self.pending_writes.clear();
         if self.vol.reload().is_err() {

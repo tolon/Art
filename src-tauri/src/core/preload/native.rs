@@ -3931,6 +3931,105 @@ mod tests {
         );
     }
 
+    /// **ART-319 (I2, final review).** `set_volume_name` writes the
+    /// rootblock cluster directly — its own commit point, not routed
+    /// through `update_rootblock` — so a failure there had no test of its
+    /// own lock behaviour (unlike `repair_blocksfree` above, which goes
+    /// through `update_rootblock`). The locking code already exists
+    /// (`set_volume_name_impl`'s own `self.poisoned = true;`), so this test
+    /// passes unchanged; its guard is proven by mutation instead (ISSUES).
+    #[test]
+    fn a_failed_pfs3_set_volume_name_locks_the_writer() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+
+        // Arm the device to refuse the very next write — `set_volume_name`'s
+        // own rootblock-cluster write, its one write.
+        let before = dev.write_count();
+        dev.fail_from_write(before + 1);
+
+        let err = w.set_volume_name("NewName").unwrap_err();
+        assert!(
+            matches!(err, libpfs3::error::Error::BlockOutOfRange(_)),
+            "expected set_volume_name's own write to be refused, got: {err}"
+        );
+        let after_first = dev.write_count();
+        assert_eq!(
+            after_first,
+            before + 1,
+            "set_volume_name's own write did not even reach the device"
+        );
+
+        let err2 = w.repair_blocksfree(7).unwrap_err();
+        assert!(
+            matches!(err2, libpfs3::error::Error::CommitFailed),
+            "the next operation must return the lock error, got: {err2}"
+        );
+        assert_eq!(
+            dev.write_count(),
+            after_first,
+            "the device received a write after the writer should have locked"
+        );
+    }
+
+    /// **ART-319 (M1, final review).** An operation that fails before any
+    /// device I/O at all — a name over the volume's own limit,
+    /// `check_name_len`, checked before `find_dir_entry` or any
+    /// allocation — still runs through `guarded`'s discard, which rebuilds
+    /// the writer's state from the device (`Volume::reload`). If the
+    /// device has gone unreadable by the time that reload runs, there is
+    /// nothing safe left to fall back to, so the writer must lock instead
+    /// of carrying on over state it could not refresh — even though this
+    /// particular failed call touched the device not at all. The locking
+    /// code already exists (`discard_to_last_commit`'s own
+    /// `self.poisoned = true;` on a failed `self.vol.reload()`), so this
+    /// test passes unchanged; its guard is proven by mutation instead
+    /// (ISSUES).
+    #[test]
+    fn a_reload_that_cannot_read_the_device_locks_the_writer() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+
+        // Armed only now — after `Writer::open`'s own reads, so the writer
+        // opened cleanly and this is the device going unreadable partway
+        // through the session, not from the start.
+        dev.fail_reads();
+
+        let before = dev.write_count();
+        let long_name = "x".repeat(200);
+        let err = w
+            .write_file_in(libpfs3::ondisk::ANODE_ROOTDIR, &long_name, b"data")
+            .unwrap_err();
+        assert!(
+            matches!(err, libpfs3::error::Error::NameTooLong { .. }),
+            "expected the name-length refusal, before any device I/O, got: {err}"
+        );
+        assert_eq!(
+            dev.write_count(),
+            before,
+            "the failed write must not itself have reached the device"
+        );
+
+        let err2 = w.repair_blocksfree(7).unwrap_err();
+        assert!(
+            matches!(err2, libpfs3::error::Error::CommitFailed),
+            "the reload's own read failure must lock the writer, got: {err2}"
+        );
+        assert_eq!(
+            dev.write_count(),
+            before,
+            "a locked writer must refuse before touching the device"
+        );
+    }
+
     /// **ART-319.** The lock error reaches the user as a readable sentence
     /// that says what to do — reopen and check the volume — not
     /// "malformed pfs3: ...", which would point someone at the wrong

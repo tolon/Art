@@ -249,15 +249,25 @@ pub enum CoreError {
     )]
     PayloadPasswordRefused { archive: String },
 
-    /// ART-319: `libpfs3::error::Error::CommitFailed` — a PFS3 commit failed
-    /// part-way through and the writer session has locked itself rather than
-    /// risk continuing on a device that may be half-written. **Its own
-    /// ending, not a `Malformed`**, for the same reason `PayloadPasswordRefused`
-    /// is: the volume is not necessarily damaged, and the fix ("reopen it")
-    /// is different from what a "this file is corrupt" sentence would tell
-    /// someone to do.
+    /// ART-319: `libpfs3::error::Error::CommitFailed` — the PFS3 writer that
+    /// made this call is locked: either its own commit failed part-way
+    /// through, or an earlier call's did (or an earlier call's recovery
+    /// attempt could not even read the device back, M1) and this is a
+    /// *later* call on that same, already-locked writer
+    /// (`vendor/libpfs3/src/writer.rs::guarded`) — never the call whose
+    /// commit actually failed, which returns its own original error
+    /// unchanged. **Its own ending, not a `Malformed`**, for the same reason
+    /// `PayloadPasswordRefused` is: the volume is not necessarily damaged,
+    /// and the fix ("reopen it") is different from what a "this file is
+    /// corrupt" sentence would tell someone to do. Reopening means building
+    /// a new volume from the device, not reusing the one a locked writer's
+    /// `into_volume` hands back (M2). **ART does not produce this today**
+    /// (final review, I1): `copy_in_pfs3` (`core/preload/native.rs`) returns
+    /// at its first `?` on every writer call, so it never makes the second,
+    /// already-locked call that would surface it — see ART-319 in
+    /// `docs/ISSUES.md`.
     #[error(
-        "this PFS3 volume's last write failed part-way through and may be half-written: \
+        "a write to this PFS3 volume failed and ART could not confirm what is on the disk: \
          reopen it (and check it) before writing to it again"
     )]
     Pfs3WriterLocked,
