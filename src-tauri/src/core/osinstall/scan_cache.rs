@@ -206,6 +206,14 @@ struct CacheFile {
     /// into it.
     #[serde(default)]
     md5: Option<String>,
+    /// The medium's SHA-256, when `scan::dedupe_identical_disks` has read
+    /// it (ART-302). Unlike `md5` this one *is* an identity check: two discs
+    /// with the same name and size are one disc only when these agree.
+    /// Optional and `#[serde(default)]` without a schema bump, the way `md5`
+    /// arrived: a schema-2 entry written before this field parses as `None`
+    /// and keeps its listing and MD5.
+    #[serde(default)]
+    sha256: Option<String>,
 }
 
 /// One medium's listing, exactly as it was read off the medium.
@@ -340,6 +348,12 @@ impl ScanCache {
         self.read_valid(media_path)?.md5
     }
 
+    /// The SHA-256 recorded for `media_path`, if this medium is still the
+    /// one it was recorded for and something has hashed it.
+    pub fn lookup_sha256(&self, media_path: &Path) -> Option<String> {
+        self.read_valid(media_path)?.sha256
+    }
+
     /// Record `listing` as what `media_path` held, keeping whatever hash is
     /// already recorded for it.
     pub fn store(&self, media_path: &Path, listing: &CachedListing) {
@@ -357,6 +371,12 @@ impl ScanCache {
     /// already recorded for it.
     pub fn store_md5(&self, media_path: &Path, md5: &str) {
         self.store_with(media_path, |entry| entry.md5 = Some(md5.to_string()));
+    }
+
+    /// Record `sha256` as `media_path`'s content hash, keeping whatever
+    /// listing and MD5 are already recorded for it.
+    pub fn store_sha256(&self, media_path: &Path, sha256: &str) {
+        self.store_with(media_path, |entry| entry.sha256 = Some(sha256.to_string()));
     }
 
     /// Update this medium's entry, keyed on the identity it has **now**, and
@@ -397,6 +417,7 @@ impl ScanCache {
             mtime_nanos: identity.mtime_nanos,
             listing: None,
             md5: None,
+            sha256: None,
         });
         update(&mut payload);
         let Ok(bytes) = serde_json::to_vec(&payload) else {
@@ -700,6 +721,69 @@ mod tests {
         std::fs::write(&image, &bytes).unwrap();
         filetime_set(&image, stamp);
         assert_eq!(cache.lookup_md5(&image), None);
+    }
+
+    /// ART-302. A disc's SHA-256 outlives the process, keyed on the same
+    /// identity as the listing and the MD5, and a replaced medium has none.
+    #[test]
+    fn a_stored_sha256_comes_back_and_a_replaced_medium_has_none() {
+        let (_guard, dir) = fixtures::scratch("sha256-roundtrip");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+
+        assert_eq!(cache.lookup_sha256(&medium), None, "nothing hashed yet");
+        cache.store_sha256(&medium, "abc123");
+        assert_eq!(cache.lookup_sha256(&medium).as_deref(), Some("abc123"));
+
+        std::fs::write(&medium, vec![8u8; 8192]).unwrap();
+        assert_eq!(
+            cache.lookup_sha256(&medium),
+            None,
+            "a replaced medium is a miss"
+        );
+    }
+
+    /// The three facts share one entry: storing a SHA-256 keeps the MD5 and
+    /// the listing a previous pass paid for.
+    #[test]
+    fn a_sha256_does_not_evict_the_md5_stored_beside_it() {
+        let (_guard, dir) = fixtures::scratch("sha256-merge");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        cache.store_md5(&medium, "md5value");
+        cache.store_sha256(&medium, "shavalue");
+        assert_eq!(cache.lookup_md5(&medium).as_deref(), Some("md5value"));
+        assert_eq!(cache.lookup_sha256(&medium).as_deref(), Some("shavalue"));
+    }
+
+    /// A schema-2 entry written before the field existed still loads.
+    #[test]
+    fn an_entry_written_before_sha256_existed_still_serves_its_md5() {
+        let (_guard, dir) = fixtures::scratch("sha256-old-entry");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::in_dir(dir.join("cache"));
+        cache.store_md5(&medium, "md5value");
+        let file = cache.file_for(&medium).unwrap();
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        json.as_object_mut().unwrap().remove("sha256");
+        std::fs::write(&file, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert_eq!(cache.lookup_md5(&medium).as_deref(), Some("md5value"));
+        assert_eq!(cache.lookup_sha256(&medium), None);
+    }
+
+    #[test]
+    fn a_cache_that_is_off_neither_reads_nor_writes_a_sha256() {
+        let (_guard, dir) = fixtures::scratch("sha256-off");
+        let medium = dir.join("disc.iso");
+        std::fs::write(&medium, vec![7u8; 4096]).unwrap();
+        let cache = ScanCache::off();
+        cache.store_sha256(&medium, "abc");
+        assert_eq!(cache.lookup_sha256(&medium), None);
     }
 
     /// **One entry, two facts, and neither evicts the other.**
