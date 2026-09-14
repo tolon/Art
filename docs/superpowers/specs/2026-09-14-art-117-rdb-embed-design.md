@@ -10,7 +10,9 @@ to the six-section design (`.superpowers/sdd/2026-09-14-debt-2-round/art117-desi
 
 *Amended 2026-09-14, after approval, with one further owner decision: ART may raise `rdb_RDBBlocksHi` over zero
 blocks when the reserved range has no room (decision 12). That replaces the open question this spec ended with; the
-places it touches (decisions 2, 6, 7, 8, Testing, Accepted limits) say so. Tree facts re-read at `62b5e63`.*
+places it touches (decisions 2, 6, 7, 8, Testing, Accepted limits) say so. Tree facts re-read at `62b5e63`. A second
+ruling of the same day, on the question the plan raised, is decision 13: a replace is refused unless both drivers
+name the same program.*
 
 **The problem.** `NativeFormatter::import_filesystem` refuses every card (`core/preload/native.rs:171-186`, reasoning
 `:29-51`) with `CoreError::ForeignRdbEmbedNotSupported` (`core/error.rs:151-158`, code `ART-NATIVE-EMBED-UNSUPPORTED`
@@ -118,6 +120,7 @@ Not on a chain does not mean zero.
    | append, no `$VER:` | `DRIVER-NO-VERSION` | why a version matters (`rdb.rs:117-126`) |
    | dynamic VHD | `DYNAMIC-VHD` | ART edits a raw card or HDF only: a write can grow a dynamic VHD, and the journal identifies its image by size (`core/volume/journal.rs:37-44`); detected by `read_card`'s footer cookie (`core/card/mod.rs:136-148`) |
    | journal pending beside the image | `JOURNAL-PENDING` | the journal's path; undo it first, as `commands/volume_write.rs:132-141` says for a volume |
+   | replace across different programs, or a card driver with no `$VER:` name (decision 13) | `DIFFERENT-DRIVER` | both program names, or that the card driver's is unknown; hst-imager can replace it |
    | no backup location | `NO-BACKUP` | choose where the RDB backup goes |
    | backup file exists | `BACKUP-EXISTS` | the path; ART never overwrites a file (SAFE_CREATE) |
 
@@ -226,6 +229,28 @@ Not on a chain does not mean zero.
       ART never wrote as hardblocks. A separate RDSK write for `RDBBlocksHi` — a fifth stage to test for nothing, since
       an over-high `RDBBlocksHi` over written blocks is as harmless as an over-high `HighRDSKBlock`.
 
+13. **A replace needs the same driver on both sides** — the owner's ruling of 2026-09-14 on the question the plan
+    raised.
+    - **Why.** Decision 1 compares versions and nothing else, and the chosen file is a remembered choice
+      (`src/lib/preload.ts:26-40`). With `pfs3aio` 19.3 chosen and an `SFS\0` partition picked, SmartFilesystem 1.293
+      compares `(1, 293) < (19, 3)` and would be replaced by a PFS3 driver under an `SFS\0` header.
+    - **The rule.** A driver's program name is the first token after `$VER:`, split on whitespace and NUL, within the
+      200 bytes `version_from_ver_string` reads (`rdb.rs:129-169`); a token that starts with a digit and holds a dot
+      is a version, not a name. It is read from the chosen file, and from the card driver's LSEG payload — the bytes
+      the strict walk already collects (decision 5). Names are compared ignoring ASCII case. A replace is refused with
+      `DIFFERENT-DRIVER` — `RdbEditRefusal::DifferentDriver { card: Option<String>, file: String }` — when the names
+      differ, or when the card driver has no readable name. The plan note is `PlanNote::DifferentDriver`.
+    - A chosen file with no `$VER:` is not this refusal: it is decision 1's "no `$VER:` plans no step".
+    - **Order.** Checked in the read-only half after the strict walk and **before** the version comparison, so a
+      different driver is never reported as merely "not newer".
+    - **Reported** as a plan note, like every replace refusal (decision 6): both names, or that the card driver's
+      name is unknown, and that hst-imager can replace it.
+    - **An append is not affected**: there is no card driver to compare with.
+    - **Cost, accepted:** a driver whose program name changed between releases cannot be replaced by ART.
+    - *Rejected:* comparing `fhb_FileSysName` — optional, and ART's own cards write none (`rdb.rs:1022-1067`).
+      Comparing hunk bytes or sizes — every release differs. An override on the screen — a remembered path is not
+      proof of intent (decision 6).
+
 ## Where it lives
 
 `core/` stays std-only. New edges only point down: `core/preload` already imports `card`, `rdb`, `volume` and `safety`
@@ -262,6 +287,9 @@ imports only `adf::bcpl` and `error` (`:9-10`).
 - **The raise (decision 12)**: an ART-shaped replace lands at 131–259 with `RDBBlocksHi` 259; one test per refusal —
   a non-zero block above `RDBBlocksHi`, each of the three partition-area bounds on its own, the 8 MiB window — each
   asserting the `NO-ROOM` sentence names the bound; and a crash after S3 on a raising edit still walks.
+- **Different drivers (decision 13)**: an `SFS\0` driver on the card against a `pfs3aio` file, whose versions alone
+  would replace it; a card driver with no `$VER:`; a difference in case only, which still replaces; and the plan note
+  carrying both names.
 - **One test per refusal** in the table, each asserting the variant **and** its sentence, never merely `is_err()`.
 - **Crash points.** A test `BlockDeviceMut` that stops after stage *s* (1–4) without rollback, as a crash would. After
   each: the strict walk passes; before S4 the chain is the old one byte for byte, after S4 the new one; PARTs unchanged;
@@ -271,7 +299,8 @@ imports only `adf::bcpl` and `error` (`:9-10`).
 - **Mutations, disclosed with survivors**: link before data (S4 first); `HighRDSKBlock` raised after the commit; the
   `RDBBlocksHi` bound; the partition bound; `DriveInit` dropped from the used set; checksum enforcement off; `create_new`
   replaced by `create`; the backup written after the first RDB write; `>` made `>=`; the zeroed tail; the builders'
-  byte-identical guard; the raise's zero check; each of its three partition-area bounds; the raise left out of S3.
+  byte-identical guard; the raise's zero check; each of its three partition-area bounds; the raise left out of S3;
+  the program-name check skipped; a case-sensitive name comparison; a card driver with no name let through.
   `cargo test` run more than once before merging.
 - **Frontend**: `preload.test.ts` for the blocker, phrases and `toRequest`; a jsdom `VolumePreload.test.tsx` that Run is
   disabled until a backup path is chosen and that the replace step shows both versions.
@@ -304,6 +333,8 @@ imports only `adf::bcpl` and `error` (`:9-10`).
   `rdb restore` accepts it is unverified (its own backup looks one block short, R §5 [11]).
 - A crash after S4 but before `commit` rolls a complete edit back on recovery. Conservative, and still a valid RDB.
 - BADB lists, dynamic VHDs and archived drivers are refused, not handled.
+- **A renamed driver cannot be replaced by ART** (decision 13), and neither can a card driver that states no
+  `$VER:` name; both are notes that name hst-imager.
 - **The committed `rdbdump.py` scans unlinked blocks only up to 4096** (its `scan_top`), so it reproduces the copy at
   2048 but not the PFS3 blocks from 5120; the research does not record how that count was made.
 - **Owed by the owner**: mounting both PDS partitions from the edited copy in WinUAE or on a PiStorm, and asking the
