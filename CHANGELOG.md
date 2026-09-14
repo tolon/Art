@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Files screen's empty-pane text no longer clips in Turkish at 1024x768.** "Hiçbir şey açık değil" is now
+  "Açık bir şey yok".
 - **The job bar names each job in the language you chose.** Titles such as
   "Adding 1 package(s) to …" were English on a Turkish screen and counted
   with "(s)"; they now read, for example, "Work.hdf içine 1 paket ekleniyor",

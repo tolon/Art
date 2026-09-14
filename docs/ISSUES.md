@@ -78,32 +78,43 @@ than a dead end.
 Revisit only if someone actually meets the case and `hst-imager` cannot serve
 it — not before.
 
-**ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~1900 keys have not** (1916 leaf keys as of 2026-09-04 — count them, the figures written into this entry have been overtaken twice)
+**ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~2200 keys have not** (2262 leaf keys as of 2026-09-14 — count them, the figures written into this entry have been overtaken repeatedly). **Mechanical part done 2026-09-14** on `art-debt-2-0914` — the one string this table's original rows could still name and reach without a backend was measured, found clipped, and fixed; **stays open**, see "What remains" below.
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
 by opening the running application and looking at a screen. Several Turkish
 strings are substantially longer than their English originals and sit in tight
-controls, so the check that remains is visual, not automatable:
+controls, so the check that remains is visual, not automatable in general —
+though a plain browser, off Tauri, can now measure the screens that need no
+backend (below).
 
-| Key | English | Turkish | Growth |
-|---|---|---|---|
-| `pistorm.saveSync` | "Save & Sync PiStorm SD" | "PiStorm SD'yi Kaydet ve Eşitle" | +36% |
-| `hardDisk.bootablePri` | "Bootable (Pri {{n}})" | "Önyüklenebilir (Öncelik {{n}})" | +50% |
-| `pistorm.profile.classic.badge` | "Cycle-Exact & Demos" | "Çevrim Hassasiyetli ve Demolar" | +58% |
-| FileManager function-key label | "View" | "Görüntüle" | 4 → 9 characters |
-| FileManager function-key label | "Grid" | "Izgara" | +50% |
-| job status | "Done" | "Tamamlandı" | +150% |
-| job status | "Failed" | "Başarısız" | +50% |
+**This table had decayed.** Read against the live catalogue (`src/i18n/tr.json`, `src/i18n/en.json`) and the current
+source on 2026-09-14, two of its four original rows named a key or a control that no longer exists:
 
-The function-key bar (`src/components/files/FunctionKeys.tsx`) was inspected
-in source rather than run: its container carries `flexWrap: "wrap"` and each
-button `flex: "1 1 90px"`, and `.btn` in `src/styles/global.css` carries no
-`text-overflow` rule (only `.file-row-name` does), so the bar should wrap
-rather than clip. That makes it the most likely of the rows above to look
-merely cramped rather than the most likely to break outright — but nobody has
-looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
-language switched to Turkish, working through PiStorm, the hard disk screen,
-and the Files function-key bar at a few window widths.
+| ART-062 row | Status, 2026-09-14 |
+|---|---|
+| `pistorm.saveSync` — "Save & Sync PiStorm SD" | **Gone.** No such key exists in either catalogue. The nearest surviving string is `gotek.saveSync` = "USB'ye Kaydet ve Eşitle" (EN "Save & Sync to USB"), on the **Gotek** screen, not PiStorm (`src/pages/GotekStudio.tsx:156`). It is gated behind `drivePath` — the button is not in the DOM until a USB folder is picked via a native Tauri file dialog — so a plain browser cannot reach it. Unmeasured. |
+| `hardDisk.bootablePri` — "Bootable (Pri {{n}})" | **Real key** (`src/i18n/tr.json:640`, "Önyüklenebilir (Öncelik {{n}})"), but renders only when `p.bootable` is true on a real RDB partition (`src/pages/HardDiskStudio.tsx:492,690`), which needs the Rust core to have actually analyzed a card or disk image. Unmeasured — needs a live Tauri session with a loaded card. |
+| `pistorm.profile.classic.badge` — "Cycle-Exact & Demos" | **Gone.** There is no "classic" PiStorm profile and no per-profile `.badge` field any more; `PistormStudio.tsx`'s `PROFILES` are now `["performance", "daily", "compatibility", "diagnostics"]`, each with only `.title`/`.description`. No key under `pistorm.profile.*.badge` and no string reading "Cycle-Exact"/"Demos" (or their Turkish) exists anywhere in either catalogue. |
+| FileManager function-key "View" → "Görüntüle" | **Real and live.** `files.functionKeys.view`, measured 2026-09-14 in a real browser at 1280x800/1024x768/960x768, both languages: 0 overflow hits at any width. |
+| FileManager function-key "Grid" → "Izgara" | **Wrong screen.** There is no grid/list function key in FileManager (`files.functionKeys` has only `view/edit/copy/move/rename/newFolder/delete/attributes`). The string lives at `collection.toolbar.gridView`, a **Collection Studio** toolbar button instead — measured there 2026-09-14, both languages, all three widths: 0 hits. |
+| job status "Done" / "Failed" | **Unmeasurable off Tauri.** `JobBar` (`src/components/JobBar.tsx:90`) renders `null` with no running or notable job — nothing is in the tree to measure without a real background job, which needs the Rust core. |
+
+**Browser measurement, 2026-09-14** (`scripts/tr-overflow-check.py`, headless Chrome against `pnpm dev`,
+`D:\Projeler\Amiga\scratch-0913\art062-overflow.md` is the full working note): every top-level route in
+`src/App.tsx`'s router (16 routes), at 1280x800, 1024x768 and 960x768 (the shell's own `minWidth`,
+`src-tauri/tauri.conf.json`), Turkish against an English control in the same mounted tree — 48 (route x width)
+runs, 0 crashes, 0 both-languages hits. **One real Turkish-only clip**, found and fixed: `files.pane.nothingOpen`
+("Nothing open" → "Hiçbir şey açık değil", +83%) clipped 10px in `.tc-path-text` (`src/pages/FileManager.tsx:4680`),
+**1024x768 only** — not 1280, and, non-monotonically, not 960 either (the pane has more room at 960 than at 1024;
+not investigated further, recorded as measured). Shortened to **"Açık bir şey yok"** (the owner's choice; `en.json`
+unchanged). **Re-run after the fix, same command:** 48 runs, 0 errors, 0 crashes, Turkish-only list empty at every
+route and width. This sweep only reaches screens and controls that render with no backend — most of the 2262 keys,
+and every row in the table above that needs a loaded disk image, a scanned drive or a running job, are outside what
+it could exercise.
+
+**What remains, for a person:** reading the Turkish catalogue itself (2262 keys, a handful read so far — see
+below) and the two rows above still marked unmeasured (`hardDisk.bootablePri`, job status "Done"/"Failed"), both
+of which need a real backend session rather than a plain browser.
 
 **First real evidence, 2026-08-21.** The owner drove the release build, chose
 an old title, and read the new WHDLoad refusal on screen **in Turkish**: *"…bu
