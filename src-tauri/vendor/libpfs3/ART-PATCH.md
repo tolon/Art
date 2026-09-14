@@ -158,8 +158,12 @@ Everything else in the writer is 0.1.3's.
     `write_reserved` into `pending_writes`, only reaching disk in `update_rootblock`'s
     `flush_pending`, the device already holds exactly the last commit for this to read back —
     unlike pfs3aio, which checks free space before allocating and defers every free to its own
-    commit point (`allocation.c:242-243,600-608,730`), this crate's writer has neither, so it
-    discards instead. If the failure came from inside the commit itself —
+    commit point (`allocation.c:242-243,600-608,730`) — the root block write, last, is that
+    commit point (`update.c:265-270`) — and, on a failed commit, explicitly undoes the staged
+    frees rather than re-reading disk (`UndoFreeList`, `update.c:311-328`; the deferred-free list
+    itself, `allocation.c:765-799`, its intent stated in the comment at `allocation.c:741-745`) —
+    this crate's writer has neither a check-first nor a deferred-free, so it discards instead. If
+    the failure came from inside the commit itself —
     `update_rootblock`'s own rext write, `flush_pending`, or its rootblock cluster write, or
     `set_volume_name`'s direct rootblock write — the device may already be half-written (pending
     writes land in place, not copy-on-write, M5), so `update_rootblock` and `set_volume_name` set
@@ -174,6 +178,53 @@ Everything else in the writer is 0.1.3's.
     consistent, nothing is lost or duplicated). 0.1.3 published nothing until the caller invoked
     a persistence method of its own choosing and had no concept of a failed operation's in-memory
     state at all.
+
+**2026-09-14, ART-319's own final review** ("With fixes", 2 Important, 5 Minor):
+
+17. **Item 16's records over-claimed the user sentence, and its untested-mutator list was wrong
+    ([ART-319](../../../docs/ISSUES.md); I1, I2).** `CoreError::Pfs3WriterLocked` /
+    `ART-PFS3-WRITER-LOCKED` is what a *subsequent* call on an already-locked writer returns —
+    never the call whose own commit failed, which returns its own original error unchanged
+    (`guarded` returns `result`, not `Error::CommitFailed`, whenever the operation itself already
+    set `poisoned`). ART does not produce it today: `copy_in_pfs3` returns at its first `?` on
+    every writer call, so it never makes the second, now-refused call. The CHANGELOG's Unreleased
+    line claiming a user would now see this sentence was wrong for the same reason and was
+    dropped rather than corrected, since nothing user-visible changed; `docs/ISSUES.md` and the
+    doc comments on `Error::CommitFailed` and `CoreError::Pfs3WriterLocked` say so instead. `set_volume_name`
+    — its own rootblock-cluster write is a second, separate commit path `update_rootblock` does
+    not cover — gained its own lock test, `a_failed_pfs3_set_volume_name_locks_the_writer`; item
+    16's list of mutators with no behavioural discard/lock test of their own is corrected in
+    `docs/ISSUES.md` to add `create_dir`/`create_dir_in`, `rename_in` and `overwrite_file_in` and
+    drop `set_volume_name`, and to note that `repair_reserved_free` is exercised only as the
+    second, already-locked call in `a_pfs3_commit_failing_part_way_locks_the_writer`, not for its
+    own discard behaviour.
+18. **The reload path that locks the writer was untested, and its sentence named only one cause
+    ([ART-319](../../../docs/ISSUES.md); M1).** `pfs3_test_device::MemDevice` gained `fail_reads`
+    (independent of `with_end`/`fail_from_write`, which affect only writes); a new test,
+    `a_reload_that_cannot_read_the_device_locks_the_writer`, covers `discard_to_last_commit`'s own
+    `poisoned = true` when its `Volume::reload` cannot even read the device back — reached even
+    when the failed operation itself touched the device not at all (a refusal that fires before
+    any I/O, e.g. `check_name_len`). Both `Error::CommitFailed` and `CoreError::Pfs3WriterLocked`
+    read "a write to this PFS3 volume failed and ART could not confirm what is on the disk: reopen
+    it (and check it) before writing to it again" — true of both causes that reach the lock,
+    rather than the previous "this PFS3 volume's last write failed part-way through and may be
+    half-written", which was wrong when the cause was an unreadable device during the discard and
+    nothing had actually been half-written.
+19. **Reopening means `Volume::from_device`, not `Writer::open` on a locked writer's own `Volume`
+    ([ART-319](../../../docs/ISSUES.md); M2, documentation only).** `Writer::into_volume` on a
+    poisoned writer returns a `Volume` that still holds the failed attempt's in-memory rootblock
+    and other state; `Writer::open` puts no lock of its own on it, so its next commit would write
+    those stale values. `Error::CommitFailed`, `CoreError::Pfs3WriterLocked` and
+    `Writer::into_volume`'s own doc comment now say so. ART never reopens a locked writer this way
+    today, so nothing here is tested.
+20. **Two small corrections ([ART-319](../../../docs/ISSUES.md); M4).**
+    `pfs3_test_device::MemDevice::refused()`'s doc now says a `fail_from_write` refusal records
+    only the refused call's first block, not the specific out-of-range sector a `with_end`
+    refusal records. `a_poisoned_pfs3_writers_error_reaches_the_user_as_a_readable_sentence` had
+    never actually been seen red — it passed on its first run because the mapping it pins already
+    existed when it was written — so its guard was proven by mutation instead: removing the
+    `Error::CommitFailed => CoreError::Pfs3WriterLocked` arm from `from_pfs3` turns it red
+    (`docs/ISSUES.md` has the line).
 
 ## Re-vendoring
 
@@ -196,20 +247,22 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 
 ```diff
 diff --git a/src/error.rs b/src/error.rs
-index 48823c7..fb5a8b7 100644
+index 48823c7..f0d728d 100644
 --- a/src/error.rs
 +++ b/src/error.rs
-@@ -1,4 +1,9 @@
+@@ -1,4 +1,11 @@
  //! Error types for libpfs3.
 +//!
 +//! Modified by ART on 2026-09-14 (ART-314): the `NameTooLong` variant, for a
 +//! name the volume cannot store and find again; (ART-319) the `CommitFailed`
-+//! variant, for a commit that failed part-way through. `ART-PATCH.md` in this
-+//! crate's root says what and why.
++//! variant, for a writer that has locked itself; on 2026-09-14, the final
++//! review (M1): `CommitFailed`'s sentence covers both causes that reach it,
++//! not only a failed commit. `ART-PATCH.md` in this crate's root says what
++//! and why.
  
  /// Result type alias using the PFS3 [`Error`].
  pub type Result<T> = std::result::Result<T, Error>;
-@@ -30,9 +35,31 @@ pub enum Error {
+@@ -30,9 +37,40 @@ pub enum Error {
      #[error("already exists: {0}")]
      AlreadyExists(String),
  
@@ -224,16 +277,25 @@ index 48823c7..fb5a8b7 100644
      #[error("disk full: {0}")]
      DiskFull(String),
  
-+    /// ART-319: a commit failed part-way through — the rootblock extension
-+    /// write, flushing the pending reserved-block writes, or the rootblock
-+    /// cluster write itself. Writes land in place, not copy-on-write, so the
-+    /// device may already hold part of this operation's metadata while the
-+    /// rootblock that would make it official does not; the writer locks
-+    /// rather than reloading and continuing over that unknown state, and
-+    /// every later mutating call returns this immediately, before touching
-+    /// anything.
++    /// ART-319: the writer has locked itself, and every later mutating call
++    /// refuses immediately with this, before touching anything. Two causes
++    /// reach it: a commit itself failed part-way through — the rootblock
++    /// extension write, flushing the pending reserved-block writes, or the
++    /// rootblock cluster write itself, or `set_volume_name`'s own direct
++    /// write — where writes land in place, not copy-on-write, so the device
++    /// may already hold part of this operation's metadata while the
++    /// rootblock that would make it official does not; or an ordinary
++    /// operation failed for an unrelated reason and `discard_to_last_commit`'s
++    /// own reload could not even read the device back (M1, final review) —
++    /// with nothing safe left to fall back to, that locks the writer too,
++    /// even though nothing of this attempt was written. The sentence below
++    /// is written to be true of both causes, rather than naming only the
++    /// first (M1). Reopening means building a new `Volume` from the device
++    /// (`Volume::from_device` / `open*`), **not** `Writer::open` on the
++    /// `Volume` a poisoned writer's own `into_volume` hands back — that one
++    /// still holds this failed attempt's in-memory state (M2, final review).
 +    #[error(
-+        "this PFS3 volume's last write failed part-way through and may be half-written: \
++        "a write to this PFS3 volume failed and ART could not confirm what is on the disk: \
 +         reopen it (and check it) before writing to it again"
 +    )]
 +    CommitFailed,
@@ -644,7 +706,7 @@ index 757c2f9..2f3f6f3 100644
                      result.push(entry);
                  }
 diff --git a/src/writer.rs b/src/writer.rs
-index fc692d6..96e8fbe 100644
+index fc692d6..7467ec4 100644
 --- a/src/writer.rs
 +++ b/src/writer.rs
 @@ -6,6 +6,21 @@
@@ -669,7 +731,7 @@ index fc692d6..96e8fbe 100644
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -28,8 +43,36 @@ pub struct Writer {
+@@ -28,8 +43,41 @@ pub struct Writer {
      // Mutable state
      res_bitmap: Vec<u32>,
      data_bm: Vec<(u32, Vec<u32>)>, // (blk_num, longs)
@@ -700,14 +762,19 @@ index fc692d6..96e8fbe 100644
 +    /// ART-319: set when a commit itself (`update_rootblock`, or
 +    /// `set_volume_name`'s own direct write) failed part-way — the device may
 +    /// already be half-written, since a pending write lands in place, not
-+    /// copy-on-write (M5). Once set, every later public mutating call
-+    /// refuses immediately with `Error::CommitFailed`, before touching
-+    /// anything; nothing clears it — the caller must reopen the volume.
++    /// copy-on-write (M5) — or when `discard_to_last_commit`'s own reload
++    /// could not even read the device back (M1, final review), leaving
++    /// nothing safe to fall back to. Once set, every later public mutating
++    /// call refuses immediately with `Error::CommitFailed`, before touching
++    /// anything; nothing clears it — the caller must reopen the volume, by
++    /// building a new `Volume` from the device, not by calling `Writer::open`
++    /// on the `Volume` `into_volume` hands back, which still holds this
++    /// failed attempt's in-memory state (M2, final review).
 +    poisoned: bool,
  }
  
  impl Writer {
-@@ -37,6 +80,19 @@ impl Writer {
+@@ -37,6 +85,19 @@ impl Writer {
      pub fn open(vol: Volume) -> Result<Self> {
          let rb = &vol.rootblock;
          let rbs = rb.reserved_blksize as u32;
@@ -727,7 +794,7 @@ index fc692d6..96e8fbe 100644
          let rescluster = rbs / vol.block_size();
          let firstreserved = rb.firstreserved;
          let numreserved = (rb.lastreserved - firstreserved + 1) / rescluster;
-@@ -57,6 +113,11 @@ impl Writer {
+@@ -57,6 +118,11 @@ impl Writer {
              res_bitmap: Vec::new(),
              data_bm: Vec::new(),
              pending_writes: Vec::new(),
@@ -739,7 +806,20 @@ index fc692d6..96e8fbe 100644
              vol,
          };
          w.load_reserved_bitmap()?;
-@@ -69,33 +130,136 @@ impl Writer {
+@@ -64,38 +130,163 @@ impl Writer {
+         Ok(w)
+     }
+ 
+-    /// Consume the writer and return the underlying volume.
++    /// Consume the writer and return the underlying volume. **M2 (final
++    /// review): if this writer is locked (`self.poisoned`), the `Volume`
++    /// returned here still holds the failed attempt's own in-memory
++    /// rootblock and other state** — `Writer::open` on it has no lock of its
++    /// own and its next commit would write those values. Reopening a locked
++    /// volume means building a fresh `Volume` from the device
++    /// (`Volume::from_device` / `open*`), not calling `Writer::open` on the
++    /// value this returns.
+     pub fn into_volume(self) -> Volume {
          self.vol
      }
  
@@ -793,6 +873,16 @@ index fc692d6..96e8fbe 100644
 +    /// twice reads the identical, still-current state a second time, and an
 +    /// inner call that already committed (its own `update_rootblock` ran) is
 +    /// simply what "the last commit" now is for the outer discard to reload.
++    /// Research (`D:\Projeler\Amiga\scratch-0913\art319-pfs3aio-research.md`,
++    /// pfs3aio `211f7f0`): pfs3aio publishes state only at its own commit
++    /// point, the root block write (`update.c:265-270`), and on a failed
++    /// commit explicitly reverses the in-memory bitmap changes it had staged
++    /// (`UndoFreeList`, `update.c:311-328`; the deferred-free list itself,
++    /// `allocation.c:765-799`, with its intent stated in the comment at
++    /// `allocation.c:741-745`) rather than re-reading the disk — this
++    /// crate's writer discards by re-reading instead, because every write of
++    /// this writer already goes through `pending_writes` and only reaches
++    /// disk at that same commit point (see `discard_to_last_commit` below).
 +    fn guarded<T>(&mut self, op: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
 +        if self.poisoned {
 +            return Err(Error::CommitFailed);
@@ -812,12 +902,17 @@ index fc692d6..96e8fbe 100644
 +    /// `move_to_deldir` staging an entry and then `free_data_blocks`
 +    /// failing) has therefore changed nothing on disk, so reloading from the
 +    /// device discards exactly the failed attempt's in-memory half-state and
-+    /// nothing else. `datestamp` is kept, monotonic, rather than reloaded —
-+    /// the disk's own counter can only be lower or equal; `anode_roving`
-+    /// (a hint) and `entry_date` (caller-set) are left untouched. If the
-+    /// device cannot even be re-read here, there is nothing safe left to
-+    /// fall back to, so this locks the writer instead of leaving it running
-+    /// on state it could not refresh.
++    /// nothing else — the same commit-point discipline pfs3aio's own
++    /// `UpdateDisk`/`UndoFreeList` keeps (`update.c:265-270,311-328`,
++    /// `allocation.c:741-799`; see `guarded`'s own comment above). `datestamp`
++    /// is kept, monotonic, rather than reloaded — the disk's own counter can
++    /// only be lower or equal; `anode_roving` (a hint) and `entry_date`
++    /// (caller-set) are left untouched. **If the device cannot even be
++    /// re-read here, there is nothing safe left to fall back to, so this
++    /// locks the writer instead of leaving it running on state it could not
++    /// refresh (M1, final review) — even when the operation that triggered
++    /// this discard never itself touched the device** (a refusal that fires
++    /// before any I/O, e.g. `check_name_len`).
 +    fn discard_to_last_commit(&mut self) {
 +        self.pending_writes.clear();
 +        if self.vol.reload().is_err() {
@@ -876,7 +971,7 @@ index fc692d6..96e8fbe 100644
          let name_bytes = name.as_bytes();
          let len = name_bytes.len().min(30);
          self.vol.rootblock.diskname = name[..len].to_string();
-@@ -114,16 +278,32 @@ impl Writer {
+@@ -114,16 +305,32 @@ impl Writer {
          cluster[RB_OFF_DISKNAME + 1..RB_OFF_DISKNAME + 1 + len].copy_from_slice(&name_bytes[..len]);
          let ds = self.next_datestamp();
          put_u32(&mut cluster, RB_OFF_DATESTAMP, ds);
@@ -912,7 +1007,7 @@ index fc692d6..96e8fbe 100644
          // Check if file already exists — if so, overwrite it
          if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
              let entry_type = entry_data[pos + 1] as i8;
-@@ -144,6 +324,7 @@ impl Writer {
+@@ -144,6 +351,7 @@ impl Writer {
          name: &str,
          data: &[u8],
      ) -> Result<()> {
@@ -920,7 +1015,7 @@ index fc692d6..96e8fbe 100644
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
  
-@@ -165,6 +346,11 @@ impl Writer {
+@@ -165,6 +373,11 @@ impl Writer {
  
      /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
      pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -932,7 +1027,7 @@ index fc692d6..96e8fbe 100644
          let dir_blk = self.alloc_reserved_block()?;
          let anodenr = self.alloc_anode(1, dir_blk, 0)?;
  
-@@ -181,6 +367,10 @@ impl Writer {
+@@ -181,6 +394,10 @@ impl Writer {
  
      /// Create a softlink in a parent directory.
      pub fn create_softlink(&mut self, path: &str, target: &str) -> Result<()> {
@@ -943,7 +1038,7 @@ index fc692d6..96e8fbe 100644
          let (parent_anode, name) = self.split_path(path)?;
          self.create_softlink_in(parent_anode, &name, target)
      }
-@@ -192,6 +382,16 @@ impl Writer {
+@@ -192,6 +409,16 @@ impl Writer {
          name: &str,
          target: &str,
      ) -> Result<()> {
@@ -960,7 +1055,7 @@ index fc692d6..96e8fbe 100644
          let data = target.as_bytes();
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
-@@ -220,13 +420,22 @@ impl Writer {
+@@ -220,13 +447,22 @@ impl Writer {
  
      /// Create a hardlink in a parent directory.
      pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
@@ -983,7 +1078,7 @@ index fc692d6..96e8fbe 100644
          // Read the deldir entry
          let rext = self
              .vol
-@@ -256,7 +465,9 @@ impl Writer {
+@@ -256,7 +492,9 @@ impl Writer {
          let blk = deldirblocks[block_idx];
          let data = self.read_reserved_raw(blk)?;
          let off = DELDIR_HEADER_SIZE + slot_idx * DELDIR_ENTRY_SIZE;
@@ -994,7 +1089,7 @@ index fc692d6..96e8fbe 100644
              .ok_or_else(|| Error::NotFound("empty deldir slot".into()))?;
  
          // Check destination doesn't already exist
-@@ -266,6 +477,23 @@ impl Writer {
+@@ -266,6 +504,23 @@ impl Writer {
  
          let old_anode = entry.anode;
  
@@ -1018,7 +1113,7 @@ index fc692d6..96e8fbe 100644
          // Read file data via the anode chain (still intact)
          let file_data = self.vol.read_file_data(old_anode, entry.file_size())?;
  
-@@ -290,18 +518,30 @@ impl Writer {
+@@ -290,18 +545,30 @@ impl Writer {
      /// Force-remove a directory entry without touching anodes or data blocks.
      /// Used by check --repair for entries with broken anode chains.
      pub fn force_remove_entry(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -1049,7 +1144,7 @@ index fc692d6..96e8fbe 100644
          self.vol.rootblock.reserved_free = correct_free;
          self.update_rootblock()
      }
-@@ -314,6 +554,16 @@ impl Writer {
+@@ -314,6 +581,16 @@ impl Writer {
          name: &str,
          file_anode: u32,
          data: &[u8],
@@ -1066,7 +1161,7 @@ index fc692d6..96e8fbe 100644
      ) -> Result<()> {
          let bs = self.vol.block_size() as usize;
          let new_blocks_needed = data.len().div_ceil(bs).max(1) as u32;
-@@ -464,7 +714,18 @@ impl Writer {
+@@ -464,7 +741,18 @@ impl Writer {
  
      /// Clear a single anode slot (set all 3 fields to 0).
      fn clear_single_anode(&mut self, anodenr: u32) -> Result<()> {
@@ -1086,7 +1181,7 @@ index fc692d6..96e8fbe 100644
      }
  
      /// Find a directory entry by name, returning (block_number, block_data, entry_offset).
-@@ -565,7 +826,7 @@ impl Writer {
+@@ -565,7 +853,7 @@ impl Writer {
          }
  
          // Update datestamp
@@ -1095,7 +1190,7 @@ index fc692d6..96e8fbe 100644
          put_u16(&mut data, pos + 10, cday);
          put_u16(&mut data, pos + 12, cmin);
          put_u16(&mut data, pos + 14, ctick);
-@@ -580,6 +841,15 @@ impl Writer {
+@@ -580,6 +868,15 @@ impl Writer {
          dir_anode: u32,
          name: &str,
          protection: u8,
@@ -1111,7 +1206,7 @@ index fc692d6..96e8fbe 100644
      ) -> Result<()> {
          let (blk, mut data, pos) = self.find_dir_entry(dir_anode, name)?;
          data[pos + 16] = protection;
-@@ -595,6 +865,17 @@ impl Writer {
+@@ -595,6 +892,17 @@ impl Writer {
          dst_parent: u32,
          dst_name: &str,
      ) -> Result<()> {
@@ -1129,7 +1224,7 @@ index fc692d6..96e8fbe 100644
          let entries = self.vol.list_dir_by_anode(src_parent)?;
          let entry = entries
              .iter()
-@@ -627,6 +908,10 @@ impl Writer {
+@@ -627,6 +935,10 @@ impl Writer {
  
      /// Delete a file or empty directory by name in a parent directory.
      pub fn delete_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -1140,7 +1235,7 @@ index fc692d6..96e8fbe 100644
          let entries = self.vol.list_dir_by_anode(parent_anode)?;
          let target = entries
              .iter()
-@@ -642,9 +927,13 @@ impl Writer {
+@@ -642,9 +954,13 @@ impl Writer {
              self.free_anode_chain_reserved(target.anode)?;
              self.clear_anode_chain(target.anode)?;
          } else {
@@ -1157,7 +1252,7 @@ index fc692d6..96e8fbe 100644
                  self.clear_anode_chain(target.anode)?;
              }
          }
-@@ -652,86 +941,110 @@ impl Writer {
+@@ -652,86 +968,110 @@ impl Writer {
          self.update_rootblock()
      }
  
@@ -1333,7 +1428,7 @@ index fc692d6..96e8fbe 100644
      }
  
      // ---- Data bitmap ----
-@@ -739,9 +1052,11 @@ impl Writer {
+@@ -739,9 +1079,11 @@ impl Writer {
      fn load_data_bitmap(&mut self) -> Result<()> {
          let no_bmb = {
              let bits_per_bmb = self.index_per_block * 32;
@@ -1347,7 +1442,7 @@ index fc692d6..96e8fbe 100644
          };
          for seq in 0..no_bmb {
              if let Some(blk) = self.get_bitmap_block_nr(seq)? {
-@@ -778,7 +1093,10 @@ impl Writer {
+@@ -778,7 +1120,10 @@ impl Writer {
                              .ok_or_else(|| {
                                  Error::Corrupt("block number overflow in bitmap".into())
                              })?;
@@ -1359,7 +1454,7 @@ index fc692d6..96e8fbe 100644
                              continue; // skip out-of-range bitmap bits
                          }
                          longs[li] &= !(0x8000_0000 >> bit);
-@@ -825,7 +1143,9 @@ impl Writer {
+@@ -825,7 +1170,9 @@ impl Writer {
      }
  
      fn free_data_block(&mut self, blk: u32) -> Result<()> {
@@ -1370,7 +1465,7 @@ index fc692d6..96e8fbe 100644
              return Ok(());
          }
          let rel = blk - self.bitmapstart;
-@@ -896,55 +1216,106 @@ impl Writer {
+@@ -896,55 +1243,106 @@ impl Writer {
  
      // ---- Anode allocation ----
  
@@ -1514,7 +1609,7 @@ index fc692d6..96e8fbe 100644
      }
  
      /// Allocate a new anode block and register it in the index.
-@@ -964,43 +1335,62 @@ impl Writer {
+@@ -964,43 +1362,62 @@ impl Writer {
          let idx_off = seqnr % ipb;
  
          if self.vol.rootblock.is_large() {
@@ -1591,7 +1686,7 @@ index fc692d6..96e8fbe 100644
                  put_u32(&mut sdata, soff, new_idx);
                  put_u32(&mut sdata, 4, self.datestamp);
                  self.write_reserved(super_blk, &sdata)?;
-@@ -1012,8 +1402,14 @@ impl Writer {
+@@ -1012,8 +1429,14 @@ impl Writer {
                  self.write_reserved(idx_blk, &idata)?;
              }
          } else {
@@ -1608,7 +1703,7 @@ index fc692d6..96e8fbe 100644
                  .vol
                  .rootblock
                  .indexblocks
-@@ -1021,7 +1417,18 @@ impl Writer {
+@@ -1021,7 +1444,18 @@ impl Writer {
                  .copied()
                  .unwrap_or(0);
              if idx_blk == 0 {
@@ -1628,7 +1723,7 @@ index fc692d6..96e8fbe 100644
              }
              let mut idata = self.read_reserved_raw(idx_blk)?;
              let entry_off = INDEX_BLOCK_HEADER_SIZE + idx_off as usize * 4;
-@@ -1097,6 +1504,7 @@ impl Writer {
+@@ -1097,6 +1531,7 @@ impl Writer {
                  .anodes
                  .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
  
@@ -1636,7 +1731,7 @@ index fc692d6..96e8fbe 100644
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,6 +1512,11 @@ impl Writer {
+@@ -1104,6 +1539,11 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -1648,7 +1743,7 @@ index fc692d6..96e8fbe 100644
                  // Find end of entries
                  let mut pos = DIR_BLOCK_HEADER_SIZE;
                  while pos < self.resblocksize as usize {
-@@ -1123,13 +1536,17 @@ impl Writer {
+@@ -1123,13 +1563,17 @@ impl Writer {
                  }
              }
          }
@@ -1668,7 +1763,7 @@ index fc692d6..96e8fbe 100644
          new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
              .copy_from_slice(&entry_bytes);
          self.write_reserved(new_blk, &new_data)?;
-@@ -1172,7 +1589,7 @@ impl Writer {
+@@ -1172,7 +1616,7 @@ impl Writer {
          entry[1] = entry_type as u8;
          put_u32(&mut entry, 2, anode);
          put_u32(&mut entry, 6, fsize as u32);
@@ -1677,7 +1772,7 @@ index fc692d6..96e8fbe 100644
          put_u16(&mut entry, 10, cday);
          put_u16(&mut entry, 12, cmin);
          put_u16(&mut entry, 14, ctick);
-@@ -1200,11 +1617,52 @@ impl Writer {
+@@ -1200,11 +1644,52 @@ impl Writer {
  
      // ---- Rootblock update ----
  
@@ -1731,7 +1826,7 @@ index fc692d6..96e8fbe 100644
          let bs = self.vol.block_size() as usize;
          let rblkcluster = self.vol.rootblock.rblkcluster as u32;
          let cluster_size = rblkcluster as usize * bs;
-@@ -1236,6 +1694,25 @@ impl Writer {
+@@ -1236,6 +1721,25 @@ impl Writer {
              }
          }
  
@@ -1757,7 +1852,7 @@ index fc692d6..96e8fbe 100644
          self.vol
              .dev
              .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)?;
-@@ -1286,10 +1763,44 @@ impl Writer {
+@@ -1286,10 +1790,44 @@ impl Writer {
          Ok(())
      }
  

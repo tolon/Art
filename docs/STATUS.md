@@ -286,7 +286,7 @@ claiming more than the code), 6 Minor; all but M5 fixed in `90d7bc2`/`a3b879d` a
 every one addressed, no new breakage; M5 was `CLAUDE.md`, outside the repository. **The debt round is done:
 all five plans closed, each with its final review's fixes re-reviewed.** **Merged** as `7725afa` and pushed,
 both on the owner's word; `cargo test --lib` on the merged `main`: `test result: ok. 3317 passed; 0 failed; 59
-ignored`. **Next:** ART-319 if the owner schedules it; a release is the owner's word. Reports and the spec: `.superpowers/sdd/2026-09-14-debt-5-art-317-local-time/`.
+ignored`. **Next:** ART-319 — see the entry above (already picked up, on `art-319-writer-rollback`, not merged); a release is the owner's word. Reports and the spec: `.superpowers/sdd/2026-09-14-debt-5-art-317-local-time/`.
 
 000000000000. **ART-301 is fixed on `art-debt-0914`, not merged: the job bar names every job in the chosen language.** A job carries a `JobTitle` (a catalogue key and its values) instead of an English sentence; all 40 sites moved, and `src/i18n/job-title-keys.test.ts` holds `JOB_TITLE_KEYS` and the Rust tree to each other both ways. ISSUES has the guards, red lines and mutations. **Owed by a person:** with Turkish chosen, start a job (Files: copy a folder into an ADF, or add a package on the OS Builder) and read the bar. **Merging is the owner's word.**
 
