@@ -1467,4 +1467,148 @@ mod tests {
             .unwrap();
         assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
     }
+
+    /// ART-117 on the owner's own card — on a byte copy the owner made.
+    ///
+    /// ```text
+    /// cd src-tauri
+    /// TMP="E:\amiga\ProjeART\build\tmp" TEMP="E:\amiga\ProjeART\build\tmp" \
+    /// ART_CARD_IN="E:\amiga\Amigatolon\caffeine\CaffeineOS_Storm_9317.img" \
+    /// ART_RDB_EMBED_COPY="E:\amiga\ProjeART\caffeine-copy.img" \
+    /// ART_RDB_EMBED_DRIVER="E:\amiga\ProjeART\pfs3aio-newer" \
+    /// ART_RDB_EMBED_OUT="E:\amiga\ProjeART\art117-owner" \
+    ///   cargo test replace_the_driver_on_a_copy_of_the_owners_card_when_asked -- --nocapture --ignored
+    /// ```
+    ///
+    /// The card carries `pfs3aio` 19.2. If no newer `pfs3aio` exists, the
+    /// driver is a scratch copy with its `$VER:` digits raised.
+    #[test]
+    #[ignore = "writes to a byte copy of the owner's card under E:\\amiga\\ProjeART; run explicitly"]
+    fn replace_the_driver_on_a_copy_of_the_owners_card_when_asked() {
+        let var = |name: &str| {
+            std::env::var(name).unwrap_or_else(|_| {
+                panic!("set {name}: this hook refuses without ART_CARD_IN, ART_RDB_EMBED_COPY, ART_RDB_EMBED_DRIVER and ART_RDB_EMBED_OUT")
+            })
+        };
+        let original = PathBuf::from(var("ART_CARD_IN"));
+        let copy = PathBuf::from(var("ART_RDB_EMBED_COPY"));
+        let driver = PathBuf::from(var("ART_RDB_EMBED_DRIVER"));
+        let out = PathBuf::from(var("ART_RDB_EMBED_OUT"));
+        assert!(
+            out.is_dir(),
+            "ART_RDB_EMBED_OUT must be an existing folder: {}",
+            out.display()
+        );
+        assert!(
+            std::env::temp_dir().starts_with(r"E:\amiga\ProjeART\build\tmp"),
+            "set TMP and TEMP to E:\\amiga\\ProjeART\\build\\tmp: nothing of this hook goes to C:"
+        );
+
+        assert_ne!(
+            std::fs::canonicalize(&original).unwrap(),
+            std::fs::canonicalize(&copy).unwrap(),
+            "ART_RDB_EMBED_COPY names the original card: make a byte copy and point at that"
+        );
+        assert_eq!(
+            std::fs::metadata(&original).unwrap().len(),
+            std::fs::metadata(&copy).unwrap().len(),
+            "the copy is not the original's size"
+        );
+        let original_mtime = std::fs::metadata(&original).unwrap().modified().unwrap();
+
+        let card = read_card(&copy).unwrap();
+        let area = card
+            .areas
+            .iter()
+            .find(|area| area.rdb.provides_file_system(0x5044_5303))
+            .expect("a PDS3 driver on the card");
+        let slot = card
+            .mbr
+            .as_ref()
+            .and_then(|mbr| {
+                mbr.amiga_areas()
+                    .into_iter()
+                    .find(|p| p.start_bytes() == area.offset_bytes)
+            })
+            .map(|p| p.slot_number());
+        let original_range = read_range(&original, area.offset_bytes).unwrap();
+        let before = walk_strict(&original_range).unwrap();
+        println!(
+            "area at {} slot {slot:?}: RDBBlocksHi {} HighRDSKBlock {} used {:?}..={:?} partition from block {:?}",
+            area.offset_bytes,
+            before.rdsk.rdb_blocks_hi,
+            before.rdsk.high_rdsk_block,
+            before.used.first(),
+            before.used.last(),
+            before.first_partition_block()
+        );
+
+        match prepare_replace(&copy, slot, "PDS3", &driver).unwrap() {
+            Prepared::Keep { card, file } => panic!(
+                "the driver states {file:?}, which is not newer than the card's {card}; use a scratch copy with its $VER: digits raised"
+            ),
+            Prepared::Edit(ready) => {
+                for (stage, writes) in &ready.plan.stages {
+                    let blocks: Vec<u32> = writes.iter().map(|w| w.block).collect();
+                    println!("  {stage:?}: {} block(s), {:?}..={:?}", blocks.len(), blocks.first(), blocks.last());
+                }
+                println!("  allocation: {:?}", ready.plan.allocation);
+            }
+        }
+
+        // Working files through `ScratchDir` (ART-281); what must outlive the
+        // test is copied to `out` below.
+        let (_guard, scratch) = crate::core::ScratchDir::pair("art117-owner", "copy");
+        let backup = scratch.join("caffeine-rdb-backup.bin");
+        let report = run(
+            EmbedTarget {
+                image: &copy,
+                slot,
+                dostype: "PDS3",
+                mode: EmbedMode::Replace,
+                driver: &driver,
+            },
+            Some(&backup),
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+        println!("report: {report:?}");
+
+        let after = read_range(&copy, area.offset_bytes).unwrap();
+        let hi = walk_strict(&after).unwrap().rdsk.rdb_blocks_hi as usize;
+        // Into the owner's folder, never over a file already there.
+        let keep = |name: &str, bytes: &[u8]| {
+            let path = out.join(name);
+            let mut file = std::fs::File::create_new(&path)
+                .unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+            std::io::Write::write_all(&mut file, bytes).unwrap();
+            path
+        };
+        let range_file = keep(
+            "copy-rdb-after.bin",
+            after
+                .get(..(hi + 1) * BLOCK_SIZE)
+                .expect("the walked range is inside what was read"),
+        );
+        let backup_kept = keep("caffeine-rdb-backup.bin", &std::fs::read(&backup).unwrap());
+        println!("post-edit range: {}", range_file.display());
+        println!("backup: {}", backup_kept.display());
+        println!(
+            "outside checks: hst.imager rdb info \"{}\"; rdbtool \"{}\" info; rdbtool \"{}\" fsget <n> <file> (rdbtool sums all 128 longwords)",
+            copy.display(),
+            range_file.display(),
+            range_file.display()
+        );
+
+        assert_eq!(
+            read_range(&original, area.offset_bytes).unwrap(),
+            original_range,
+            "the original's reserved range changed"
+        );
+        assert_eq!(
+            std::fs::metadata(&original).unwrap().modified().unwrap(),
+            original_mtime,
+            "the original's mtime changed"
+        );
+    }
 }
