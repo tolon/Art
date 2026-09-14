@@ -5,15 +5,15 @@
 // **ART-120: native by default, `hst-imager` a named fallback.** ART writes
 // PFS3 and FFS itself (`core::preload::native::NativeFormatter`) and no
 // longer needs `hst-imager` for an ordinary preload. The tool is kept as a
-// setting (`hstImagerPath`, beside the WinUAE path) because two real gaps
-// still need it: embedding a filesystem driver into an existing card's RDB
-// in place (ART-117), and any AmigaDOS name outside ASCII on a PFS3 volume,
-// which this version of `libpfs3` cannot write (ART-113). `preloadBlocker`
-// only requires the tool when the plan already shows the first case; the
-// second is a fact about a `copy-in` step's own content and can only be
-// known once the run tries it, which is what `StepReport.fallback_reason`
-// (and its `fallbackPhrase` translation) reports after the fact — never
-// silently.
+// setting (`hstImagerPath`, beside the WinUAE path) for the one gap left: any
+// AmigaDOS name outside ASCII on a PFS3 volume, which this version of `libpfs3`
+// cannot write (ART-113) — a fact about a `copy-in` step's own content, known
+// only once the run tries it, and reported by `StepReport.fallback_reason`.
+//
+// **ART-117: ART edits a card's RDB itself.** Embedding or replacing a
+// filesystem driver is `core::preload::embed`, with no fallback. It needs a
+// backup path, chosen per run and never remembered; `preloadBlocker` asks for
+// it when the plan shows an edit.
 //
 // **What ART cannot check afterwards.** There is no PFS3 reader here, so once
 // a volume is formatted and filled ART can confirm the partition table, the
@@ -92,10 +92,21 @@ export interface PreloadPartition {
 
 export interface PreloadRequest {
   image: string;
-  /** A filesystem driver to embed first, when the card carries none for the
-   *  DosType its partitions name. */
+  /** A filesystem driver to embed, or to replace the card's own with when newer. */
   driver: string | null;
   partitions: PreloadPartition[];
+  /** Where the RDB area is copied before an edit (ART-117). Never remembered. */
+  rdb_backup: string | null;
+}
+
+/** A driver's version as the FSHD stores it: `19` and `3` for 19.3. */
+export interface DriverVersion {
+  version: number;
+  revision: number;
+}
+
+export function versionText(v: DriverVersion): string {
+  return `${v.version}.${v.revision}`;
 }
 
 /** One thing the run would do, in order. */
@@ -108,6 +119,22 @@ export type PreloadStep =
       driver: string;
       dostype: string;
       name: string;
+      file_version: DriverVersion;
+      /** `[first, last]` RDB blocks the edit writes. */
+      blocks: [number, number];
+      /** `[before, after]` when `RDBBlocksHi` is raised over empty blocks. */
+      rdb_blocks_hi_raised: [number, number] | null;
+    }
+  | {
+      step: "replace-filesystem";
+      slot: number | null;
+      driver: string;
+      dostype: string;
+      name: string;
+      card_version: DriverVersion;
+      file_version: DriverVersion;
+      blocks: [number, number];
+      rdb_blocks_hi_raised: [number, number] | null;
     }
   | {
       step: "format-partition";
@@ -118,27 +145,66 @@ export type PreloadStep =
     }
   | { step: "copy-in"; slot: number | null; drive_name: string; source: string };
 
+/** Something the preview must say that is not a step (ART-117). */
+export type PlanNote =
+  | {
+      note: "driver-kept";
+      dostype: string;
+      card_version: DriverVersion;
+      file_version: DriverVersion | null;
+    }
+  | {
+      note: "replace-refused";
+      dostype: string;
+      card_version: DriverVersion;
+      code: string;
+      detail: string;
+    }
+  | {
+      /** The card's driver and the chosen file name different programs, or
+       *  the card's names none (spec decision 13). */
+      note: "different-driver";
+      dostype: string;
+      card_version: DriverVersion;
+      card_name: string | null;
+      file_name: string;
+    }
+  | { note: "second-edit-skipped"; dostype: string };
+
 export interface PreloadPlan {
   image: string;
   steps: PreloadStep[];
+  notes: PlanNote[];
+  rdb_backup: string | null;
+}
+
+/** What a finished RDB edit did. */
+export interface EmbedReport {
+  slot: number | null;
+  dostype: string;
+  card_version: DriverVersion | null;
+  file_version: DriverVersion;
+  first_block: number;
+  last_block: number;
+  rdb_blocks_hi_raised: [number, number] | null;
+  backup: string;
 }
 
 export interface PreloadOutcome {
   formatted: string[];
   copied: CopySummary;
   tool: ToolVersion | null;
+  embedded: EmbedReport | null;
 }
 
 /**
  * Why one step ran on the fallback tool instead of natively (ART-120). A
  * value, never a sentence (ART-060) — {@link fallbackPhrase} translates it.
  *
- * Exactly two variants, matching the two capability gaps
- * `commands/preload.rs`'s own doc comment names — nothing else ever falls
- * back.
+ * One capability gap and the pairing it forces, matching
+ * `commands/preload.rs`'s own doc comment — nothing else ever falls back.
  */
 export type FallbackReason =
-  | { reason: "foreign-rdb-embed" }
   | { reason: "non-ascii-pfs3-names"; paths: string[]; more: number }
   /** ART-122: a format that followed its own partition's copy onto the
    *  fallback tool, because a volume is formatted and filled by one tool. */
@@ -380,7 +446,8 @@ export function picksFor(report: CardReport): PartitionPick[] {
 export function toRequest(
   image: string,
   driver: string | null,
-  picks: PartitionPick[]
+  picks: PartitionPick[],
+  rdbBackup: string | null
 ): PreloadRequest {
   return {
     image,
@@ -393,6 +460,7 @@ export function toRequest(
         volume_name: pick.volumeName.trim(),
         content: pick.content,
       })),
+    rdb_backup: rdbBackup?.trim() ? rdbBackup.trim() : null,
   };
 }
 
@@ -400,16 +468,11 @@ export function toRequest(
  *  `MAX_NAME_LEN`, restated here so a refusal can say the number. */
 export const MAX_VOLUME_NAME = 30;
 
-/**
- * Whether this plan already shows a step the native path always refuses
- * (ART-117 — embedding a filesystem driver into an existing card's RDB in
- * place). The only fallback need `preloadBlocker` can know **before** a run:
- * a non-ASCII name on a PFS3 `copy-in` (ART-113) is a fact about that step's
- * own content, discovered only when the run tries it — see this file's own
- * header comment.
- */
-export function needsExternalTool(plan: PreloadPlan): boolean {
-  return plan.steps.some((step) => step.step === "import-filesystem");
+/** Whether this plan writes into the card's RDB (ART-117). */
+export function editsRdb(plan: PreloadPlan): boolean {
+  return plan.steps.some(
+    (step) => step.step === "import-filesystem" || step.step === "replace-filesystem"
+  );
 }
 
 /**
@@ -417,18 +480,15 @@ export function needsExternalTool(plan: PreloadPlan): boolean {
  *
  * A reason rather than a boolean: a disabled button that does not say why is
  * the defect ART-100 was. The volume-name rules are the two
- * `core/volume/write/dir.rs::check_name` already holds — a name AmigaDOS
- * cannot store is not a name, and finding that out after the format has begun
- * is finding it out too late.
+ * `core/volume/write/dir.rs::check_name` already holds.
  *
- * **ART-120: the tool is no longer required by default.** `NativeFormatter`
- * runs unless the plan already shows a step it always refuses
- * ({@link needsExternalTool}) — everything else runs without
- * `hst.imager.exe` configured at all.
+ * **ART-117: an RDB edit needs a backup path.** The engine refuses without one
+ * too (`PreloadPlan::ready_to_run`); asking here keeps Run disabled rather than
+ * letting the job fail.
  */
 export function preloadBlocker(input: {
   image: string | null;
-  toolPath: string | null;
+  rdbBackup: string | null;
   picks: PartitionPick[];
   plan: PreloadPlan | null;
 }): Phrase | null {
@@ -453,8 +513,8 @@ export function preloadBlocker(input: {
   }
 
   if (!input.plan) return { key: "preload.blocked.notPlanned" };
-  if (needsExternalTool(input.plan) && !input.toolPath?.trim()) {
-    return { key: "preload.blocked.noTool" };
+  if (editsRdb(input.plan) && !input.rdbBackup?.trim()) {
+    return { key: "preload.blocked.noBackup" };
   }
   return null;
 }
@@ -477,8 +537,6 @@ export function copiedPhrase(copied: CopySummary): Phrase {
  *  panel to render beside it. */
 export function fallbackPhrase(reason: FallbackReason): Phrase {
   switch (reason.reason) {
-    case "foreign-rdb-embed":
-      return { key: "preload.fallback.foreignRdbEmbed" };
     case "non-ascii-pfs3-names":
       return {
         key: "preload.fallback.nonAsciiPfs3Names",
@@ -502,13 +560,11 @@ export function formatCount(plan: PreloadPlan): number {
  * **before** the confirmation checkbox — the destructive operation's writer
  * changed under ART-120 and the screen never said so (fix-wave finding 3).
  *
- * One kind is a static fact, known from the plan alone: `import-filesystem`
- * always needs `hst-imager` (`NativeFormatter` refuses it unconditionally,
- * for every card — ART-117). A `copy-in`'s ART-113 gap — a non-ASCII
- * AmigaDOS name on a PFS3 partition — is a fact about that step's own
- * content this file's own header comment already says cannot be known until
- * the run tries it, so this names the *possibility* rather than a verdict it
- * cannot make.
+ * The two RDB edits are a static fact: ART's own editor, never a fallback
+ * (ART-117). A `copy-in`'s ART-113 gap — a non-ASCII AmigaDOS name on a PFS3
+ * partition — is a fact about that step's own content this file's own header
+ * comment already says cannot be known until the run tries it, so this names
+ * the *possibility* rather than a verdict it cannot make.
  *
  * **A `format-partition` inherits its own partition's copy (ART-122).** The
  * two are no longer independent: a volume is formatted and filled by one
@@ -523,7 +579,8 @@ export function formatCount(plan: PreloadPlan): number {
 export function plannedToolPhrase(step: PreloadStep, plan: PreloadPlan): Phrase {
   switch (step.step) {
     case "import-filesystem":
-      return { key: "preload.plan.step.tool.hstImager" };
+    case "replace-filesystem":
+      return { key: "preload.plan.step.tool.nativeEmbed" };
     case "format-partition":
       return hasPairedCopy(step, plan)
         ? { key: "preload.plan.step.tool.formatConditional" }
@@ -555,7 +612,17 @@ export function stepPhrase(step: PreloadStep): Phrase {
     case "import-filesystem":
       return {
         key: "preload.plan.step.import",
-        params: { name: step.name, dostype: step.dostype },
+        params: { name: step.name, dostype: step.dostype, version: versionText(step.file_version) },
+      };
+    case "replace-filesystem":
+      return {
+        key: "preload.plan.step.replace",
+        params: {
+          name: step.name,
+          dostype: step.dostype,
+          card: versionText(step.card_version),
+          file: versionText(step.file_version),
+        },
       };
     case "format-partition":
       return {
@@ -568,4 +635,93 @@ export function stepPhrase(step: PreloadStep): Phrase {
         params: { drive: step.drive_name, source: step.source },
       };
   }
+}
+
+/** The lines under an RDB edit step: which blocks, and where the backup goes. */
+export function embedDetailPhrases(step: PreloadStep, plan: PreloadPlan): Phrase[] {
+  if (step.step !== "import-filesystem" && step.step !== "replace-filesystem") return [];
+  const [first, last] = step.blocks;
+  const blocks: Phrase = step.rdb_blocks_hi_raised
+    ? {
+        key: "preload.plan.step.blocksRaised",
+        params: { first, last, from: step.rdb_blocks_hi_raised[0], to: step.rdb_blocks_hi_raised[1] },
+      }
+    : { key: "preload.plan.step.blocks", params: { first, last } };
+  const backup: Phrase = plan.rdb_backup
+    ? { key: "preload.plan.step.backup", params: { backup: plan.rdb_backup } }
+    : { key: "preload.plan.step.backupMissing" };
+  return [blocks, backup];
+}
+
+/** The sentence for a plan note — an ignored driver is never silent. */
+export function planNotePhrase(note: PlanNote): Phrase {
+  switch (note.note) {
+    case "driver-kept":
+      return note.file_version
+        ? {
+            key: "preload.plan.note.kept",
+            params: {
+              dostype: note.dostype,
+              card: versionText(note.card_version),
+              file: versionText(note.file_version),
+            },
+          }
+        : {
+            key: "preload.plan.note.keptNoVersion",
+            params: { dostype: note.dostype, card: versionText(note.card_version) },
+          };
+    case "replace-refused":
+      return {
+        key: "preload.plan.note.replaceRefused",
+        params: {
+          dostype: note.dostype,
+          card: versionText(note.card_version),
+          detail: note.detail,
+          code: note.code,
+        },
+      };
+    case "different-driver":
+      return note.card_name
+        ? {
+            key: "preload.plan.note.differentDriver",
+            params: {
+              dostype: note.dostype,
+              card: versionText(note.card_version),
+              cardName: note.card_name,
+              fileName: note.file_name,
+            },
+          }
+        : {
+            key: "preload.plan.note.differentDriverUnknown",
+            params: {
+              dostype: note.dostype,
+              card: versionText(note.card_version),
+              fileName: note.file_name,
+            },
+          };
+    case "second-edit-skipped":
+      return { key: "preload.plan.note.secondEdit", params: { dostype: note.dostype } };
+  }
+}
+
+/** The result panel's sentence for a finished RDB edit. */
+export function embeddedPhrase(report: EmbedReport): Phrase {
+  const params = {
+    dostype: report.dostype,
+    file: versionText(report.file_version),
+    first: report.first_block,
+    last: report.last_block,
+    backup: report.backup,
+  };
+  return report.card_version
+    ? { key: "preload.result.replaced", params: { ...params, card: versionText(report.card_version) } }
+    : { key: "preload.result.embedded", params };
+}
+
+/** The save dialog's suggestion: `<card stem>-rdb-backup.bin` (decision 11). */
+export function backupDefaultName(image: string): string {
+  const base = image.split(/[\\/]/).pop() || "card";
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  return `${stem}-rdb-backup.bin`;
 }

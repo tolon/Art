@@ -2108,7 +2108,7 @@
   "preload": {
     "heading": "Prepare the card's Amiga volumes",
     "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",
-    "scope": "ART writes PFS3 and FFS itself by default, through its own writer — no external tool needed for an ordinary card. hst-imager, the same tool both existing PiStorm imagers stand on, stays as a named fallback for the two things ART's own writer cannot yet do: embedding a driver into a card's existing RDB in place, and an AmigaDOS name outside plain ASCII on a PFS3 volume. Set your own copy of it if either applies to this card.",
+    "scope": "ART writes PFS3 and FFS itself by default, through its own writer — no external tool needed for an ordinary card — and embeds or updates a filesystem driver in the card's RDB itself, after copying the RDB area to a file you choose. hst-imager, the same tool both existing PiStorm imagers stand on, stays as a named fallback for the one thing ART's own writer cannot yet do: an AmigaDOS name outside plain ASCII on a PFS3 volume. Set your own copy of it if that applies to this card.",
     "tool": {
       "label": "hst.imager",
       "none": "Not set",
@@ -2129,8 +2129,14 @@
     "driver": {
       "label": "Filesystem driver",
       "none": "None chosen",
-      "chooseTitle": "Choose the filesystem driver to embed (pfs3aio.lha)",
+      "chooseTitle": "Choose the filesystem driver itself — the pfs3aio file, not its .lha archive",
       "hint": "Needed when a partition names a filesystem the card carries no driver for — PFS3, usually. Kickstart carries FFS itself and needs nothing here. If one is needed and missing, the preview says so rather than producing a volume the Amiga ignores in silence."
+    },
+    "backup": {
+      "label": "RDB backup file",
+      "none": "Not chosen — asked for every run",
+      "chooseTitle": "Where ART copies the card's RDB area before changing it",
+      "hint": "Needed when the preview shows the driver being embedded or replaced. ART copies the RDB area — a few megabytes — into this new file before it writes a single block, and refuses a file that already exists. It is not remembered: each run makes its own."
     },
     "partitions": {
       "heading": "Which volumes",
@@ -2154,15 +2160,28 @@
       "willErase_one": "This erases {{count}} partition. There is no backup and no undo.",
       "willErase_other": "This erases {{count}} partitions. There is no backup and no undo.",
       "step": {
-        "import": "Embed {{name}} in the RDB as {{dostype}}",
+        "import": "Embed {{name}} {{version}} in the RDB as {{dostype}}",
+        "replace": "Replace {{dostype}} {{card}} on the card with {{file}} from {{name}}",
+        "blocks": "RDB blocks {{first}}–{{last}}.",
+        "blocksRaised": "RDB blocks {{first}}–{{last}}, which widens the RDB's reserved range from block {{from}} to {{to}} over empty blocks.",
+        "backup": "The RDB area is copied to {{backup}} first.",
+        "backupMissing": "Choose where the RDB backup goes before running.",
         "format": "Format {{drive}} as {{volume}} — everything in it goes",
         "copy": "Copy {{source}} into {{drive}}",
         "tool": {
           "native": "ART's own writer does this.",
           "nativeConditional": "ART's own writer does this — unless a name inside it is not plain ASCII, in which case hst-imager does it instead, and the result says so.",
           "formatConditional": "ART's own writer does this — unless a name in the folder being copied into this volume is not plain ASCII, in which case hst-imager formats it too: a volume is formatted and filled by one tool, never half by each.",
-          "hstImager": "hst-imager does this — embedding a driver into this card's existing RDB in place is something only it can do safely (ART-117)."
+          "nativeEmbed": "ART's own RDB editor does this, and keeps the change only after reading back every block it wrote."
         }
+      },
+      "note": {
+        "kept": "{{dostype}} {{card}} on the card stays: the file you chose states {{file}}, which is not newer.",
+        "keptNoVersion": "{{dostype}} {{card}} on the card stays: the file you chose does not state its version.",
+        "replaceRefused": "{{dostype}} {{card}} on the card stays, and still mounts: ART will not replace it — {{detail}} ({{code}})",
+        "differentDriver": "{{dostype}} {{card}} on the card stays: it calls itself {{cardName}} and the file you chose calls itself {{fileName}}, and ART replaces a driver only with a newer copy of the same one. hst-imager can replace it — back the card up first.",
+        "differentDriverUnknown": "{{dostype}} {{card}} on the card stays: it does not say what it is, so ART cannot tell whether {{fileName}} is a newer copy of it. hst-imager can replace it — back the card up first.",
+        "secondEdit": "{{dostype}}'s driver on the card is not checked for an update this run: ART makes one RDB edit per run."
       }
     },
     "pairing": {
@@ -2183,7 +2202,7 @@
     "running": "Running…",
     "blocked": {
       "noCard": "Choose the card image first.",
-      "noTool": "This card needs a filesystem driver embedded into its RDB, and only hst-imager can do that safely — set where hst.imager is.",
+      "noBackup": "This plan changes the card's RDB — choose where its backup goes first.",
       "nothingChosen": "Choose at least one partition to prepare.",
       "blankName": "{{drive}} needs a volume name.",
       "badName": "{{drive}}'s volume name contains ':' or '/', which separate paths on the Amiga and cannot appear in a name.",
@@ -2191,7 +2210,6 @@
       "notPlanned": "Preview it first — nothing is formatted before you have seen what would be."
     },
     "fallback": {
-      "foreignRdbEmbed": "hst-imager did this step: embedding a driver into this card's existing RDB in place means editing a partition table ART did not build, which ART's own writer cannot do safely.",
       "nonAsciiPfs3Names_one": "hst-imager did this step: {{count}} name is not ASCII, and this version of libpfs3 cannot write it correctly ({{paths}}).",
       "nonAsciiPfs3Names_other": "hst-imager did this step: {{count}} names are not ASCII, and this version of libpfs3 cannot write them correctly ({{paths}}).",
       "pairedWithFallbackCopy": "hst-imager did this step: the copy into {{drive}} has to run on it, and a volume is formatted and filled by one tool — hst-imager cannot write into a volume ART's own writer formatted."
@@ -2201,6 +2219,8 @@
       "formatted": "Formatted: {{volumes}}",
       "copied": "Copied in: {{files}} file(s), {{directories}} folder(s), {{bytes}} bytes.",
       "copiedNoBytes": "Copied in: {{files}} file(s), {{directories}} folder(s). The tool that did the copying reports its total rounded (\"12.2 MB\"), so ART shows no byte count rather than an invented one.",
+      "embedded": "Embedded {{dostype}} {{file}} in RDB blocks {{first}}–{{last}}. The RDB backup is at {{backup}}.",
+      "replaced": "Replaced {{dostype}} {{card}} with {{file}} in RDB blocks {{first}}–{{last}}; the old driver's blocks stay on the card, unlinked. The RDB backup is at {{backup}}.",
       "tool": "By {{version}}.",
       "notVerified": "This run did not read the volume back afterwards to check it — not for a step ART's own writer did, and not for one hst-imager did. Verify it on the Amiga, or with something that is not ART.",
       "steps": {

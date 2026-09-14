@@ -1,19 +1,24 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  backupDefaultName,
   copiedPhrase,
+  editsRdb,
+  embedDetailPhrases,
+  embeddedPhrase,
   fallbackPhrase,
   foldersToCheck,
   formatCount,
-  needsExternalTool,
   pairingLines,
   pairingPhrase,
   pairingStillApplies,
   picksFor,
+  planNotePhrase,
   plannedToolPhrase,
   preloadBlocker,
   stepPhrase,
   toRequest,
+  versionText,
   type PartitionPick,
   type PreloadPlan,
   type PreloadStep,
@@ -71,6 +76,18 @@ const CARD: CardReport = {
   unmountable: [],
 };
 
+/** ART-117 — an append into the card's RDB, with `RDBBlocksHi` raised. */
+const EMBED_STEP: Extract<PreloadStep, { step: "import-filesystem" }> = {
+  step: "import-filesystem",
+  slot: 2,
+  driver: "pfs3aio",
+  dostype: "PDS3",
+  name: "pfs3aio",
+  file_version: { version: 19, revision: 3 },
+  blocks: [2, 130],
+  rdb_blocks_hi_raised: [1, 130],
+};
+
 const PLAN: PreloadPlan = {
   image: "E:\\amiga\\ProjeART\\card.img",
   steps: [
@@ -82,29 +99,19 @@ const PLAN: PreloadPlan = {
       volume_name: "Work",
     },
   ],
+  notes: [],
+  rdb_backup: null,
 };
 
-/** ART-117 — the one case the native path always refuses (embedding a
- *  driver into an existing card's RDB), so the plan itself already shows
- *  that hst-imager is needed. */
+/** A plan that edits the card's RDB, so it needs a backup path. */
 const IMPORT_PLAN: PreloadPlan = {
   image: "E:\\amiga\\ProjeART\\card.img",
   steps: [
-    {
-      step: "import-filesystem",
-      slot: 2,
-      driver: "pfs3aio.lha",
-      dostype: "PDS3",
-      name: "pfs3aio",
-    },
-    {
-      step: "format-partition",
-      slot: 2,
-      index: 1,
-      drive_name: "DH0",
-      volume_name: "Work",
-    },
+    EMBED_STEP,
+    { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
   ],
+  notes: [],
+  rdb_backup: null,
 };
 
 /** The card's three partitions, with the first one chosen. */
@@ -139,7 +146,7 @@ describe("picksFor", () => {
 
 describe("toRequest", () => {
   it("carries only the partitions that were chosen", () => {
-    const request = toRequest("card.img", null, chosenFirst());
+    const request = toRequest("card.img", null, chosenFirst(), null);
     expect(request.partitions).toEqual([
       { area: 1, index: 1, volume_name: "Work", content: null },
     ]);
@@ -147,7 +154,7 @@ describe("toRequest", () => {
 
   it("keeps both numbers, because a partition index means nothing without its disk", () => {
     const picks = picksFor(CARD).map((pick) => ({ ...pick, chosen: true }));
-    const request = toRequest("card.img", null, picks);
+    const request = toRequest("card.img", null, picks, null);
     expect(request.partitions.map((p) => [p.area, p.index])).toEqual([
       [1, 1],
       [1, 2],
@@ -158,7 +165,7 @@ describe("toRequest", () => {
   it("trims the volume name and passes a content folder through", () => {
     const picks = picksFor(CARD);
     picks[0] = { ...picks[0], chosen: true, volumeName: "  Work  ", content: "E:\\tree" };
-    expect(toRequest("card.img", null, picks).partitions[0]).toEqual({
+    expect(toRequest("card.img", null, picks, null).partitions[0]).toEqual({
       area: 1,
       index: 1,
       volume_name: "Work",
@@ -167,20 +174,28 @@ describe("toRequest", () => {
   });
 
   it("a driver nobody chose is absent, not an empty path", () => {
-    expect(toRequest("card.img", "   ", chosenFirst()).driver).toBeNull();
-    expect(toRequest("card.img", "pfs3aio.lha", chosenFirst()).driver).toBe("pfs3aio.lha");
+    expect(toRequest("card.img", "   ", chosenFirst(), null).driver).toBeNull();
+    expect(toRequest("card.img", "pfs3aio.lha", chosenFirst(), null).driver).toBe("pfs3aio.lha");
+  });
+
+  it("carries the RDB backup path, and a blank one is absent", () => {
+    expect(toRequest("card.img", null, chosenFirst(), "  E:\\rdb.bin ").rdb_backup).toBe(
+      "E:\\rdb.bin"
+    );
+    expect(toRequest("card.img", null, chosenFirst(), "   ").rdb_backup).toBeNull();
+    expect(toRequest("card.img", null, chosenFirst(), null).rdb_backup).toBeNull();
   });
 });
 
 describe("preloadBlocker", () => {
   const ready = {
     image: "card.img",
-    toolPath: "hst.imager.exe",
+    rdbBackup: null as string | null,
     picks: chosenFirst(),
     plan: PLAN,
   };
 
-  it("is clear when a card, a tool, a chosen partition and a plan are all in hand", () => {
+  it("is clear when a card, a chosen partition and a plan are in hand", () => {
     expect(preloadBlocker(ready)).toBeNull();
   });
 
@@ -188,24 +203,15 @@ describe("preloadBlocker", () => {
     expect(preloadBlocker({ ...ready, image: null })?.key).toBe("preload.blocked.noCard");
   });
 
-  // ART-120: native is the default and needs no tool for an ordinary
-  // preload — `PLAN` here has no `import-filesystem` step.
-  it("does not require the tool when the plan does not need it", () => {
-    expect(preloadBlocker({ ...ready, toolPath: null })).toBeNull();
-    expect(preloadBlocker({ ...ready, toolPath: "  " })).toBeNull();
-    expect(preloadBlocker({ ...ready, toolPath: "" })).toBeNull();
-  });
-
-  it("asks for the tool only when the plan needs it (ART-117)", () => {
-    expect(needsExternalTool(PLAN)).toBe(false);
-    expect(needsExternalTool(IMPORT_PLAN)).toBe(true);
-
-    const withImport = { ...ready, plan: IMPORT_PLAN };
-    expect(preloadBlocker({ ...withImport, toolPath: null })?.key).toBe("preload.blocked.noTool");
-    expect(preloadBlocker({ ...withImport, toolPath: "  " })?.key).toBe(
-      "preload.blocked.noTool"
+  // ART-117, decision 11: an RDB edit needs a backup path; nothing else does.
+  it("asks for a backup path only when the plan edits the RDB", () => {
+    expect(editsRdb(PLAN)).toBe(false);
+    expect(editsRdb(IMPORT_PLAN)).toBe(true);
+    expect(preloadBlocker({ ...ready, plan: IMPORT_PLAN })?.key).toBe("preload.blocked.noBackup");
+    expect(preloadBlocker({ ...ready, plan: IMPORT_PLAN, rdbBackup: "  " })?.key).toBe(
+      "preload.blocked.noBackup"
     );
-    expect(preloadBlocker(withImport)).toBeNull();
+    expect(preloadBlocker({ ...ready, plan: IMPORT_PLAN, rdbBackup: "E:\\rdb.bin" })).toBeNull();
   });
 
   it("will not run over a card with nothing chosen", () => {
@@ -254,20 +260,16 @@ describe("formatCount", () => {
     const plan: PreloadPlan = {
       image: "card.img",
       steps: [
-        {
-          step: "import-filesystem",
-          slot: 2,
-          driver: "pfs3aio.lha",
-          dostype: "PDS3",
-          name: "pfs3aio",
-        },
+        EMBED_STEP,
         { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
         { step: "format-partition", slot: 2, index: 2, drive_name: "DH1", volume_name: "Games" },
         { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
       ],
+      notes: [],
+      rdb_backup: null,
     };
     expect(formatCount(plan)).toBe(2);
-    expect(formatCount({ image: "card.img", steps: [] })).toBe(0);
+    expect(formatCount({ image: "card.img", steps: [], notes: [], rdb_backup: null })).toBe(0);
   });
 });
 
@@ -282,6 +284,33 @@ describe("stepPhrase", () => {
     });
     expect(phrase.key).toBe("preload.plan.step.format");
     expect(phrase.params).toEqual({ drive: "DH0", volume: "Work" });
+  });
+
+  it("names the driver's version for an embed", () => {
+    expect(stepPhrase(EMBED_STEP)).toEqual({
+      key: "preload.plan.step.import",
+      params: { name: "pfs3aio", dostype: "PDS3", version: "19.3" },
+    });
+  });
+
+  // Decision 11: "PDS\3 19.2 on the card → 19.3 from the file".
+  it("names both versions for a replace", () => {
+    expect(
+      stepPhrase({
+        step: "replace-filesystem",
+        slot: 2,
+        driver: "pfs3aio",
+        dostype: "PDS3",
+        name: "pfs3aio",
+        card_version: { version: 19, revision: 2 },
+        file_version: { version: 19, revision: 10 },
+        blocks: [132, 260],
+        rdb_blocks_hi_raised: null,
+      })
+    ).toEqual({
+      key: "preload.plan.step.replace",
+      params: { name: "pfs3aio", dostype: "PDS3", card: "19.2", file: "19.10" },
+    });
   });
 });
 
@@ -306,18 +335,24 @@ describe("plannedToolPhrase", () => {
     drive_name: "DH0",
     source: "E:\\tree",
   } as const;
-  const planOf = (...steps: PreloadStep[]): PreloadPlan => ({ image: "card.img", steps });
+  const planOf = (...steps: PreloadStep[]): PreloadPlan => ({
+    image: "card.img",
+    steps,
+    notes: [],
+    rdb_backup: null,
+  });
 
-  it("names hst-imager for import-filesystem, unconditionally", () => {
-    const step = {
-      step: "import-filesystem",
-      slot: 2,
-      driver: "pfs3aio.lha",
-      dostype: "PDS3",
-      name: "pfs3aio",
-    } as const;
-    expect(plannedToolPhrase(step, planOf(step))).toEqual({
-      key: "preload.plan.step.tool.hstImager",
+  it("names ART's own RDB editor for both edit steps", () => {
+    expect(plannedToolPhrase(EMBED_STEP, planOf(EMBED_STEP))).toEqual({
+      key: "preload.plan.step.tool.nativeEmbed",
+    });
+    const replace: PreloadStep = {
+      ...EMBED_STEP,
+      step: "replace-filesystem",
+      card_version: { version: 19, revision: 2 },
+    };
+    expect(plannedToolPhrase(replace, planOf(replace))).toEqual({
+      key: "preload.plan.step.tool.nativeEmbed",
     });
   });
 
@@ -384,12 +419,6 @@ describe("copiedPhrase", () => {
 });
 
 describe("fallbackPhrase", () => {
-  it("names ART-117 with no parameters", () => {
-    expect(fallbackPhrase({ reason: "foreign-rdb-embed" })).toEqual({
-      key: "preload.fallback.foreignRdbEmbed",
-    });
-  });
-
   // ART-122: the format's reason is the pairing, not the copy's own reason —
   // "a name is not ASCII" is not a fact about formatting a partition.
   it("names the drive whose copy pulled a format across, for ART-122", () => {
@@ -543,5 +572,112 @@ describe("pairingStillApplies", () => {
 
   it("never holds when nothing has been fetched yet", () => {
     expect(pairingStillApplies(null, "fp-a")).toBe(false);
+  });
+});
+
+describe("embedDetailPhrases", () => {
+  it("names the blocks and says a backup is still to be chosen", () => {
+    expect(embedDetailPhrases(EMBED_STEP, IMPORT_PLAN)).toEqual([
+      { key: "preload.plan.step.blocksRaised", params: { first: 2, last: 130, from: 1, to: 130 } },
+      { key: "preload.plan.step.backupMissing" },
+    ]);
+  });
+
+  it("names the backup once there is one, and plain blocks when nothing is raised", () => {
+    const step: PreloadStep = { ...EMBED_STEP, rdb_blocks_hi_raised: null };
+    expect(embedDetailPhrases(step, { ...IMPORT_PLAN, rdb_backup: "E:\\rdb.bin" })).toEqual([
+      { key: "preload.plan.step.blocks", params: { first: 2, last: 130 } },
+      { key: "preload.plan.step.backup", params: { backup: "E:\\rdb.bin" } },
+    ]);
+  });
+
+  it("says nothing for a step that is not an RDB edit", () => {
+    expect(embedDetailPhrases(PLAN.steps[0], PLAN)).toEqual([]);
+  });
+});
+
+describe("planNotePhrase", () => {
+  const card = { version: 19, revision: 2 };
+  it("says the card's driver stays, with both versions", () => {
+    expect(
+      planNotePhrase({ note: "driver-kept", dostype: "PDS3", card_version: card, file_version: card })
+    ).toEqual({ key: "preload.plan.note.kept", params: { dostype: "PDS3", card: "19.2", file: "19.2" } });
+    expect(
+      planNotePhrase({ note: "driver-kept", dostype: "PDS3", card_version: card, file_version: null })
+    ).toEqual({ key: "preload.plan.note.keptNoVersion", params: { dostype: "PDS3", card: "19.2" } });
+  });
+
+  it("carries a refusal's own sentence and code", () => {
+    expect(
+      planNotePhrase({
+        note: "replace-refused",
+        dostype: "PDS3",
+        card_version: card,
+        code: "ART-RDB-EDIT-NO-ROOM",
+        detail: "the driver needs 129 blocks",
+      })
+    ).toEqual({
+      key: "preload.plan.note.replaceRefused",
+      params: { dostype: "PDS3", card: "19.2", detail: "the driver needs 129 blocks", code: "ART-RDB-EDIT-NO-ROOM" },
+    });
+    // Spec decision 13: both program names, or only the file's.
+    expect(
+      planNotePhrase({
+        note: "different-driver",
+        dostype: "SFS0",
+        card_version: { version: 1, revision: 293 },
+        card_name: "SmartFilesystem",
+        file_name: "pfs3aio",
+      })
+    ).toEqual({
+      key: "preload.plan.note.differentDriver",
+      params: { dostype: "SFS0", card: "1.293", cardName: "SmartFilesystem", fileName: "pfs3aio" },
+    });
+    expect(
+      planNotePhrase({ note: "different-driver", dostype: "PDS3", card_version: card, card_name: null, file_name: "pfs3aio" })
+    ).toEqual({
+      key: "preload.plan.note.differentDriverUnknown",
+      params: { dostype: "PDS3", card: "19.2", fileName: "pfs3aio" },
+    });
+    expect(planNotePhrase({ note: "second-edit-skipped", dostype: "DOS3" })).toEqual({
+      key: "preload.plan.note.secondEdit",
+      params: { dostype: "DOS3" },
+    });
+  });
+});
+
+describe("embeddedPhrase", () => {
+  const report = {
+    slot: 2,
+    dostype: "PDS3",
+    card_version: null,
+    file_version: { version: 19, revision: 3 },
+    first_block: 132,
+    last_block: 260,
+    rdb_blocks_hi_raised: null,
+    backup: "E:\\rdb.bin",
+  };
+  it("names what went where and where the backup is", () => {
+    expect(embeddedPhrase(report)).toEqual({
+      key: "preload.result.embedded",
+      params: { dostype: "PDS3", file: "19.3", first: 132, last: 260, backup: "E:\\rdb.bin" },
+    });
+    expect(embeddedPhrase({ ...report, card_version: { version: 19, revision: 2 } })).toEqual({
+      key: "preload.result.replaced",
+      params: { dostype: "PDS3", file: "19.3", first: 132, last: 260, backup: "E:\\rdb.bin", card: "19.2" },
+    });
+  });
+});
+
+describe("backupDefaultName", () => {
+  it("is the card's stem with -rdb-backup.bin, on either separator", () => {
+    expect(backupDefaultName("E:\\amiga\\CaffeineOS_Storm_9317.img")).toBe("CaffeineOS_Storm_9317-rdb-backup.bin");
+    expect(backupDefaultName("/cards/work.hdf")).toBe("work-rdb-backup.bin");
+    expect(backupDefaultName("card")).toBe("card-rdb-backup.bin");
+    expect(backupDefaultName("")).toBe("card-rdb-backup.bin");
+  });
+
+  it("prints a version the way the FSHD states it", () => {
+    expect(versionText({ version: 19, revision: 10 })).toBe("19.10");
   });
 });
