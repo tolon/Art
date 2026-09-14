@@ -9,9 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The OS Builder answers its first question of a session without re-reading your install
-  discs.** ART remembers a disc's fingerprint between starts, so two identical images are
-  compared once, not every time ART opens.
+- **The OS Builder answers its first question of a session without re-reading two identical
+  install discs whole, on every start after the first.** ART remembers a disc's fingerprint
+  between starts; the first start after this update still reads them, and a remembered
+  fingerprint is dropped 30 days after it was stored.
 - **Adding an older update over a newer one says which is newer and in what order to add them**,
   instead of talking about a recipe's overrides.
 

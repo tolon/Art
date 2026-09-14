@@ -340,6 +340,57 @@ The shared test helper both new `scan_cache.rs` tests and the brief call `scratc
 `crate::core::osinstall::fixtures::scratch(tag) -> (ScratchDir, PathBuf)`, called as
 `fixtures::scratch(...)`.
 
+**Fix wave (final review), 2026-09-14, on `art-debt-0914` (findings M1 and I3).** Two gaps the
+final whole-branch review found in the round above.
+
+*M1 — the identity used to decide a store was safe was read after `hasher` ran, not before.*
+`store_with` (`scan_cache.rs`) stats the medium again at store time and keys the write on *that*
+reading; a medium replaced mid-hash — same path, and by the time the write lands, coincidentally
+the same size and mtime again — would get the old content's hash filed under the new content's
+identity, a wrong answer that then reads as a hit forever after. `ScanCache::store_sha256_if_unchanged(path,
+&MediaIdentity, sha256)` takes the identity a caller captured **before** hashing and stores only if
+it still matches; `scan.rs`'s `cached_sha256` now captures it before calling `hasher` and calls the
+new method instead of `store_sha256`.
+
+*I3 — the production wiring itself had no guard.* `undeclared_overwrites`'s `owners` field had no
+direct test of its own (only indirectly, through `add_package`'s refusal tests), and
+`dedupe_identical_disks_cached` always resolved through the static, process-wide `ShaMemo::process()`,
+so no test could simulate "a fresh process" without sharing state with every other test in the
+binary. A new crate-private `dedupe_identical_disks_cached_with_memo(found, cache, memo)` takes the
+memo as a parameter; the public function delegates to it with `ShaMemo::process()`. A source-literal
+test (the house pattern already used for the window-thread guard) requires `commands/osinstall.rs`
+to spell out `scan::dedupe_identical_disks_cached(media, &cache)` — assembled at runtime
+(`format!("scan::dedupe_identical_disks{}(media, &cache)", "_cached")`) so the assertion cannot
+trivially pass by matching its own source line.
+
+Tests: `a_medium_that_changed_since_the_captured_identity_is_not_stored`,
+`a_medium_unchanged_since_the_captured_identity_is_stored` (`scan_cache.rs`, M1);
+`dedupe_identical_disks_cached_follows_the_cached_hash_not_the_disc` (`scan.rs`, I3 — through the
+new `dedupe_identical_disks_cached_with_memo`, real content that differs, a cache seeded with a
+matching fake hash for both discs); `osinstall_slots_dedupes_through_the_scan_cache`
+(`commands/osinstall.rs`, I3, the source-literal guard).
+
+Mutations, each seen to fail and then restored from an absolute-path backup:
+`store_sha256_if_unchanged`'s identity check dropped (`let _ = before;`, unconditional store) —
+`a_medium_that_changed_since_the_captured_identity_is_not_stored` FAILED, `cache.lookup_sha256`
+returned the stale hash instead of `None`. `dedupe_identical_disks_cached_with_memo` handed
+`cached_sha256` a hardcoded `ScanCache::off()` instead of its own `cache` parameter —
+`dedupe_identical_disks_cached_follows_the_cached_hash_not_the_disc` FAILED, `kept.len()` was `2`
+(the discs' real, differing bytes), not `1`. `osinstall_slots`'s call reverted to
+`scan::dedupe_identical_disks(media)` — `osinstall_slots_dedupes_through_the_scan_cache` FAILED.
+
+Suite after this wave: full `cargo test --lib`, twice: `test result: ok. 3274 passed; 0 failed; 58
+ignored; 0 measured; 0 filtered out`; `cargo fmt --check` and `cargo clippy --all-targets -- -D
+warnings` clean.
+
+Record, no code change (accepted, not fixed): a medium replaced in place with an identical path,
+size and mtime can still serve a stale SHA-256 from the cache — accepted as consistent with
+`ShaMemo`'s own in-memory memo, with `mediahash`'s MD5 keyed the same way, and with the ART-194
+Forget button that already exists for exactly this case. The plan path `find_media_across` still
+calls the uncached `dedupe_identical_disks` rather than the cached form — left as is because the
+process-wide `ShaMemo` already covers repeat calls within one session, pending the slots question
+of whether `plan()` should take a scan cache at all.
+
 **ART-300** 🔵 ✅ **The refusal for an older package added over a newer one did not name the
 order** — *found 2026-09-10 fixing ART-298; fixed 2026-09-14 on `art-debt-0914`*
 `src-tauri/src/core/osinstall/package.rs` · `src-tauri/src/core/osinstall/apply.rs` ·
@@ -375,6 +426,64 @@ passed; 0 failed; 58 ignored; 0 measured; 0 filtered out`; fmt and clippy clean.
 two new `apply.rs` tests' `&[two.id.clone()]` / `&[one.clone()]`, as given, fail this project's
 clippy gate (`cloned_ref_to_slice_refs`, implied by `-D warnings`); rewritten to
 `std::slice::from_ref(&two.id)` / `std::slice::from_ref(&one)` — same values, same outcome.
+
+**Fix wave (final review), 2026-09-14, on `art-debt-0914` (findings I1, I2 and I3(a)).** The
+whole-branch review found the order sentence itself could still be false, and two of its own
+guards were unguarded.
+
+*I1 — the order sentence named only the first newer package, and used it even when the owners
+were mixed.* The shipped catalogue has **two** packages that override `boingbag-39-1`
+(`boingbag-39-2` and `boingbags-39-3-4`); with both already in the tree the old sentence said
+"without 'BoingBag 3.9-2'" while `boingbags-39-3-4` still overrode the package, so the suggested
+order would be refused again. And with a mixed `owners` — some owners are newer overriders, some
+are not — the old code still picked the first matching overrider and gave the order sentence,
+which is a false instruction: rebuilding "without" that one package would still be refused by the
+files the other owner claims. `undeclared_refusal` now takes the order sentence only when **every**
+owner in `owners` is a newer overrider (`newer.len() == owners.len()`, owners already
+deduplicated), and a new `quoted_list` names all of them — `'A'`, `'A' and 'B'`, or `'A', 'B' and
+'C'` — with subject-verb agreement (`is`/`are`, `replaces`/`replace`) on the count. Otherwise the
+plain sentence, unchanged.
+
+*I2 — the owner half of the filter (`.filter(|other| owners.iter().any(...))`) had no dedicated
+test;* the existing tests all happened to pass an `owners` list where an unfiltered
+`overriders_of` result would coincidentally agree.
+
+*I3(a) — `undeclared_overwrites`'s own `owners` field had no direct test,* only indirect coverage
+through `add_package`'s refusal tests, which never checked deduplication.
+
+Tests, each seen red first against the pre-review `undeclared_refusal`:
+`two_newer_overriders_are_both_named_in_the_order_sentence`,
+`mixed_owners_with_one_non_overriding_owner_keep_the_plain_sentence`, and the updated
+`an_older_package_over_a_newer_one_is_refused_with_the_order` (new wording: `"'{name}' is older
+than {list}, which {is|are} already in this tree and {replaces|replace} it (…) — build the tree
+again adding '{name}' before {list}, or without {list}"`). Plus `apply.rs`:
+`a_catalogue_overrider_that_is_not_actually_the_owner_keeps_the_plain_sentence` (I2),
+`undeclared_overwrites_returns_each_owner_once_deduplicated` (I3(a), through `undeclared_overwrites`
+directly — a real tree built with the shared test helpers, two undeclared files both owned by
+`base-c`, one owner named once). The ignored `commands/osinstall.rs` test
+`the_turkish_updates_go_on_in_chain_order_and_the_chain_says_why_not_the_other_way` gained
+`assert!(refused.to_string().contains("is older than"), "{refused}")` beside its existing
+`SafetyRefused` check — not run this round, per the brief (needs the owner's own material).
+
+Red: all three I1 tests run against the original `undeclared_refusal` (temporarily restored from
+git, tests kept) FAILED — e.g. `two_newer_overriders_are_both_named_in_the_order_sentence`:
+`"names both, plural: operation refused to protect data: 'Test package' is older than 'Test
+package two', 'Test package three', which is already in this tree and replaces it …"` (the old
+code named only the first, joined with `newer.join("', '")`, and used the singular verbs
+regardless of count).
+
+Mutations, each seen to fail and then restored from an absolute-path backup: the `newer.len() ==
+owners.len()` guard dropped to `!newer.is_empty()` —
+`mixed_owners_with_one_non_overriding_owner_keep_the_plain_sentence` FAILED, the order sentence
+fired for an owner (`base-c`) that never overrode anything. The owner filter widened to
+`.filter(|_| true)` — `a_catalogue_overrider_that_is_not_actually_the_owner_keeps_the_plain_sentence`
+FAILED for the same reason. `undeclared_overwrites`'s `owners.push(owner.to_string());` deleted —
+`undeclared_overwrites_returns_each_owner_once_deduplicated` FAILED, `owners` came back empty
+instead of `["base-c"]`.
+
+Suite after this wave: full `cargo test --lib`, twice: `test result: ok. 3274 passed; 0 failed; 58
+ignored; 0 measured; 0 filtered out`; `cargo fmt --check` and `cargo clippy --all-targets -- -D
+warnings` clean.
 
 **ART-118** 🟠 ✅ **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
