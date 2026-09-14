@@ -54,6 +54,34 @@ pub(crate) fn long(block: &[u8], index: usize) -> u32 {
         .unwrap_or(0)
 }
 
+/// One block ART will write, whole.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockWrite {
+    pub block: u32,
+    pub bytes: [u8; BLOCK_SIZE],
+}
+
+/// Block `n` of `range` as an owned array, or `None` past its end.
+pub(crate) fn block_array(range: &[u8], n: u32) -> Option<[u8; BLOCK_SIZE]> {
+    block_at(range, n).and_then(|bytes| bytes.try_into().ok())
+}
+
+/// `bytes` with longword `index` set to `value` and the checksum recomputed
+/// over the block's own `SummedLongs` (decision 4). Every other byte is kept —
+/// a foreign block's name, PatchFlags and tail included.
+pub fn with_long(bytes: &[u8; BLOCK_SIZE], index: usize, value: u32) -> [u8; BLOCK_SIZE] {
+    debug_assert!(
+        index < BLOCK_SIZE / 4 && index != 2,
+        "a longword, and not the checksum"
+    );
+    let mut out = *bytes;
+    let at = index * 4;
+    out[at..at + 4].copy_from_slice(&value.to_be_bytes());
+    let sum = crate::core::rdb::compute_rdb_checksum(&out);
+    out[8..12].copy_from_slice(&sum.to_be_bytes());
+    out
+}
+
 /// The RDSK fields the editor reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RdskFields {
@@ -1005,5 +1033,37 @@ mod walk_tests {
                 .contains("the image ends before RDBBlocksHi 6143"),
             "{err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod block_tests {
+    use super::fixtures::*;
+    use super::*;
+    use crate::core::rdb::verify_rdb_block_checksum;
+
+    /// Decision 3: a replaced FSHD keeps every byte but the longs ART sets —
+    /// including a name at byte 172 inside a 128-longword checksum.
+    #[test]
+    fn with_long_changes_one_longword_and_reseals_over_the_blocks_own_summed_longs() {
+        let range = caffeine_like(true);
+        let before = block_array(&range, 3).unwrap();
+        let after = with_long(&before, FSHD_VERSION, (19 << 16) | 3);
+        assert!(verify_rdb_block_checksum(&after));
+        assert_eq!(long(&after, FSHD_VERSION), (19 << 16) | 3);
+        for (at, (old, new)) in before.iter().zip(after.iter()).enumerate() {
+            if !(8..12).contains(&at) && !(36..40).contains(&at) {
+                assert_eq!(old, new, "byte {at}");
+            }
+        }
+        assert_eq!(&after[172..184], b"L:pfs3aio040");
+    }
+
+    #[test]
+    fn block_array_answers_none_past_the_end_rather_than_panicking() {
+        assert!(block_array(&[0u8; 1024], 1).is_some());
+        assert!(block_array(&[0u8; 1024], 2).is_none());
+        assert!(block_array(&[0u8; 1023], 1).is_none());
+        assert!(block_array(&[], u32::MAX).is_none());
     }
 }

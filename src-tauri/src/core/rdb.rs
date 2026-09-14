@@ -104,7 +104,7 @@ pub struct FileSystemSpec {
 ///
 /// A 512-byte block less five longwords of header — id, summed longs,
 /// checksum, host id, next.
-const LSEG_DATA_BYTES: usize = BLOCK_SIZE - 20;
+pub const LSEG_DATA_BYTES: usize = BLOCK_SIZE - 20;
 
 /// The marker every well-made Amiga binary carries so `Version` can answer.
 const VER_MARKER: &[u8] = b"$VER:";
@@ -774,6 +774,94 @@ pub struct RdbLayout {
     pub total_size: u64,
 }
 
+/// One `FSHD` block as ART writes it: `SummedLongs` 64, HostID 7, no name,
+/// zero past its data.
+pub fn build_fshd_block(
+    dos_type: u32,
+    version: u16,
+    revision: u16,
+    next: u32,
+    seg_list: u32,
+) -> [u8; BLOCK_SIZE] {
+    let mut block = [0u8; BLOCK_SIZE];
+    block[0..4].copy_from_slice(&IDNAME_FSHD.to_be_bytes());
+    block[4..8].copy_from_slice(&64u32.to_be_bytes()); // SummedLongs
+    block[12..16].copy_from_slice(&7u32.to_be_bytes()); // HostID
+    block[16..20].copy_from_slice(&next.to_be_bytes()); // Next
+    block[20..24].copy_from_slice(&0u32.to_be_bytes()); // Flags
+    block[32..36].copy_from_slice(&dos_type.to_be_bytes()); // DosType
+    let version_long = ((version as u32) << 16) | (revision as u32);
+    block[36..40].copy_from_slice(&version_long.to_be_bytes()); // Version
+
+    // PatchFlags says which of the DeviceNode fields below AmigaOS
+    // should actually take from here — one bit per field, **in the
+    // order they appear in the structure**: `Type`(0), `Task`(1),
+    // `Lock`(2), `Handler`(3), `StackSize`(4), `Priority`(5),
+    // `Startup`(6), `SegListBlock`(7), `GlobalVec`(8).
+    //
+    // **ART-126.** This was `0x10` for as long as G4 existed, on the
+    // belief that bit 4 was the seg list. Bit 4 is `StackSize`, which
+    // ART leaves at zero — so every disk ART wrote asked AmigaOS to
+    // patch a stack size to nothing and to ignore the driver it had
+    // just embedded. The partition mounted with no handler; a
+    // bootable one gave a privilege violation. Four readers agreed
+    // the driver was present (`rdbtool` even extracted it
+    // byte-for-byte); none of them acts on this field, and the first
+    // thing that did was a Kickstart.
+    //
+    // `0x180` — SegList and GlobalVec — is what CaffeineOS's own card
+    // writes, and MultibootOS writes `0x190`, the same two plus a
+    // stack size it does have an opinion about. ART claims the two
+    // that must be there and nothing else: overriding a stack size or
+    // a priority ART has no opinion about would be overriding the
+    // user's mountlist for no reason.
+    block[40..44].copy_from_slice(&0x0000_0180u32.to_be_bytes()); // PatchFlags
+
+    // DeviceNode. Everything but the seg list is left zero, except
+    // GlobalVec, which must be -1: zero means "this filesystem uses a
+    // BCPL global vector", and a modern driver does not.
+    block[72..76].copy_from_slice(&seg_list.to_be_bytes()); // dn_SegListBlock
+    block[76..80].copy_from_slice(&NO_BLOCK.to_be_bytes()); // dn_GlobalVec
+
+    let cks = compute_rdb_checksum(&block);
+    block[8..12].copy_from_slice(&cks.to_be_bytes());
+    block
+}
+
+/// A driver's `LSEG` chain, contiguous from `first_block`, each block zero
+/// past its data.
+pub fn build_lseg_chain(data: &[u8], first_block: u32) -> Vec<[u8; BLOCK_SIZE]> {
+    let count = data.len().div_ceil(LSEG_DATA_BYTES);
+    data.chunks(LSEG_DATA_BYTES)
+        .enumerate()
+        .map(|(index, chunk)| {
+            let this = first_block + index as u32;
+            let next = if index + 1 < count {
+                this + 1
+            } else {
+                NO_BLOCK
+            };
+            let mut block = [0u8; BLOCK_SIZE];
+            block[0..4].copy_from_slice(&IDNAME_LSEG.to_be_bytes());
+            // **SummedLongs declares how much of this block is real.** The
+            // last block of a chain is nearly always part-full, and writing
+            // 128 here would tell every reader the driver is up to 492 bytes
+            // longer than it is — the same rule the reader relies on, from
+            // the other side. Rounded up to a whole longword, because the
+            // field counts longwords and a driver whose length is not a
+            // multiple of four still has to arrive whole.
+            let longs = 5 + chunk.len().div_ceil(4);
+            block[4..8].copy_from_slice(&(longs as u32).to_be_bytes());
+            block[12..16].copy_from_slice(&7u32.to_be_bytes()); // HostID
+            block[16..20].copy_from_slice(&next.to_be_bytes()); // Next
+            block[20..20 + chunk.len()].copy_from_slice(chunk);
+            let cks = compute_rdb_checksum(&block);
+            block[8..12].copy_from_slice(&cks.to_be_bytes());
+            block
+        })
+        .collect()
+}
+
 /// Build the RDB and partition blocks for a new hard disk image.
 pub fn create_rdb_layout(
     total_bytes: u64,
@@ -1018,85 +1106,22 @@ pub fn create_rdb_layout(
         } else {
             NO_BLOCK
         };
+        let seg_list = if segment_count == 0 {
+            NO_BLOCK
+        } else {
+            first_seg_block
+        };
 
+        let header = build_fshd_block(fs.dos_type, fs.version, fs.revision, next_fshd, seg_list);
+        let off = fshd_block as usize * BLOCK_SIZE;
+        image[off..off + BLOCK_SIZE].copy_from_slice(&header);
+
+        for (seg_idx, segment) in build_lseg_chain(&fs.data, first_seg_block)
+            .iter()
+            .enumerate()
         {
-            let off = fshd_block as usize * BLOCK_SIZE;
-            let block = &mut image[off..off + BLOCK_SIZE];
-            block[0..4].copy_from_slice(&IDNAME_FSHD.to_be_bytes());
-            block[4..8].copy_from_slice(&64u32.to_be_bytes()); // SummedLongs
-            block[12..16].copy_from_slice(&7u32.to_be_bytes()); // HostID
-            block[16..20].copy_from_slice(&next_fshd.to_be_bytes()); // Next
-            block[20..24].copy_from_slice(&0u32.to_be_bytes()); // Flags
-            block[32..36].copy_from_slice(&fs.dos_type.to_be_bytes()); // DosType
-            let version = ((fs.version as u32) << 16) | (fs.revision as u32);
-            block[36..40].copy_from_slice(&version.to_be_bytes()); // Version
-
-            // PatchFlags says which of the DeviceNode fields below AmigaOS
-            // should actually take from here — one bit per field, **in the
-            // order they appear in the structure**: `Type`(0), `Task`(1),
-            // `Lock`(2), `Handler`(3), `StackSize`(4), `Priority`(5),
-            // `Startup`(6), `SegListBlock`(7), `GlobalVec`(8).
-            //
-            // **ART-126.** This was `0x10` for as long as G4 existed, on the
-            // belief that bit 4 was the seg list. Bit 4 is `StackSize`, which
-            // ART leaves at zero — so every disk ART wrote asked AmigaOS to
-            // patch a stack size to nothing and to ignore the driver it had
-            // just embedded. The partition mounted with no handler; a
-            // bootable one gave a privilege violation. Four readers agreed
-            // the driver was present (`rdbtool` even extracted it
-            // byte-for-byte); none of them acts on this field, and the first
-            // thing that did was a Kickstart.
-            //
-            // `0x180` — SegList and GlobalVec — is what CaffeineOS's own card
-            // writes, and MultibootOS writes `0x190`, the same two plus a
-            // stack size it does have an opinion about. ART claims the two
-            // that must be there and nothing else: overriding a stack size or
-            // a priority ART has no opinion about would be overriding the
-            // user's mountlist for no reason.
-            block[40..44].copy_from_slice(&0x0000_0180u32.to_be_bytes()); // PatchFlags
-
-            // DeviceNode. Everything but the seg list is left zero, except
-            // GlobalVec, which must be -1: zero means "this filesystem uses a
-            // BCPL global vector", and a modern driver does not.
-            let seg_list = if segment_count == 0 {
-                NO_BLOCK
-            } else {
-                first_seg_block
-            };
-            block[72..76].copy_from_slice(&seg_list.to_be_bytes()); // dn_SegListBlock
-            block[76..80].copy_from_slice(&NO_BLOCK.to_be_bytes()); // dn_GlobalVec
-
-            let cks = compute_rdb_checksum(block);
-            block[8..12].copy_from_slice(&cks.to_be_bytes());
-        }
-
-        for (seg_idx, chunk) in fs.data.chunks(LSEG_DATA_BYTES).enumerate() {
-            let seg_block = first_seg_block + seg_idx as u32;
-            let next_seg = if seg_idx + 1 < segment_count {
-                seg_block + 1
-            } else {
-                NO_BLOCK
-            };
-
-            let off = seg_block as usize * BLOCK_SIZE;
-            let block = &mut image[off..off + BLOCK_SIZE];
-            block[0..4].copy_from_slice(&IDNAME_LSEG.to_be_bytes());
-
-            // **SummedLongs declares how much of this block is real.** The
-            // last block of a chain is nearly always part-full, and writing
-            // 128 here would tell every reader the driver is up to 492 bytes
-            // longer than it is — the same rule the reader relies on, from
-            // the other side. Rounded up to a whole longword, because the
-            // field counts longwords and a driver whose length is not a
-            // multiple of four still has to arrive whole.
-            let longs = 5 + chunk.len().div_ceil(4);
-            block[4..8].copy_from_slice(&(longs as u32).to_be_bytes());
-            block[12..16].copy_from_slice(&7u32.to_be_bytes()); // HostID
-            block[16..20].copy_from_slice(&next_seg.to_be_bytes()); // Next
-            block[20..20 + chunk.len()].copy_from_slice(chunk);
-
-            let cks = compute_rdb_checksum(block);
-            block[8..12].copy_from_slice(&cks.to_be_bytes());
+            let off = (first_seg_block as usize + seg_idx) * BLOCK_SIZE;
+            image[off..off + BLOCK_SIZE].copy_from_slice(segment);
         }
 
         next_free += fs_blocks[idx];
@@ -2248,5 +2273,151 @@ mod tests {
         // Must fall back rather than panic.
         let _ = compute_rdb_checksum(&block);
         let _ = verify_rdb_block_checksum(&block);
+    }
+
+    /// The FSHD/LSEG serialisation exactly as `create_rdb_layout` wrote it
+    /// inline before ART-117 extracted it (`rdb.rs:1011-1103` at `62b5e63`),
+    /// copied verbatim. It stays as the guard that the extraction changed no
+    /// byte (spec decision 3).
+    fn legacy_driver_blocks(first_fs_block: u32, file_systems: &[FileSystemSpec]) -> Vec<u8> {
+        let fs_blocks: Vec<u32> = file_systems
+            .iter()
+            .map(|fs| 1 + fs.data.len().div_ceil(LSEG_DATA_BYTES) as u32)
+            .collect();
+        let total: u32 = fs_blocks.iter().sum();
+        let mut image = vec![0u8; (first_fs_block + total) as usize * BLOCK_SIZE];
+        let mut next_free = first_fs_block;
+        for (idx, fs) in file_systems.iter().enumerate() {
+            let fshd_block = next_free;
+            let segment_count = fs.data.len().div_ceil(LSEG_DATA_BYTES);
+            let first_seg_block = fshd_block + 1;
+            let next_fshd = if idx + 1 < file_systems.len() {
+                fshd_block + fs_blocks[idx]
+            } else {
+                NO_BLOCK
+            };
+            {
+                let off = fshd_block as usize * BLOCK_SIZE;
+                let block = &mut image[off..off + BLOCK_SIZE];
+                block[0..4].copy_from_slice(&IDNAME_FSHD.to_be_bytes());
+                block[4..8].copy_from_slice(&64u32.to_be_bytes());
+                block[12..16].copy_from_slice(&7u32.to_be_bytes());
+                block[16..20].copy_from_slice(&next_fshd.to_be_bytes());
+                block[20..24].copy_from_slice(&0u32.to_be_bytes());
+                block[32..36].copy_from_slice(&fs.dos_type.to_be_bytes());
+                let version = ((fs.version as u32) << 16) | (fs.revision as u32);
+                block[36..40].copy_from_slice(&version.to_be_bytes());
+                block[40..44].copy_from_slice(&0x0000_0180u32.to_be_bytes());
+                let seg_list = if segment_count == 0 {
+                    NO_BLOCK
+                } else {
+                    first_seg_block
+                };
+                block[72..76].copy_from_slice(&seg_list.to_be_bytes());
+                block[76..80].copy_from_slice(&NO_BLOCK.to_be_bytes());
+                let cks = compute_rdb_checksum(block);
+                block[8..12].copy_from_slice(&cks.to_be_bytes());
+            }
+            for (seg_idx, chunk) in fs.data.chunks(LSEG_DATA_BYTES).enumerate() {
+                let seg_block = first_seg_block + seg_idx as u32;
+                let next_seg = if seg_idx + 1 < segment_count {
+                    seg_block + 1
+                } else {
+                    NO_BLOCK
+                };
+                let off = seg_block as usize * BLOCK_SIZE;
+                let block = &mut image[off..off + BLOCK_SIZE];
+                block[0..4].copy_from_slice(&IDNAME_LSEG.to_be_bytes());
+                let longs = 5 + chunk.len().div_ceil(4);
+                block[4..8].copy_from_slice(&(longs as u32).to_be_bytes());
+                block[12..16].copy_from_slice(&7u32.to_be_bytes());
+                block[16..20].copy_from_slice(&next_seg.to_be_bytes());
+                block[20..20 + chunk.len()].copy_from_slice(chunk);
+                let cks = compute_rdb_checksum(block);
+                block[8..12].copy_from_slice(&cks.to_be_bytes());
+            }
+            next_free += fs_blocks[idx];
+        }
+        image.split_off(first_fs_block as usize * BLOCK_SIZE)
+    }
+
+    /// ART-117 decision 3: the builders the editor uses are the ones the
+    /// layout uses, byte for byte, at every boundary of a 492-byte LSEG.
+    #[test]
+    fn the_extracted_builders_write_the_bytes_the_layout_always_wrote() {
+        let cases: [&[usize]; 8] = [
+            &[0],
+            &[1],
+            &[491],
+            &[492],
+            &[493],
+            &[1000],
+            &[62_604],
+            &[600, 62_604],
+        ];
+        for lengths in cases {
+            let specs: Vec<FileSystemSpec> = lengths
+                .iter()
+                .enumerate()
+                .map(|(i, &len)| FileSystemSpec {
+                    dos_type: 0x5044_5303 + i as u32,
+                    version: 19,
+                    revision: 2 + i as u16,
+                    data: (0..len).map(|b| (b % 251) as u8).collect(),
+                })
+                .collect();
+            let layout = create_rdb_layout(
+                64 * 1024 * 1024,
+                &[PartitionSpec {
+                    drive_name: "DH0".into(),
+                    fs_type: AmigaHardDiskFs::Pfs3DirectScsi,
+                    size_mb: 32,
+                    bootable: true,
+                    boot_priority: 0,
+                    num_buffers: 0,
+                }],
+                &specs,
+            )
+            .unwrap();
+            assert_eq!(
+                &layout.blocks[2 * BLOCK_SIZE..],
+                &legacy_driver_blocks(2, &specs)[..],
+                "lengths {lengths:?}"
+            );
+        }
+    }
+
+    /// A block ART writes is zero past its data, so it passes the spec's
+    /// `SummedLongs` sum and amitools' 128-longword sum alike
+    /// (`Block.py:166-171` [9]).
+    #[test]
+    fn a_built_block_passes_both_checksums() {
+        let full_sum = |block: &[u8; BLOCK_SIZE]| {
+            block
+                .chunks(4)
+                .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
+                .fold(0u32, u32::wrapping_add)
+        };
+        let fshd = build_fshd_block(0x5044_5303, 19, 3, NO_BLOCK, 133);
+        assert!(verify_rdb_block_checksum(&fshd));
+        assert_eq!(full_sum(&fshd), 0);
+        let chain = build_lseg_chain(&[7u8; 1000], 133);
+        assert_eq!(chain.len(), 3);
+        for block in &chain {
+            assert!(verify_rdb_block_checksum(block));
+            assert_eq!(full_sum(block), 0);
+        }
+        assert_eq!(
+            u32::from_be_bytes(chain[1][16..20].try_into().unwrap()),
+            135
+        );
+        assert_eq!(
+            u32::from_be_bytes(chain[2][16..20].try_into().unwrap()),
+            NO_BLOCK
+        );
+        assert!(
+            chain[2][20 + 16..].iter().all(|b| *b == 0),
+            "zero past the data"
+        );
     }
 }
