@@ -1484,6 +1484,44 @@ mod tests {
         .unwrap()
     }
 
+    /// Write `dirs` directories of `per_dir` files, every file with its own
+    /// content, through one `libpfs3` writer; drop it; reopen the volume from
+    /// the device — which knows only what reached it — and return every file
+    /// that does not read back as its own bytes, with the time the writes took.
+    fn fill_and_read_back(
+        dev: &MemDevice,
+        dirs: usize,
+        per_dir: usize,
+    ) -> (Vec<String>, std::time::Duration) {
+        let mut written = Vec::with_capacity(dirs * per_dir);
+        let started = std::time::Instant::now();
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            for d in 0..dirs {
+                let dir = format!("D{d:03}");
+                w.create_dir(&dir).unwrap_or_else(|e| panic!("{dir}: {e}"));
+                for f in 0..per_dir {
+                    let name = format!("{dir}/F{f:05}");
+                    let content = format!("{name}-unique-content");
+                    w.write_file(&name, content.as_bytes())
+                        .unwrap_or_else(|e| panic!("{name}: {e}"));
+                    written.push((name, content));
+                }
+            }
+        }
+        let took = started.elapsed();
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let wrong = written
+            .into_iter()
+            .filter(|(name, content)| {
+                vol.read_file(name).ok().as_deref() != Some(content.as_bytes())
+            })
+            .map(|(name, _)| name)
+            .collect();
+        (wrong, took)
+    }
+
     /// The pieces needed to reopen a formatted `DOS\3` partition's volume for
     /// verification, without going through `NativeFormatter` a second time.
     fn ffs_region(image: &Path) -> (FileRegionMut, VolumeGeometry, u64) {
@@ -2003,6 +2041,55 @@ mod tests {
             std::fs::read(&image).unwrap() == before,
             "nothing may be written"
         );
+    }
+
+    /// **ART-311, small mode.** 22 000 files in 110 directories — with the
+    /// directories and their continuation blocks, ~22 700 anodes — go past the
+    /// one anode index block the format makes (253 × 84 − 6 = 21 246 anodes).
+    /// pfs3aio makes the next index block on demand and names it in the
+    /// rootblock (`anodes.c:740-761`); every file must read back from a volume
+    /// reopened off the device, which sees only what the rootblock names.
+    /// 48 000 blocks: small mode, 46 590 data blocks, 1 408 reserved.
+    #[test]
+    fn a_small_pfs3_volume_takes_more_anodes_than_one_index_block_holds() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        let (wrong, took) = fill_and_read_back(&dev, 110, 200);
+        println!("ART-311 small mode: 22 000 files written in {took:?}");
+        assert!(
+            wrong.is_empty(),
+            "{} of 22 000 files do not read back as their own content, first: {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(10)]
+        );
+        let root = dev.read(2, 512);
+        assert_ne!(
+            be32(&root, 0x60 + 5 * 4 + 4),
+            0,
+            "rootblock.indexblocks[1] must name the second index block"
+        );
+        assert_eq!(dev.refused(), Vec::<u64>::new());
+    }
+
+    /// **ART-311, SUPERINDEX mode.** The same 22 000 files on a volume past
+    /// MAXSMALLDISK, past the 256 anode blocks the old search stopped at
+    /// (256 × 84 − 6 = 21 498 anodes). 10 444 896 blocks is the partition
+    /// `formatted_large_pds3_image` makes, held sparse in memory.
+    #[test]
+    fn a_superindex_pfs3_volume_takes_more_anodes_than_256_anode_blocks_hold() {
+        const TOTAL: u64 = 10_444_896;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        let (wrong, took) = fill_and_read_back(&dev, 110, 200);
+        println!("ART-311 SUPERINDEX mode: 22 000 files written in {took:?}");
+        assert!(
+            wrong.is_empty(),
+            "{} of 22 000 files do not read back as their own content, first: {:?}",
+            wrong.len(),
+            &wrong[..wrong.len().min(10)]
+        );
+        assert_eq!(dev.refused(), Vec::<u64>::new());
     }
 
     // ---- ART-113: a non-ASCII name is refused before anything is written ----

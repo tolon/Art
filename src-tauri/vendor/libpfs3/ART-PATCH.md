@@ -64,6 +64,12 @@ Everything else in the writer is 0.1.3's, including its anode ceiling (ART-311).
    0.1.3 stored up to 107 bytes whatever the volume's `fnsize`, and cut longer names silently. pfs3aio cuts
    every name to `fnsize − 1` on create and on lookup (`directory.c:1489-1490,721-722`) and compares lengths
    first (`assroutines.c:163`), so a longer name lists and never opens.
+7. **The anode ceiling is pfs3aio's ([ART-311](../../../docs/ISSUES.md)), part 1.** `alloc_anode` searches
+   every anode block the volume can address — 65 536 (pfs3aio's `UWORD` seqnr, `anodes.c:582`), fewer where
+   the index levels end — instead of 256. In small mode `alloc_anode_block` makes a missing index block, up
+   to `MAXSMALLINDEXNR` (pfs3aio `NewIndexBlock`, `anodes.c:740-761`), and `update_rootblock` writes the
+   rootblock's `indexblocks` union; the volume's `AnodeReader` is rebuilt when an index root changes. 0.1.3
+   held 253 × 84 − 6 = 21 246 anodes in small mode and 256 × 84 − 6 = 21 498 in SUPERINDEX mode.
 
 ## Re-vendoring
 
@@ -218,7 +224,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      dev.flush()?;
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,12 @@
+@@ -6,6 +6,13 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
@@ -226,12 +232,13 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 +//! Modified by ART on 2026-09-13 (ART-312): `get_anode_block_nr` sees this
 +//! writer's own pending writes; on 2026-09-14 (ART-313): a continuation directory
 +//! block's parent; (ART-315) the data bitmap's bounds; (ART-314) names — a name
-+//! longer than `fnsize - 1` bytes is refused before anything is allocated.
++//! longer than `fnsize - 1` bytes is refused before anything is allocated;
++//! (ART-311) the anode search range, index blocks on demand.
 +//! `ART-PATCH.md` in this crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -74,6 +80,29 @@ impl Writer {
+@@ -74,6 +81,29 @@ impl Writer {
          self.datestamp
      }
  
@@ -261,7 +268,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      // ---- High-level API (path-based, for CLI) ----
  
      /// Write a file at the given path. Parent directories must exist.
-@@ -124,6 +153,7 @@ impl Writer {
+@@ -124,6 +154,7 @@ impl Writer {
  
      /// Create a file in a directory identified by anode.
      pub fn write_file_in(&mut self, parent_anode: u32, name: &str, data: &[u8]) -> Result<()> {
@@ -269,7 +276,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          // Check if file already exists — if so, overwrite it
          if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
              let entry_type = entry_data[pos + 1] as i8;
-@@ -144,6 +174,7 @@ impl Writer {
+@@ -144,6 +175,7 @@ impl Writer {
          name: &str,
          data: &[u8],
      ) -> Result<()> {
@@ -277,7 +284,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
  
-@@ -165,6 +196,7 @@ impl Writer {
+@@ -165,6 +197,7 @@ impl Writer {
  
      /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
      pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -285,7 +292,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let dir_blk = self.alloc_reserved_block()?;
          let anodenr = self.alloc_anode(1, dir_blk, 0)?;
  
-@@ -192,6 +224,7 @@ impl Writer {
+@@ -192,6 +225,7 @@ impl Writer {
          name: &str,
          target: &str,
      ) -> Result<()> {
@@ -293,7 +300,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let data = target.as_bytes();
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
-@@ -221,6 +254,7 @@ impl Writer {
+@@ -221,6 +255,7 @@ impl Writer {
      /// Create a hardlink in a parent directory.
      pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
          let (parent_anode, name) = self.split_path(path)?;
@@ -301,7 +308,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
          self.update_rootblock()
      }
-@@ -595,6 +629,7 @@ impl Writer {
+@@ -595,6 +630,7 @@ impl Writer {
          dst_parent: u32,
          dst_name: &str,
      ) -> Result<()> {
@@ -309,7 +316,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          let entries = self.vol.list_dir_by_anode(src_parent)?;
          let entry = entries
              .iter()
-@@ -739,9 +774,11 @@ impl Writer {
+@@ -739,9 +775,11 @@ impl Writer {
      fn load_data_bitmap(&mut self) -> Result<()> {
          let no_bmb = {
              let bits_per_bmb = self.index_per_block * 32;
@@ -323,7 +330,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          };
          for seq in 0..no_bmb {
              if let Some(blk) = self.get_bitmap_block_nr(seq)? {
-@@ -778,7 +815,10 @@ impl Writer {
+@@ -778,7 +816,10 @@ impl Writer {
                              .ok_or_else(|| {
                                  Error::Corrupt("block number overflow in bitmap".into())
                              })?;
@@ -335,7 +342,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                              continue; // skip out-of-range bitmap bits
                          }
                          longs[li] &= !(0x8000_0000 >> bit);
-@@ -825,7 +865,9 @@ impl Writer {
+@@ -825,7 +866,9 @@ impl Writer {
      }
  
      fn free_data_block(&mut self, blk: u32) -> Result<()> {
@@ -346,7 +353,83 @@ carries the format change only; the writer change (ART-312) is not prepared for 
              return Ok(());
          }
          let rel = blk - self.bitmapstart;
-@@ -1097,6 +1139,7 @@ impl Writer {
+@@ -898,7 +941,7 @@ impl Writer {
+ 
+     fn alloc_anode(&mut self, clustersize: u32, blocknr: u32, next: u32) -> Result<u32> {
+         let split = self.vol.rootblock.is_splitted_anodes();
+-        for seqnr in 0..256u32 {
++        for seqnr in 0..self.anode_block_limit() {
+             let blk_num = self.get_anode_block_nr(seqnr)?;
+             if blk_num == 0 {
+                 // No anode block at this seqnr — allocate one
+@@ -947,6 +990,29 @@ impl Writer {
+         Err(Error::DiskFull("no free anode slots".into()))
+     }
+ 
++    /// ART-311: the anode blocks this volume can address. pfs3aio passes an
++    /// anode block's number as a UWORD (`anodes.c:582`), so 65 536 at most; the
++    /// index levels bound it further — small mode's rootblock names
++    /// `MAXSMALLINDEXNR + 1` index blocks (`anodes.c:740`), SUPERINDEX mode's
++    /// extension `MAXSUPER + 1` super blocks (`anodes.c:851`). 0.1.3 searched 256.
++    fn anode_block_limit(&self) -> u32 {
++        let ipb = u64::from(self.index_per_block);
++        let by_index = if self.vol.rootblock.is_large() {
++            (MAXSUPER as u64 + 1) * ipb * ipb
++        } else {
++            (MAXSMALLINDEXNR as u64 + 1) * ipb
++        };
++        by_index.min(1 << 16) as u32
++    }
++
++    /// ART-311: the volume's `AnodeReader` copies the index roots when it is
++    /// built (`anode.rs:41-42`). After this writer names a new index or super
++    /// block it is rebuilt, so a chain walk later in this session resolves it.
++    fn refresh_anode_reader(&mut self) {
++        self.vol.anodes =
++            crate::anode::AnodeReader::new(&self.vol.rootblock, self.vol.rootblock_ext.as_ref());
++    }
++
+     /// Allocate a new anode block and register it in the index.
+     fn alloc_anode_block(&mut self, seqnr: u32) -> Result<u32> {
+         let new_blk = self.alloc_reserved_block()?;
+@@ -1012,8 +1078,14 @@ impl Writer {
+                 self.write_reserved(idx_blk, &idata)?;
+             }
+         } else {
+-            // Small mode: rootblock.indexblocks[idx_nr] → index block
+-            let idx_blk = self
++            // Small mode: rootblock.indexblocks[idx_nr] -> index block. ART-311:
++            // a missing index block is made here, as pfs3aio's NewIndexBlock
++            // does (`anodes.c:740-761`), up to MAXSMALLINDEXNR; the rootblock
++            // names it when `update_rootblock` commits.
++            if idx_nr as usize > MAXSMALLINDEXNR {
++                return Err(Error::DiskFull("no index block slot available".into()));
++            }
++            let mut idx_blk = self
+                 .vol
+                 .rootblock
+                 .indexblocks
+@@ -1021,7 +1093,18 @@ impl Writer {
+                 .copied()
+                 .unwrap_or(0);
+             if idx_blk == 0 {
+-                return Err(Error::DiskFull("no index block slot available".into()));
++                idx_blk = self.alloc_reserved_block()?;
++                let mut idata = vec![0u8; self.resblocksize as usize];
++                put_u16(&mut idata, 0, IBLKID);
++                put_u32(&mut idata, 4, self.datestamp);
++                put_u32(&mut idata, 8, idx_nr); // seqnr (`anodes.c:767`)
++                self.write_reserved(idx_blk, &idata)?;
++                let slots = &mut self.vol.rootblock.indexblocks;
++                if slots.len() <= idx_nr as usize {
++                    slots.resize(idx_nr as usize + 1, 0);
++                }
++                slots[idx_nr as usize] = idx_blk;
++                self.refresh_anode_reader();
+             }
+             let mut idata = self.read_reserved_raw(idx_blk)?;
+             let entry_off = INDEX_BLOCK_HEADER_SIZE + idx_off as usize * 4;
+@@ -1097,6 +1180,7 @@ impl Writer {
                  .anodes
                  .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
  
@@ -354,7 +437,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,6 +1147,11 @@ impl Writer {
+@@ -1104,6 +1188,11 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -366,7 +449,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  // Find end of entries
                  let mut pos = DIR_BLOCK_HEADER_SIZE;
                  while pos < self.resblocksize as usize {
-@@ -1123,13 +1171,17 @@ impl Writer {
+@@ -1123,13 +1212,17 @@ impl Writer {
                  }
              }
          }
@@ -386,7 +469,33 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
              .copy_from_slice(&entry_bytes);
          self.write_reserved(new_blk, &new_data)?;
-@@ -1286,10 +1338,44 @@ impl Writer {
+@@ -1236,6 +1329,25 @@ impl Writer {
+             }
+         }
+ 
++        // ART-311: in small mode the rootblock names every anode index block
++        // (`blocks.h:133`, `idx.small.indexblocks`, after the five bitmap index
++        // numbers); pfs3aio sets it in NewIndexBlock (`anodes.c:759-760`) and
++        // writes the rootblock last (`update.c:265-270`). SUPERINDEX mode keeps
++        // bitmap index numbers there instead.
++        if !self.vol.rootblock.is_large() {
++            let base = RB_OFF_INDEX_UNION + (MAXSMALLBITMAPINDEX + 1) * 4;
++            for (i, &blk) in self
++                .vol
++                .rootblock
++                .indexblocks
++                .iter()
++                .enumerate()
++                .take(MAXSMALLINDEXNR + 1)
++            {
++                put_u32(&mut cluster, base + i * 4, blk);
++            }
++        }
++
+         self.vol
+             .dev
+             .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)?;
+@@ -1286,10 +1398,44 @@ impl Writer {
          Ok(())
      }
  
