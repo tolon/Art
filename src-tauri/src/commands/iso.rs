@@ -32,7 +32,7 @@ use super::volume_write::{
 };
 use crate::core::error::CoreResult;
 use crate::core::iso::{IsoImage, IsoSource, SectorLayout};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::volume::write::copy::{ExtractReport, OverwritePolicy};
 use crate::error::AppResult;
@@ -297,9 +297,10 @@ pub fn iso_extract(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying out of {}", iso_path.display());
+    #[rustfmt::skip]
+    let title = JobTitle::new("components.jobBar.title.copyOutOf").text("source", &iso_path.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_out_tree(
             &iso_path,
             extent,
@@ -407,9 +408,10 @@ pub fn iso_copy_to_volume(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Copying a disc into {}", image.display());
+    #[rustfmt::skip]
+    let title = JobTitle::new("components.jobBar.title.copyDiscInto").text("target", &image.display());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = (|| -> CoreResult<_> {
             let disc = IsoImage::open(&source_iso)?;
             let source = disc_source(

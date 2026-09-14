@@ -2,10 +2,14 @@
 // `JobTitle::new("components.jobBar.title.…")` in `src-tauri/src/commands` —
 // and `JobBar.tsx` renders it through a variable, so `literal-keys.test.ts`
 // counts it and skips it. `JOB_TITLE_KEYS` in `@/lib/jobs` is where the keys
-// are written out. This file checks that list against both catalogues. A key
-// that exists only in `en.json` is a Turkish screen with an English title on
-// it, which is the defect this round is named for.
+// are written out. This file holds that list to both catalogues, and it
+// **reads the Rust files themselves**, not a copy of them ("a test that reads
+// a table instead of the file is a copy, and copies drift" — CLAUDE.md).
+// The precedent is `recipe-component-keys.test.ts`, which reads Rust-tree
+// data with `readFileSync` the same way.
 
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { JOB_TITLE_KEYS } from "@/lib/jobs";
@@ -49,6 +53,53 @@ function broken(catalogue: unknown): string[] {
   });
 }
 
+// --- The Rust side --------------------------------------------------------
+
+const RUST_SRC = resolve(__dirname, "..", "..", "src-tauri", "src");
+
+/** The type's own module and the job runner. Their tests build titles from
+ *  keys on purpose, and neither is a place a job starts. */
+const MECHANISM = new Set([join("core", "jobs", "mod.rs"), join("commands", "jobs.rs")]);
+
+function rustFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((entry) => {
+    const path = join(dir, entry);
+    if (statSync(path).isDirectory()) return rustFiles(path);
+    return path.endsWith(".rs") ? [path] : [];
+  });
+}
+
+interface Site {
+  file: string;
+  key: string;
+  /** The values the chain passes, sorted: every `.text("name", …)`, plus
+   *  `count` for a `.count(…)`. */
+  params: string[];
+}
+
+function scan(): { sites: Site[]; calls: number; letCalls: number } {
+  const sites: Site[] = [];
+  let calls = 0;
+  let letCalls = 0;
+  for (const path of rustFiles(RUST_SRC)) {
+    const file = relative(RUST_SRC, path);
+    if (MECHANISM.has(file)) continue;
+    const text = readFileSync(path, "utf8");
+    calls += text.match(/JobTitle::new\(/g)?.length ?? 0;
+    letCalls += text.match(/let title = JobTitle::new\(/g)?.length ?? 0;
+    // A site is one statement, so everything up to its `;` is its chain.
+    for (const m of text.matchAll(/JobTitle::new\(\s*"([^"]+)"\s*\)([^;]*);/g)) {
+      const chain = m[2];
+      const params = [...chain.matchAll(/\.text\(\s*"(\w+)"/g)].map((p) => p[1]);
+      if (/\.count\(/.test(chain)) params.push("count");
+      sites.push({ file, key: m[1], params: params.sort() });
+    }
+  }
+  return { sites, calls, letCalls };
+}
+
+const RUST = scan();
+
 describe("job title keys (ART-301)", () => {
   it("lists each key once, sorted, under the job bar's own namespace", () => {
     expect([...JOB_TITLE_KEYS]).toEqual([...new Set(JOB_TITLE_KEYS)].sort());
@@ -73,6 +124,41 @@ describe("job title keys (ART-301)", () => {
       const counts = placeholders(sentences).includes("count");
       if (counts !== (sentences.length === 2)) wrong.push(key);
     }
+    expect(wrong).toEqual([]);
+  });
+});
+
+describe("the job titles Rust sets (ART-301)", () => {
+  it("finds the Rust sites", () => {
+    // A moved folder or a renamed type would make every assertion below
+    // vacuously true.
+    expect(RUST.sites.length).toBeGreaterThan(0);
+  });
+
+  it("names every key as a literal, in its own `let title` statement", () => {
+    // A key built at run time, or a title built inline inside a spawn call,
+    // would escape the two checks below — so neither shape is allowed.
+    expect(RUST.sites.length).toBe(RUST.calls);
+    expect(RUST.letCalls).toBe(RUST.calls);
+  });
+
+  it("names only keys the list holds", () => {
+    const known = new Set<string>(JOB_TITLE_KEYS);
+    const unknown = RUST.sites.filter((s) => !known.has(s.key)).map((s) => `${s.file} → ${s.key}`);
+    expect(unknown).toEqual([]);
+  });
+
+  it("passes exactly the values its sentence interpolates", () => {
+    // i18next renders a missing value as nothing and ignores an extra one,
+    // so both directions are silent on screen.
+    const wrong = RUST.sites.flatMap((s) => {
+      const sentences = forms(en, s.key);
+      if (typeof sentences === "string") return []; // an unknown key is reported above
+      const wanted = placeholders(sentences);
+      return wanted.join() === s.params.join()
+        ? []
+        : [`${s.file} → ${s.key}: passes [${s.params.join(", ")}], the sentence names [${wanted.join(", ")}]`];
+    });
     expect(wrong).toEqual([]);
   });
 });
