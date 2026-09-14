@@ -8,6 +8,10 @@ to the six-section design (`.superpowers/sdd/2026-09-14-debt-2-round/art117-desi
 `docs/superpowers/notes/2026-09-14-art-117-rdb-embed-research.md` (cited below as *R §n*). Plan, to come:
 `docs/superpowers/plans/2026-09-14-art-117-rdb-embed.md`. Nothing below was run; tree facts are read and cited.*
 
+*Amended 2026-09-14, after approval, with one further owner decision: ART may raise `rdb_RDBBlocksHi` over zero
+blocks when the reserved range has no room (decision 12). That replaces the open question this spec ended with; the
+places it touches (decisions 2, 6, 7, 8, Testing, Accepted limits) say so. Tree facts re-read at `62b5e63`.*
+
 **The problem.** `NativeFormatter::import_filesystem` refuses every card (`core/preload/native.rs:171-186`, reasoning
 `:29-51`) with `CoreError::ForeignRdbEmbedNotSupported` (`core/error.rs:151-158`, code `ART-NATIVE-EMBED-UNSUPPORTED`
 at `:334`), and `commands/preload.rs:259-268` hands that step to `hst-imager`. The refusal's reason — `create_rdb_layout`
@@ -50,7 +54,8 @@ Not on a chain does not mean zero.
    - **Bound**: `k + n` ≤ `RDBBlocksHi` **and** < the lowest first block of any partition, each from its own envec —
      `LowCyl × Surfaces × BlocksPerTrack × SizeBlock×4 / BlockBytes` with checked arithmetic
      (`ParsedPartition::byte_offset`, `rdb.rs:306-312`). On CaffeineOS: `k` = 132, and a 62 604-byte driver needs 129
-     blocks, 132–260; the stale copy at 2048 is not reached.
+     blocks, 132–260; the stale copy at 2048 is not reached. When `k + n` > `RDBBlocksHi`, decision 12 may raise it;
+     when that is refused too, the answer is `NO-ROOM`.
    - The FSHD takes `k`, LSEGs `k+1..=k+n`, the layout `create_rdb_layout` writes (`rdb.rs:1011-1017`) and the card has.
    - *Rejected:* amitools' lowest-free, non-contiguous allocation (R §3 [8]) — it would fill holes below
      `HighRDSKBlock` that ART cannot tell from a previous tool's bookkeeping. hst-imager's renumbering from `RdbBlockLo`
@@ -107,7 +112,7 @@ Not on a chain does not mean zero.
    |---|---|---|
    | strict walk failed (decision 5) | `UNACCOUNTED` | which block and which check; ART edits only an RDB it can account for block by block |
    | `BadBlockList` ≠ −1 | `BAD-BLOCKS` | this RDB carries a bad-block list, which ART does not edit; hst-imager can |
-   | no room below both bounds | `NO-ROOM` | blocks needed against blocks free, the two bounds by number; hst-imager rewrites the whole RDB and checks neither bound (R §2.3), so back the card up first |
+   | no room below both bounds, and decision 12's raise refused | `NO-ROOM` | blocks needed against blocks free, the two bounds by number; hst-imager rewrites the whole RDB and checks neither bound (R §2.3), so back the card up first |
    | not a hunk file | `NOT-EXECUTABLE` | the file does not start with `HUNK_HEADER` `0x000003F3` or its length is not a multiple of 4; an `.lha` must be unpacked first (the picker offers `.lha`, `VolumePreload.tsx:215`) |
    | over 512 KiB | `DRIVER-TOO-LARGE` | the size and the cap (hst-imager's [5]); read from metadata before the file is |
    | append, no `$VER:` | `DRIVER-NO-VERSION` | why a version matters (`rdb.rs:117-126`) |
@@ -127,7 +132,8 @@ Not on a chain does not mean zero.
      layout its owner mounts daily is a refusal the user cannot act on.
 
 7. **The backup file.** The request carries `rdb_backup: Option<PathBuf>`; `PreloadPlan` echoes it. Before the journal
-   is begun, the in-memory range — area blocks `0..=RDBBlocksHi`, so a file offset is a block number × 512 — is written
+   is begun, the in-memory range — area blocks `0..=RDBBlocksHi` as the edit leaves it (decision 12: a raised value
+   takes the backup with it), so a file offset is a block number × 512 — is written
    with `core::safety::atomic::atomic_create_new` (`core/safety/atomic.rs:104-128`): the name reserved with `create_new`,
    the bytes written to a temporary in the same folder, `sync_all`, renamed over the reservation; `Created::AlreadyThere`
    is `BACKUP-EXISTS`. The file is then read back and compared with the buffer; only then does any RDB write happen.
@@ -139,7 +145,8 @@ Not on a chain does not mean zero.
    (`core/volume/journal.rs:125-176`) names exactly the S1–S4 blocks, saves their old contents — the zeros, or the stale
    copy's bytes if a driver ever reaches them — and fsyncs before the first write; `write_block` refuses any other block
    (`:201-208`). The device is a `FileRegionMut` (`core/volume/device.rs:284-328`) over **only** `(RDBBlocksHi + 1) × 512`
-   bytes at the area's offset, so no block number can land past the reserved range (`:330-341`). `Journalled` gains a
+   bytes at the area's offset — `RDBBlocksHi` as the edit leaves it (decision 12) — so no block number can land past
+   the reserved range (`:330-341`). `Journalled` gains a
    `sync()` — today only `commit` and `roll_back` sync (`:215-232`), and decision 3 needs one per stage. Success:
    `commit` after verification. Any error or failed verification: `roll_back`. A crash leaves `<image>.artjournal`
    (`:77-82`); `PendingJournal::roll_back` resolves blocks against `volume_offset` on the raw file (`:323-373`), so the
@@ -187,6 +194,38 @@ Not on a chain does not mean zero.
       `preload.blocked.noTool`, `preload.fallback.foreignRdbEmbed`, `preload.plan.step.tool.hstImager` (`en.json:2164`,
       `:2186`, `:2194`). **`en.json` and `tr.json` change in one commit**; lib helpers return a `Phrase`, never a string.
 
+12. **Raising `RDBBlocksHi` when the reserved range has no room** — the owner's decision of 2026-09-14, added after
+    approval, one task in the plan.
+    - **When.** Only when decision 2's `k + n` > `rdb_RDBBlocksHi`. A range with room is never widened.
+    - **Over zero blocks only.** Every block from `RDBBlocksHi + 1` to `k + n` must read as 512 zero bytes in the
+      in-memory range decision 5 already read. The first non-zero one is `NO-ROOM`, naming that block.
+    - **Bounds**, each checked, each a `NO-ROOM` naming the bound when crossed:
+      - `k + n` < the lowest `LowCyl` of any PART, in blocks through the RDB's own geometry: `LowCyl × rdb_Heads ×
+        rdb_Sectors`, checked arithmetic;
+      - `k + n` < decision 2's bound from each partition's own envec, which still holds;
+      - `k + n` < `rdb_LoCylinder × rdb_CylBlocks`, where `hardblocks.h` says the partitionable area begins [1][4].
+        *This third bound is the plan's addition, not the owner's*: it only narrows, and on both shapes measured it
+        equals the first (CaffeineOS 2 × 3072 = 6144; an ART card 2 × 1008 = 2016);
+      - `(k + n + 1) × 512` ≤ 8 MiB, the window decision 5 reads (`AREA_WINDOW_BYTES`, `core/card/mod.rs:40`).
+    - **Raised to exactly `k + n`**, the least value that fits.
+    - **Journalled and in the backup like any other block.** Because `k` ≤ `RDBBlocksHi + 1` (decision 5 keeps every
+      used block and `HighRDSKBlock` inside the range), every block the raise takes is one S1 or S2 writes, so it is
+      already named to `Journalled::begin`; the backup and the `FileRegionMut` cover `0..=` the raised value.
+    - **Written in S3**, in the one RDSK write that raises `HighRDSKBlock`, before S4's link. A crash after S3 leaves
+      a range that holds unlinked LSEG and FSHD bytes: still a valid RDB.
+    - **Still no room**: the existing `NO-ROOM`, which names hst-imager.
+    - **What it makes possible: a driver update on a card ART built.** `create_rdb_layout` sets `RDBBlocksHi` and
+      `HighRDSKBlock` both to `last_rdb_block` (`rdb.rs:883`, `:918`, `:922`), with `LoCylinder` 2 (`:919`) on 16/63
+      geometry (`:796-798`) and the first partition at `LowCyl` 2 (`:934`, `:977`) — first partition block 2016. One
+      PART and a 62 604-byte driver make 131 structured blocks (`:856-860`), `RDBBlocksHi` 130; a replace needs 129
+      blocks, 131–259, and raises `RDBBlocksHi` to 259. A driverless ART-built card (`RDBBlocksHi` 1) takes an append
+      at 2–130 the same way.
+    - *Rejected:* raising over non-zero blocks — CaffeineOS's stale RDB copy at 2048 shows that bytes nobody links to
+      are not bytes nobody wrote, and above `RDBBlocksHi` no tool has promised anything. Moving `LowCyl` — it moves a
+      partition, the rebuild the owner rejected. Raising straight to `LoCylinder × CylBlocks − 1` — it claims blocks
+      ART never wrote as hardblocks. A separate RDSK write for `RDBBlocksHi` — a fifth stage to test for nothing, since
+      an over-high `RDBBlocksHi` over written blocks is as harmless as an over-high `HighRDSKBlock`.
+
 ## Where it lives
 
 `core/` stays std-only. New edges only point down: `core/preload` already imports `card`, `rdb`, `volume` and `safety`
@@ -220,6 +259,9 @@ imports only `adf::bcpl` and `error` (`:9-10`).
   assert the new blocks are 132–260 and that 2048–2179 and 5120+ are byte-identical afterwards.
 - **Planner unit tests** in `core/rdbedit.rs`: bounds, `DriveInit` in the used set, the partition bound from each envec,
   the version tuple (`19.10` > `19.9`, equal is no step, no `$VER:` is no step), the FSHD kept on replace.
+- **The raise (decision 12)**: an ART-shaped replace lands at 131–259 with `RDBBlocksHi` 259; one test per refusal —
+  a non-zero block above `RDBBlocksHi`, each of the three partition-area bounds on its own, the 8 MiB window — each
+  asserting the `NO-ROOM` sentence names the bound; and a crash after S3 on a raising edit still walks.
 - **One test per refusal** in the table, each asserting the variant **and** its sentence, never merely `is_err()`.
 - **Crash points.** A test `BlockDeviceMut` that stops after stage *s* (1–4) without rollback, as a crash would. After
   each: the strict walk passes; before S4 the chain is the old one byte for byte, after S4 the new one; PARTs unchanged;
@@ -229,7 +271,8 @@ imports only `adf::bcpl` and `error` (`:9-10`).
 - **Mutations, disclosed with survivors**: link before data (S4 first); `HighRDSKBlock` raised after the commit; the
   `RDBBlocksHi` bound; the partition bound; `DriveInit` dropped from the used set; checksum enforcement off; `create_new`
   replaced by `create`; the backup written after the first RDB write; `>` made `>=`; the zeroed tail; the builders'
-  byte-identical guard. `cargo test` run more than once before merging.
+  byte-identical guard; the raise's zero check; each of its three partition-area bounds; the raise left out of S3.
+  `cargo test` run more than once before merging.
 - **Frontend**: `preload.test.ts` for the blocker, phrases and `toRequest`; a jsdom `VolumePreload.test.tsx` that Run is
   disabled until a backup path is chosen and that the replace step shows both versions.
 - **The owner's card, on a copy — `#[ignore]`**, gated on three variables: `ART_CARD_IN` (the original, already the
@@ -246,13 +289,16 @@ imports only `adf::bcpl` and `error` (`:9-10`).
 ## Accepted limits
 
 - **Unverified whether scsi.device, pi-scsi or HDToolBox read `RDBBlocksHi` or `HighRDSKBlock`** (R §1.3); the RKRM's
-  mount description names neither [2][3]. ART raises `HighRDSKBlock` and never changes `RDBBlocksHi`.
+  mount description names neither [2][3]. ART raises `HighRDSKBlock`, and raises `RDBBlocksHi` only under decision
+  12; a driver that did read `RDBBlocksHi` would see a larger reserved range, still below the first partition.
 - **Unverified whether an SD card writes a 512-byte sector atomically.** A torn S3 or S4 sector fails its checksum and
   hides the partitions until the journal or the backup restores it.
 - **Every replace consumes n + 1 new blocks**; orphaned blocks are not zeroed or reused. CaffeineOS has about 46
   replaces of room.
-- **ART's own cards have no room**: `create_rdb_layout` sets `RDBBlocksHi` = `HighRDSKBlock` = the last structured block
-  (`rdb.rs:883`, `:918`, `:922`), so a replace there is `NO-ROOM`, pointing at hst-imager (open question below).
+- **ART's own cards have room only through decision 12**: `create_rdb_layout` sets `RDBBlocksHi` = `HighRDSKBlock` =
+  the last structured block (`rdb.rs:883`, `:918`, `:922`). Each raise moves `RDBBlocksHi` up by the edit's own
+  blocks, so repeated replaces walk it towards block 2016 and then meet `NO-ROOM` (about 14 replaces of a 62 604-byte
+  driver).
 - **One RDB edit per run**, in the first area carrying the DosType; a card with it in several areas keeps the others.
 - **ART offers no restore command.** The backup is raw area blocks `0..=RDBBlocksHi`; whether hst-imager's
   `rdb restore` accepts it is unverified (its own backup looks one block short, R §5 [11]).
@@ -262,12 +308,6 @@ imports only `adf::bcpl` and `error` (`:9-10`).
   2048 but not the PFS3 blocks from 5120; the research does not record how that count was made.
 - **Owed by the owner**: mounting both PDS partitions from the edited copy in WinUAE or on a PiStorm, and asking the
   loaded handler for `version full`; running the `#[ignore]` hook.
-
-## Open question for the owner
-
-**May ART raise `RDBBlocksHi` to make room?** Recommendation: **not in this round.** Allow it later as its own task,
-bounded by `LoCylinder × CylBlocks − 1` and the first partition block, only over zero blocks. Until then a replace on a
-card ART built is refused. Decisions 2 and 6 hold `RDBBlocksHi` fixed, as the approved design says.
 
 ## Sources
 
