@@ -26,6 +26,60 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-313** 🟠 **PFS3 directories ART writes carry the wrong `parent`: the Amiga's handler cannot find a
+file's parent directory** — *found 2026-09-11 by the Windows machine's ART-310 research (D3); verified against
+pfs3aio source 2026-09-14; filed 2026-09-14*
+`src-tauri/vendor/libpfs3/src/format.rs:321-326` · `src-tauri/vendor/libpfs3/src/writer.rs:1135` · In pfs3aio a
+directory block's `parent` is the anode of the directory that *contains* the block's directory, and `0` marks the
+root's own blocks: `format.c:548` writes the root with parent 0, `directory.c:1653,1707` gives a subdirectory of
+the root parent 5, and a continuation block copies the directory's parent (`directory.c:3176,3204,3392`).
+`GetParent` reads the containing block's `parent` and treats 0 as "in root" (`directory.c:645-654`). `libpfs3`
+writes the root with parent 5 (`format.rs:321-326`) and gives every continuation block the directory's *own*
+anode (`writer.rs:1135`). `libpfs3`'s reader never reads `parent`, which is why ART never saw it.
+**How it hurts a user:** on the Amiga, asking for the parent of anything in the root, or of anything in a
+directory large enough to need a second block, goes wrong (reading-derived from pfs3aio's source — not run under
+a real handler). **Decided 2026-09-14:** fix both in the vendored copy (plan 3).
+
+**ART-314** 🟠 **A PFS3 name longer than 31 bytes lists on the Amiga but cannot be opened by name** — *found
+2026-09-11 (D14); verified against pfs3aio source 2026-09-14; filed 2026-09-14*
+`src-tauri/vendor/libpfs3/src/format.rs:239` · `src-tauri/vendor/libpfs3/src/writer.rs:1165` ·
+`src-tauri/src/core/preload/native.rs:839` · The format writes `fnsize` 32 (pfs3aio's own default,
+`format.c:520`); the writer accepts names up to 107 bytes and silently cuts longer ones (`writer.rs:1165`); ART
+checks only non-ASCII names. pfs3aio truncates a *search* name to `fnsize - 1` (`directory.c:721-722`) and its
+compare needs equal lengths (`assroutines.c:163`), so a 32–107-byte name is listed but never matched
+(reading-derived, not run). hst-imager formats `fnsize` 107 (`Pfs3Formatter.cs:297`). **Decided 2026-09-14:**
+format `fnsize` 107, and refuse a name longer than 107 bytes by name instead of cutting it (plan 3).
+
+**ART-315** 🟡 **`libpfs3`'s data allocator accepts a block number up to `bitmapstart` past the partition** —
+*found 2026-09-11 (D8); verified against pfs3aio source 2026-09-14; filed 2026-09-14*
+`src-tauri/vendor/libpfs3/src/writer.rs:776-786` · The bound is `disksize + bitmapstart`; valid data blocks are
+`[bitmapstart, disksize)` (`format.rs:120,128,193`), and pfs3aio bounds on the partition's block count
+(`allocation.c:344`, `volume.c:637`). ART's own format clears the bitmap's tail bits (`format.rs:268-278`), so
+only a volume formatted elsewhere (pfs3aio and hst-imager leave the tail free, `allocation.c:1054-1055`) near full
+can reach it, and ART's device refuses the write (`core/volume/device.rs:336-370`) — an error, not corruption.
+Not run. **To fix in plan 3.**
+
+**ART-316** 🔵 **`libpfs3`'s `FormatOptions.enable_deldir` is never read** — *found 2026-09-11 (D4); filed
+2026-09-14*
+`src-tauri/vendor/libpfs3/src/format.rs:25-28,101-111` · The option silently does nothing; ART passes `false`
+(`native.rs:189-192`, `sizing.rs:666`). pfs3aio formats a two-block deldir with `MODE_DELDIR | MODE_SUPERDELDIR`
+(`format.c:252-255`, `directory.c:4442-4480,4572-4637`); a volume without one is valid (`init.c:642-643`).
+**Decided 2026-09-14:** implement the deldir in the vendored format (plan 3); whether ART turns it on for cards
+is a separate choice recorded there.
+
+**ART-317** 🟡 **Every Amiga date ART writes is UTC; the Amiga reads it as local time** — *found 2026-09-11
+(D7, measured on the Windows run: libpfs3 entries 18:15 beside hst-imager's 21:15 on a UTC+3 machine); scope
+widened 2026-09-14; filed 2026-09-14*
+`src-tauri/vendor/libpfs3/src/util.rs:163-172` · `src-tauri/src/core/volume/write/layout.rs:104-120` ·
+`src-tauri/src/core/adf/bcpl.rs:5-6` · `src-tauri/src/core/preload/native.rs:642-655` ·
+`src-tauri/src/core/adf/create.rs:192-204` · `src-tauri/src/core/adf/mutate.rs` ·
+`src-tauri/src/core/volume/write/copy.rs:380-388` · AmigaDOS `DateStamp()` is local time with no zone (pfs3aio
+stamps with it, `directory.c:3540`, `format.c:393`). ART computes every Amiga date as UTC seconds − 252 460 800:
+libpfs3, ART's FFS/OFS writer, the RDB and ADF paths, and the host-mtime fallback. Nothing in ART obtains the
+local offset; `core/` may not call a Windows API. **How it hurts a user:** every file, directory and volume ART
+writes shows a time off by the machine's UTC offset on the Amiga. **Decided 2026-09-14:** local time everywhere,
+with the offset obtained outside `core/` (plan 5, design first).
+
 **ART-311** 🟡 **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
 mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
 format fix left the writer untouched by the owner's decision*
@@ -43,8 +97,12 @@ blocks".*
 **How it hurts a user:** content of more than ~21 000 files cannot go on a PFS3 partition ART fills,
 at any size. `core::card::sizing::pfs3_small_mode_anode_cap` sizes such content up past MAXSMALLDISK,
 which spends gigabytes of Work and does not lift the ceiling. Measured 2026-09-13 with ART-310's format fix applied: 20 655 files
-into one directory on a 1 GiB volume, then `disk full: no index block slot available`. Not scheduled;
-lifting it changes `core::card::sizing` and its tests, which is the owner's to schedule.
+into one directory on a 1 GiB volume, then `disk full: no index block slot available`. **Scheduled 2026-09-14 by
+the owner, both modes:** small mode allocates index blocks on demand up to `MAXSMALLINDEXNR` and writes the
+rootblock's index union; SUPERINDEX mode allocates super blocks up to `MAXSUPER` and writes the rootblock
+extension; the anode search covers pfs3aio's 16-bit seqnr range and roves as `curranseqnr` does (pfs3aio
+`anodes.c:389-465,717-760,844-870`, `update.c:247-269`). `core::card::sizing` then stops pushing many-file
+content past MAXSMALLDISK (plan 3).
 **A small-mode fix already exists, unmerged and unpushed:** the Windows machine's earlier, independent
 ART-310 run (2026-09-11/12, branch `art-310-windows`, local only) allocates small-mode index blocks on
 demand up to `MAXSMALLINDEXNR` (`writer.rs:1140-1145` there, commit `de26e58`). That run's task-5 review
