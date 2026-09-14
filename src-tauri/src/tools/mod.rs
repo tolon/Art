@@ -9,5 +9,6 @@
 //! concatenated into a command line.
 
 pub mod hst_imager;
+pub mod local_time;
 pub mod recycle_bin;
 pub mod winuae_launcher;

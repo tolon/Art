@@ -197,6 +197,18 @@ libpfs3 = "=0.1.3"
 # requires.
 trash = { version = "5.2.6", default-features = false, features = ["coinit_apartmentthreaded"] }
 
+# The local UTC offset, for every Amiga date ART writes or shows (ART-317).
+#
+# AmigaDOS stamps local wall time with no zone. The offset in force on a given
+# date is a Windows question, so it is asked in `tools/local_time.rs`, never in
+# `core/` (which declares `core::clock::AmigaClock`). chrono's Windows backend
+# calls `GetTimeZoneInformationForYear` for the year of the instant converted,
+# so a file modified in winter keeps its winter offset when copied in summer —
+# unlike `FileTimeToLocalFileTime`, which applies today's. Already in the build
+# through `delharc` and `serde_with`, with `clock` on; this makes it a direct
+# dependency instead of an incidental one. MIT OR Apache-2.0.
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
 # Wallpaper input. Both are pure Rust, read-only decoders that make no
 # platform call — the same category as `delharc` and `sevenz-rust2`, and so
 # they leave `core/`'s platform independence intact. They exist because a

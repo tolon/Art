@@ -76,6 +76,11 @@ ART is built on the following open-source projects:
   ART that removes a user's file, and `default-features = false` drops
   `chrono`, which it needs only to *read* the bin back — something ART never
   does
+- **chrono** — the local UTC offset in force on a given date (MIT / Apache-2.0), with `iana-time-zone`
+  (MIT / Apache-2.0) and `windows-link` (MIT / Apache-2.0) beneath it, all already in the build through
+  `delharc` and `serde_with`. **Outside `core/`**, in `tools/local_time.rs`: `core::clock::AmigaClock` declares
+  the question and this answers it, so every Amiga date ART writes is local wall time, as AmigaDOS stamps it
+  (ART-317). `core/` stays free of it, and `core::independence::core_never_names_a_time_zone_crate` keeps it so
 - **png** — PNG reading and writing (MIT / Apache-2.0). Read-only in the
   application: `core/picture` decodes a user's own PNG wallpaper into plain
   RGB pixels ahead of quantisation and ILBM encoding; the encoder half is

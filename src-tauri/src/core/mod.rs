@@ -858,6 +858,40 @@ fn production_after() -> u32 {
         );
     }
 
+    /// ART-317: the UTC offset is a platform question, answered by
+    /// `tools/local_time.rs` through `core::clock::AmigaClock`. A time-zone
+    /// crate named inside `core/` would put the answer back where it cannot
+    /// be tested with a fixed clock.
+    ///
+    /// Mutate by adding `use chrono::Local;` to `core/clock.rs`; this fails.
+    #[test]
+    fn core_never_names_a_time_zone_crate() {
+        // Built with `concat!` so this file's own source does not match.
+        let needles = [
+            concat!("chro", "no::"),
+            concat!("use chro", "no"),
+            concat!("iana_time", "_zone"),
+        ];
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            for (n, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                if needles.iter().any(|needle| line.contains(needle)) {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "core/ named a time-zone crate — the offset belongs in tools/local_time.rs (ART-317):\n{}",
+            offenders.join("\n")
+        );
+    }
+
     /// I1 (2026-09-07 final review). `strip_string_literals` used to track
     /// only string literals, so a stray, unpaired `"` inside a `//` comment
     /// or a `'"'` char literal opened a phantom span that could blank a
