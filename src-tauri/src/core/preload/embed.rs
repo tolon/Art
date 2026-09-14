@@ -12,13 +12,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::card::{is_dynamic_vhd, read_card};
 use crate::core::error::{CoreError, CoreResult, RdbEditRefusal};
+use crate::core::jobs::ProgressSink;
 use crate::core::rdb::{dos_type_string, version_from_ver_string, BLOCK_SIZE};
 use crate::core::rdbedit::{
     block_at, check_driver_bytes, check_same_driver, compare_versions, dostype_from_label,
-    plan_append, plan_replace, walk_strict, EditPlan, Stage, StrictRdb, VersionVerdict,
+    plan_append, plan_replace, walk_strict, EditKind, EditPlan, Stage, StrictRdb, VersionVerdict,
     DRIVER_MAX_BYTES, EDIT_WINDOW_BYTES,
 };
-use crate::core::volume::device::FileRegion;
+use crate::core::safety::{atomic_create_new, Created};
+use crate::core::volume::device::{FileRegion, FileRegionMut};
 use crate::core::volume::journal::{journal_path_for, Journalled};
 use crate::core::volume::{read_block_vec, BlockDeviceMut};
 
@@ -354,16 +356,191 @@ pub(crate) fn write_journalled(
     }
 }
 
+/// What a finished edit did — for the result panel and the operation log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmbedReport {
+    pub slot: Option<usize>,
+    pub dostype: String,
+    /// The replaced driver's version; `None` for an append.
+    pub card_version: Option<DriverVersion>,
+    pub file_version: DriverVersion,
+    pub first_block: u32,
+    pub last_block: u32,
+    /// `[before, after]` when decision 12 raised `RDBBlocksHi`.
+    pub rdb_blocks_hi_raised: Option<[u32; 2]>,
+    pub backup: PathBuf,
+}
+
+/// Which edit, on which card.
+#[derive(Debug, Clone, Copy)]
+pub struct EmbedTarget<'a> {
+    pub image: &'a Path,
+    pub slot: Option<usize>,
+    pub dostype: &'a str,
+    pub mode: EmbedMode,
+    pub driver: &'a Path,
+}
+
+/// Decision 7: area blocks `0..blocks` into a new file — SAFE_CREATE, written
+/// to a temporary and renamed, then read back and compared.
+pub fn write_backup(path: &Path, range: &[u8], blocks: u32) -> CoreResult<()> {
+    let failed = |detail: String| CoreError::RdbBackupFailed {
+        path: path.to_path_buf(),
+        detail,
+    };
+    let bytes = range
+        .get(..blocks as usize * BLOCK_SIZE)
+        .ok_or_else(|| failed("the RDB area ART read is shorter than its reserved range".into()))?;
+    match atomic_create_new(path, bytes) {
+        Ok(Created::Yes) => {}
+        Ok(Created::AlreadyThere) => {
+            return Err(refuse(RdbEditRefusal::BackupExists {
+                path: path.to_path_buf(),
+            }))
+        }
+        Err(err) => return Err(failed(err.to_string())),
+    }
+    let back = std::fs::read(path).map_err(|err| failed(err.to_string()))?;
+    if back != bytes {
+        return Err(failed("the file read back is not what ART wrote".into()));
+    }
+    Ok(())
+}
+
+pub(crate) type OpenDevice = dyn Fn(&Path, u64, u64) -> CoreResult<Box<dyn BlockDeviceMut>>;
+
+fn open_region(image: &Path, offset: u64, length: u64) -> CoreResult<Box<dyn BlockDeviceMut>> {
+    Ok(Box::new(FileRegionMut::open(
+        image, offset, length, BLOCK_SIZE,
+    )?))
+}
+
+/// Carry out one RDB edit: plan it again from the card, back the range up,
+/// write it journalled, verify, and report — or end in one of decision 10's
+/// sentences.
+pub fn run(
+    target: EmbedTarget<'_>,
+    backup: Option<&Path>,
+    sink: &dyn ProgressSink,
+) -> CoreResult<EmbedReport> {
+    run_with(target, backup, sink, &open_region)
+}
+
+pub(crate) fn run_with(
+    target: EmbedTarget<'_>,
+    backup: Option<&Path>,
+    sink: &dyn ProgressSink,
+    open: &OpenDevice,
+) -> CoreResult<EmbedReport> {
+    let Some(backup) = backup else {
+        return Err(refuse(RdbEditRefusal::NoBackup));
+    };
+    let ready = match target.mode {
+        EmbedMode::Append => {
+            prepare_append(target.image, target.slot, target.dostype, target.driver)?
+        }
+        EmbedMode::Replace => {
+            match prepare_replace(target.image, target.slot, target.dostype, target.driver)? {
+                Prepared::Edit(ready) => *ready,
+                Prepared::Keep { card, file } => {
+                    return Err(CoreError::InvalidInput(format!(
+                        "the card's {} driver is {card} and the file states {}, so there is \
+                         nothing newer to write",
+                        target.dostype,
+                        file.map(|f| f.to_string())
+                            .unwrap_or_else(|| "no version".into())
+                    )))
+                }
+            }
+        }
+    };
+    let plan = &ready.plan;
+    let blocks = plan.allocation.rdb_blocks_hi + 1;
+
+    sink.report(
+        0,
+        None,
+        &format!("Copying the RDB area to {}", backup.display()),
+    );
+    write_backup(backup, &ready.range, blocks)?;
+
+    let length = u64::from(blocks) * BLOCK_SIZE as u64;
+    let mut device = open(target.image, ready.area_offset, length).map_err(|err| {
+        CoreError::RdbEditUntouched {
+            backup: backup.to_path_buf(),
+            detail: err.to_string(),
+        }
+    })?;
+    sink.report(
+        0,
+        None,
+        &format!(
+            "Writing {} to RDB blocks {}–{}",
+            target.dostype, plan.allocation.fshd_block, plan.allocation.last_block
+        ),
+    );
+    let verb = match plan.kind {
+        EditKind::Append => "Embed",
+        EditKind::Replace => "Replace",
+    };
+    let description = format!(
+        "{verb} {} {} in the RDB",
+        target.dostype,
+        DriverVersion::from(plan.file_version)
+    );
+
+    match write_journalled(
+        &mut *device,
+        target.image,
+        ready.area_offset,
+        &ready.range,
+        plan,
+        &ready.driver,
+        &description,
+    ) {
+        Ok(()) => Ok(EmbedReport {
+            slot: target.slot,
+            dostype: target.dostype.to_string(),
+            card_version: plan.card_version.map(DriverVersion::from),
+            file_version: plan.file_version.into(),
+            first_block: plan.allocation.fshd_block,
+            last_block: plan.allocation.last_block,
+            rdb_blocks_hi_raised: plan
+                .allocation
+                .raised_from
+                .map(|from| [from, plan.allocation.rdb_blocks_hi]),
+            backup: backup.to_path_buf(),
+        }),
+        Err(WriteFailure::BeforeFirstWrite(err)) => Err(CoreError::RdbEditUntouched {
+            backup: backup.to_path_buf(),
+            detail: err.to_string(),
+        }),
+        Err(WriteFailure::RolledBack(detail)) => Err(CoreError::RdbEditFailed {
+            backup: backup.to_path_buf(),
+            restored: true,
+            journal: journal_path_for(target.image),
+            detail,
+        }),
+        Err(WriteFailure::RollbackFailed { detail, journal }) => Err(CoreError::RdbEditFailed {
+            backup: backup.to_path_buf(),
+            restored: false,
+            journal,
+            detail,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
     use super::*;
     use crate::core::error::RdbEditRefusal;
+    use crate::core::jobs::NoProgress;
     use crate::core::rdbedit::fixtures::*;
     use crate::core::rdbedit::{block_at, plan_append, plan_replace, walk_strict, EditPlan, Stage};
-    use crate::core::volume::device::FileRegionMut;
     use crate::core::volume::journal::find_journal;
+    use crate::core::volume::BlockDevice;
 
     pub(super) fn region(image: &Path, offset: u64, plan: &EditPlan) -> FileRegionMut {
         let length = u64::from(plan.allocation.rdb_blocks_hi + 1) * BLOCK_SIZE as u64;
@@ -1036,5 +1213,258 @@ mod tests {
                 "{slot:?}: {err}"
             );
         }
+    }
+
+    enum Fault {
+        /// Only this write (counting from 1) fails; every other one lands.
+        OnceAt(usize),
+        /// This write and every later one fails — the rollback's too.
+        FromWrite(usize),
+    }
+
+    struct Faulty {
+        inner: FileRegionMut,
+        writes: usize,
+        fault: Fault,
+    }
+
+    impl BlockDevice for Faulty {
+        fn block_size(&self) -> usize {
+            self.inner.block_size()
+        }
+        fn total_blocks(&self) -> u32 {
+            self.inner.total_blocks()
+        }
+        fn read_block(&self, n: u32, buf: &mut [u8]) -> CoreResult<()> {
+            self.inner.read_block(n, buf)
+        }
+    }
+
+    impl BlockDeviceMut for Faulty {
+        fn write_block(&mut self, n: u32, buf: &[u8]) -> CoreResult<()> {
+            self.writes += 1;
+            let fails = match self.fault {
+                Fault::OnceAt(at) => self.writes == at,
+                Fault::FromWrite(at) => self.writes >= at,
+            };
+            if fails {
+                return Err(CoreError::Io(std::io::Error::other("the card was pulled")));
+            }
+            self.inner.write_block(n, buf)
+        }
+        fn sync(&mut self) -> CoreResult<()> {
+            self.inner.sync()
+        }
+    }
+
+    /// A struct guard goes last (`scripts/scratch-guard-sweep.py`): fields
+    /// drop in order, so the folder is removed after everything naming it.
+    struct Run {
+        dir: PathBuf,
+        image: PathBuf,
+        driver: PathBuf,
+        before: Vec<u8>,
+        range: Vec<u8>,
+        _guard: crate::core::ScratchDir,
+    }
+
+    fn art_run(tag: &str) -> Run {
+        let (guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", tag);
+        let range = art_like(false);
+        let image = write_image(&dir, &range, 64 * 1024 * 1024);
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let before = std::fs::read(&image).unwrap();
+        Run {
+            dir,
+            image,
+            driver,
+            before,
+            range,
+            _guard: guard,
+        }
+    }
+
+    fn target(run: &Run) -> EmbedTarget<'_> {
+        EmbedTarget {
+            image: &run.image,
+            slot: None,
+            dostype: "PDS3",
+            mode: EmbedMode::Append,
+            driver: &run.driver,
+        }
+    }
+
+    fn with_fault(
+        fault: fn() -> Fault,
+    ) -> impl Fn(&Path, u64, u64) -> CoreResult<Box<dyn BlockDeviceMut>> {
+        move |image, offset, length| {
+            let inner = FileRegionMut::open(image, offset, length, BLOCK_SIZE)?;
+            Ok(Box::new(Faulty {
+                inner,
+                writes: 0,
+                fault: fault(),
+            }) as Box<dyn BlockDeviceMut>)
+        }
+    }
+
+    #[test]
+    fn a_run_backs_up_the_range_as_it_was_then_embeds_and_reports() {
+        let run = art_run("run-ok");
+        let backup = run.dir.join("card-rdb-backup.bin");
+        let report = super::run(target(&run), Some(&backup), &NoProgress).unwrap();
+        assert_eq!(
+            report,
+            EmbedReport {
+                slot: None,
+                dostype: "PDS3".into(),
+                card_version: None,
+                file_version: DriverVersion {
+                    version: 19,
+                    revision: 3
+                },
+                first_block: 2,
+                last_block: 130,
+                rdb_blocks_hi_raised: Some([1, 130]),
+                backup: backup.clone(),
+            }
+        );
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            run.range[..131 * 512],
+            "the pre-image, raised range included"
+        );
+        assert!(crate::core::card::read_card(&run.image)
+            .unwrap()
+            .provides_file_system(PDS3));
+    }
+
+    #[test]
+    fn no_backup_location_is_refused_and_nothing_is_made() {
+        let run = art_run("run-no-backup");
+        let err = super::run(target(&run), None, &NoProgress).unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-NO-BACKUP");
+        assert!(
+            err.to_string().contains("choose where the RDB backup goes"),
+            "{err}"
+        );
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
+        assert_eq!(
+            std::fs::read_dir(&run.dir).unwrap().count(),
+            2,
+            "only the image and the driver"
+        );
+    }
+
+    #[test]
+    fn an_existing_backup_file_is_refused_and_left_as_it_was() {
+        let run = art_run("run-backup-exists");
+        let backup = run.dir.join("mine.bin");
+        std::fs::write(&backup, b"mine").unwrap();
+        let err = super::run(target(&run), Some(&backup), &NoProgress).unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-BACKUP-EXISTS");
+        assert!(
+            err.to_string().contains(&backup.display().to_string()),
+            "{err}"
+        );
+        assert_eq!(std::fs::read(&backup).unwrap(), b"mine");
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
+    }
+
+    #[test]
+    fn a_backup_that_cannot_be_written_leaves_the_card_untouched() {
+        let run = art_run("run-backup-failed");
+        let backup = run.dir.join("no-such-folder").join("rdb.bin");
+        let err = super::run(target(&run), Some(&backup), &NoProgress).unwrap_err();
+        assert!(matches!(err, CoreError::RdbBackupFailed { .. }), "{err:?}");
+        assert_eq!(err.code(), "ART-RDB-BACKUP-FAILED");
+        let sentence = err.to_string();
+        assert!(
+            sentence.contains(&backup.display().to_string())
+                && sentence.contains("The card was not touched."),
+            "{sentence}"
+        );
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
+    }
+
+    #[test]
+    fn a_device_that_will_not_open_stops_before_the_first_write_and_names_the_backup() {
+        let run = art_run("run-untouched");
+        let backup = run.dir.join("rdb.bin");
+        let refuse_open = |_: &Path, _: u64, _: u64| -> CoreResult<Box<dyn BlockDeviceMut>> {
+            Err(CoreError::Io(std::io::Error::other("the image is locked")))
+        };
+        let err = run_with(target(&run), Some(&backup), &NoProgress, &refuse_open).unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-UNTOUCHED", "{err}");
+        assert!(
+            err.to_string().contains(&backup.display().to_string()),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            run.range[..131 * 512],
+            "the backup exists before any write"
+        );
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
+    }
+
+    #[test]
+    fn a_write_that_fails_is_rolled_back_and_names_the_backup() {
+        let run = art_run("run-rolled-back");
+        let backup = run.dir.join("rdb.bin");
+        let err = run_with(
+            target(&run),
+            Some(&backup),
+            &NoProgress,
+            &with_fault(|| Fault::OnceAt(5)),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, CoreError::RdbEditFailed { restored: true, .. }),
+            "{err:?}"
+        );
+        assert_eq!(err.code(), "ART-RDB-EDIT-ROLLED-BACK");
+        let sentence = err.to_string();
+        assert!(
+            sentence.contains("put every block it wrote back")
+                && sentence.contains(&backup.display().to_string()),
+            "{sentence}"
+        );
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
+        assert!(!journal_path_for(&run.image).exists());
+    }
+
+    #[test]
+    fn a_rollback_that_fails_leaves_the_journal_and_names_it_and_the_backup() {
+        let run = art_run("run-rollback-failed");
+        let backup = run.dir.join("rdb.bin");
+        let err = run_with(
+            target(&run),
+            Some(&backup),
+            &NoProgress,
+            &with_fault(|| Fault::FromWrite(5)),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-RDB-EDIT-ROLLBACK-FAILED", "{err}");
+        let journal = journal_path_for(&run.image);
+        let sentence = err.to_string();
+        assert!(
+            sentence.contains(&journal.display().to_string()),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains(&backup.display().to_string()),
+            "{sentence}"
+        );
+        assert!(
+            sentence.contains("undo it in the File Manager"),
+            "{sentence}"
+        );
+        // And the File Manager's own recovery does put the card back.
+        find_journal(&run.image)
+            .unwrap()
+            .unwrap()
+            .roll_back()
+            .unwrap();
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
     }
 }

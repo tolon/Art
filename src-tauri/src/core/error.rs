@@ -474,6 +474,28 @@ pub enum CoreError {
     /// ART-117: an in-place RDB edit refused before anything was written.
     #[error("{0}")]
     RdbEditRefused(RdbEditRefusal),
+
+    /// ART-117: the RDB backup could not be written; the card was not touched.
+    #[error("ART could not write the RDB backup to '{}': {detail}. The card was not touched.", path.display())]
+    RdbBackupFailed { path: PathBuf, detail: String },
+
+    /// ART-117: the backup exists, and the edit stopped before its first write.
+    #[error(
+        "the RDB edit stopped before its first write: {detail}. The card was not touched; the RDB \
+         backup is at '{}'.",
+        backup.display()
+    )]
+    RdbEditUntouched { backup: PathBuf, detail: String },
+
+    /// ART-117: the edit was written and then failed or did not verify.
+    /// `restored` says whether the journal put the card back.
+    #[error("{}", rdb_edit_failed_message(backup, *restored, journal, detail))]
+    RdbEditFailed {
+        backup: PathBuf,
+        restored: bool,
+        journal: PathBuf,
+        detail: String,
+    },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -507,6 +529,29 @@ fn pfs3_names_too_long_message(paths: &[String], more: usize, max_bytes: usize) 
     }
     msg.push_str(". Shorten them before copying.");
     msg
+}
+
+/// The sentence for [`CoreError::RdbEditFailed`]: two endings, two next steps.
+fn rdb_edit_failed_message(
+    backup: &std::path::Path,
+    restored: bool,
+    journal: &std::path::Path,
+    detail: &str,
+) -> String {
+    if restored {
+        format!(
+            "the RDB edit failed or did not verify, and ART put every block it wrote back as it \
+             was: {detail}. The RDB backup is at '{}'.",
+            backup.display()
+        )
+    } else {
+        format!(
+            "the RDB edit failed and undoing it failed too: {detail}. The undo journal is at '{}' \
+             — undo it in the File Manager before using the card. The RDB backup is at '{}'.",
+            journal.display(),
+            backup.display()
+        )
+    }
 }
 
 impl CoreError {
@@ -543,6 +588,12 @@ impl CoreError {
             Self::PayloadPasswordRefused { .. } => "ART-PAYLOAD-PASSWORD",
             Self::Pfs3WriterLocked => "ART-PFS3-WRITER-LOCKED",
             Self::RdbEditRefused(refusal) => refusal.code(),
+            Self::RdbBackupFailed { .. } => "ART-RDB-BACKUP-FAILED",
+            Self::RdbEditUntouched { .. } => "ART-RDB-EDIT-UNTOUCHED",
+            Self::RdbEditFailed { restored: true, .. } => "ART-RDB-EDIT-ROLLED-BACK",
+            Self::RdbEditFailed {
+                restored: false, ..
+            } => "ART-RDB-EDIT-ROLLBACK-FAILED",
         }
     }
 
@@ -707,6 +758,26 @@ mod tests {
             }),
             CoreError::RdbEditRefused(RdbEditRefusal::NoBackup),
             CoreError::RdbEditRefused(RdbEditRefusal::BackupExists { path: "x".into() }),
+            CoreError::RdbBackupFailed {
+                path: "x".into(),
+                detail: "x".into(),
+            },
+            CoreError::RdbEditUntouched {
+                backup: "x".into(),
+                detail: "x".into(),
+            },
+            CoreError::RdbEditFailed {
+                backup: "x".into(),
+                restored: true,
+                journal: "j".into(),
+                detail: "x".into(),
+            },
+            CoreError::RdbEditFailed {
+                backup: "x".into(),
+                restored: false,
+                journal: "j".into(),
+                detail: "x".into(),
+            },
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();
