@@ -307,9 +307,9 @@ block — do not stack another on top of it.**
    them and is **closed as of 2026-09-08**: the owner reversed the ruling,
    and ART places BoingBag 1 and 2 from Windows with the key Emu68 Hatcher
    and Emu68-Imager publish, checked file for file against the tree two real
-   emulator runs produced. [ART-118](ISSUES.md) and [ART-062](ISSUES.md) both need a person driving a
-   real screen — the OS Builder's install screen in a live window, and the
-   Turkish catalogue read by someone who speaks it — not a design or a fix.
+   emulator runs produced. [ART-118](ISSUES.md) was closed on 2026-09-14 as
+   superseded by the four-tab OS Builder. [ART-062](ISSUES.md) remains the
+   item that needs a person reading Turkish screens — not a design or a fix.
    [ART-117](ISSUES.md) is the owner's standing decision not to risk silently
    shifting a foreign card's existing partitions. [ART-250](ISSUES.md) is
    deliberate: `tooltypes()`'s lossy UTF-8 decode is disclosed and counted

@@ -28,7 +28,7 @@ pass — filed and closed together rather than sitting in Open in between.
 
 **ART-313** 🟠 **PFS3 directories ART writes carry the wrong `parent`: the Amiga's handler cannot find a
 file's parent directory** — *found 2026-09-11 by the Windows machine's ART-310 research (D3); verified against
-pfs3aio source 2026-09-14; filed 2026-09-14*
+pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed 2026-09-14*
 `src-tauri/vendor/libpfs3/src/format.rs:321-326` · `src-tauri/vendor/libpfs3/src/writer.rs:1135` · In pfs3aio a
 directory block's `parent` is the anode of the directory that *contains* the block's directory, and `0` marks the
 root's own blocks: `format.c:548` writes the root with parent 0, `directory.c:1653,1707` gives a subdirectory of
@@ -41,44 +41,58 @@ directory large enough to need a second block, goes wrong (reading-derived from 
 a real handler). **Decided 2026-09-14:** fix both in the vendored copy (plan 3).
 
 **ART-314** 🟠 **A PFS3 name longer than 31 bytes lists on the Amiga but cannot be opened by name** — *found
-2026-09-11 (D14); verified against pfs3aio source 2026-09-14; filed 2026-09-14*
+2026-09-11 (D14); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
+2026-09-14*
 `src-tauri/vendor/libpfs3/src/format.rs:239` · `src-tauri/vendor/libpfs3/src/writer.rs:1165` ·
 `src-tauri/src/core/preload/native.rs:839` · The format writes `fnsize` 32 (pfs3aio's own default,
 `format.c:520`); the writer accepts names up to 107 bytes and silently cuts longer ones (`writer.rs:1165`); ART
 checks only non-ASCII names. pfs3aio truncates a *search* name to `fnsize - 1` (`directory.c:721-722`) and its
 compare needs equal lengths (`assroutines.c:163`), so a 32–107-byte name is listed but never matched
-(reading-derived, not run). hst-imager formats `fnsize` 107 (`Pfs3Formatter.cs:297`). **Decided 2026-09-14:**
+(reading-derived, not run). hst-imager formats `fnsize` 107 (`henrikstengaard/hst-amiga` @ `6b45584`,
+`Pfs3Formatter.cs:297`). **Decided 2026-09-14:**
 format `fnsize` 107, and refuse a name longer than 107 bytes by name instead of cutting it (plan 3).
 
 **ART-315** 🟡 **`libpfs3`'s data allocator accepts a block number up to `bitmapstart` past the partition** —
-*found 2026-09-11 (D8); verified against pfs3aio source 2026-09-14; filed 2026-09-14*
+*found 2026-09-11 (D8); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
+2026-09-14*
 `src-tauri/vendor/libpfs3/src/writer.rs:776-786` · The bound is `disksize + bitmapstart`; valid data blocks are
 `[bitmapstart, disksize)` (`format.rs:120,128,193`), and pfs3aio bounds on the partition's block count
 (`allocation.c:344`, `volume.c:637`). ART's own format clears the bitmap's tail bits (`format.rs:268-278`), so
-only a volume formatted elsewhere (pfs3aio and hst-imager leave the tail free, `allocation.c:1054-1055`) near full
-can reach it, and ART's device refuses the write (`core/volume/device.rs:336-370`) — an error, not corruption.
+only a volume formatted elsewhere (pfs3aio leaves the tail free, `allocation.c:1054-1055`) near full
+can reach it, and ART's device refuses the write (`core/volume/device.rs:330-333`) — an error, not corruption.
 Not run. **To fix in plan 3.**
 
 **ART-316** 🔵 **`libpfs3`'s `FormatOptions.enable_deldir` is never read** — *found 2026-09-11 (D4); filed
 2026-09-14*
 `src-tauri/vendor/libpfs3/src/format.rs:25-28,101-111` · The option silently does nothing; ART passes `false`
 (`native.rs:189-192`, `sizing.rs:666`). pfs3aio formats a two-block deldir with `MODE_DELDIR | MODE_SUPERDELDIR`
-(`format.c:252-255`, `directory.c:4442-4480,4572-4637`); a volume without one is valid (`init.c:642-643`).
+(`format.c:252-255`, `directory.c:4442-4480,4572-4637`); a volume without one is valid (`init.c:642-643`)
+(pfs3aio `211f7f0`, read, not run).
 **Decided 2026-09-14:** implement the deldir in the vendored format (plan 3); whether ART turns it on for cards
 is a separate choice recorded there.
 
-**ART-317** 🟡 **Every Amiga date ART writes is UTC; the Amiga reads it as local time** — *found 2026-09-11
-(D7, measured on the Windows run: libpfs3 entries 18:15 beside hst-imager's 21:15 on a UTC+3 machine); scope
-widened 2026-09-14; filed 2026-09-14*
+**ART-317** 🟡 **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
+the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
+beside hst-imager's 21:15 on a UTC+3 machine, experiment E2 — see
+`docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md` on the local-only branch `art-310-windows`,
+`git show art-310-windows:docs/superpowers/notes/2026-09-11-libpfs3-format-fix-research.md`); scope widened and
+rescoped 2026-09-14; filed 2026-09-14*
 `src-tauri/vendor/libpfs3/src/util.rs:163-172` · `src-tauri/src/core/volume/write/layout.rs:104-120` ·
 `src-tauri/src/core/adf/bcpl.rs:5-6` · `src-tauri/src/core/preload/native.rs:642-655` ·
 `src-tauri/src/core/adf/create.rs:192-204` · `src-tauri/src/core/adf/mutate.rs` ·
-`src-tauri/src/core/volume/write/copy.rs:380-388` · AmigaDOS `DateStamp()` is local time with no zone (pfs3aio
-stamps with it, `directory.c:3540`, `format.c:393`). ART computes every Amiga date as UTC seconds − 252 460 800:
-libpfs3, ART's FFS/OFS writer, the RDB and ADF paths, and the host-mtime fallback. Nothing in ART obtains the
-local offset; `core/` may not call a Windows API. **How it hurts a user:** every file, directory and volume ART
-writes shows a time off by the machine's UTC offset on the Amiga. **Decided 2026-09-14:** local time everywhere,
-with the offset obtained outside `core/` (plan 5, design first).
+`src-tauri/src/core/volume/write/copy.rs:372-373,380-388` · `src-tauri/src/core/volume/write/uaem.rs:206` ·
+AmigaDOS `DateStamp()` is local time with no zone (pfs3aio stamps with it, `directory.c:3540`, `format.c:393`;
+pfs3aio `211f7f0`, read, not run). ART stamps two kinds of Amiga date as UTC seconds − 252 460 800: one read
+from the host clock at write time (libpfs3's own rootblock and entry dates, ART's FFS/OFS writer, the RDB and
+ADF paths) and one converted from a host file's modification time (the host-mtime fallback, `copy.rs:380-388`).
+**A `.uaem` sidecar's own date is not part of this defect and was wrongly folded into "every date" before
+2026-09-14's rescope:** `uaem.rs:206`'s `amiga_from_civil` parses the sidecar's zone-less text directly into an
+`AmigaDate` with no UTC step at all, and `copy.rs:372-373` writes that value through unchanged — already local,
+never converted. Nothing in ART obtains the local offset for the two paths that are wrong; `core/` may not call
+a Windows API. **How it hurts a user:** every file, directory and volume ART stamps from `now()` or from a host
+file's own modification time shows a time off by the machine's UTC offset on the Amiga; a file carrying its own
+`.uaem` sidecar date is unaffected. **Decided 2026-09-14:** local time everywhere, with the offset obtained
+outside `core/` (plan 5, design first).
 
 **ART-311** 🟡 **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
 mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
@@ -87,10 +101,10 @@ format fix left the writer untouched by the owner's decision*
 demand (`NewIndexBlock`, `anodes.c:717-772`: up to `MAXSMALLINDEXNR` + 1 = 99 in small mode, through
 `NewSuperBlock` in SUPERINDEX mode). `libpfs3`'s writer does neither. In small mode it returns
 `DiskFull("no index block slot available")` as soon as `rootblock.indexblocks[idx_nr]` is unset
-(`writer.rs:1024`), so a volume keeps the one index block the format made: 253 × 84 − 6 = 21 246
+(`writer.rs:1027`), so a volume keeps the one index block the format made: 253 × 84 − 6 = 21 246
 anodes. In SUPERINDEX mode it returns `DiskFull("no superindex slot available")` when
-`superindex[n]` is unset (`writer.rs:980`), but that is never reached: `alloc_anode` searches only
-anode blocks 0..256 (`writer.rs:901`) and then returns `DiskFull("no free anode slots")` (`:947`), so
+`superindex[n]` is unset (`writer.rs:983`), but that is never reached: `alloc_anode` searches only
+anode blocks 0..256 (`writer.rs:904`) and then returns `DiskFull("no free anode slots")` (`:950`), so
 a SUPERINDEX-mode volume holds 256 × 84 − 6 = 21 498 anodes at 1024-byte reserved blocks. *Corrected
 2026-09-13 by the branch's final whole-branch review; this entry first said "only past 253² anode
 blocks".*
@@ -113,7 +127,7 @@ twice. 3 of 22 000 files read back a directory block; 0 with one variable change
 writing through); the same 3 files on 0.1.3's writer at 18 000 (fixed there in `9c7c845`; the review
 is that machine's git-ignored `.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`).
 That defect is ART-312, fixed 2026-09-13 on `art-312-anode-reuse`. The owner chose on 2026-09-13 to finish this branch first and port that work
-afterwards.
+afterwards. Superseded on 2026-09-14: scheduled for plan 3.
 
 **ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
 by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
@@ -305,6 +319,9 @@ stores md5s keyed by size and modification time) would let the next start pay no
 real browser past its headings — jsdom now covers what a browser could not,
 the crash itself is still unresolved** — *found 2026-08-15/16, Task 13's
 browser pass and Task 14's real run; narrowed 2026-08-19*
+
+**Closed 2026-09-14 as superseded — see the last paragraph; the text above is the entry as it stood open.**
+
 `src/components/osbuilder/OsInstall.tsx` · A headless-Chrome probe confirmed
 the route, the new `Install` kind, and five resolved `h2` strings with no raw
 key and no `{{…}}`. Deeper interaction — filling the media/ROM/destination

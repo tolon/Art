@@ -109,6 +109,10 @@ D14 format `fnsize` 107; separate plans, executed by subagents.*
 - `.uaem` dates are zone-less text (`uaem.rs:193-272`); `distribution.json` carries no dates.
 - libpfs3 copy_in never passes host mtimes (`native.rs:895-965`; dates dropped → ART-116); FFS does (`FileMeta.date`).
 - No documented local-vs-UTC decision in architecture/ISSUES/lessons.
-- **Decision for the owner:** (a) local time everywhere — an offset obtained outside `core/` (command layer via
-  a Windows API or the webview's `getTimezoneOffset`) injected into every writer; (b) keep UTC and document it as
-  a decision; (c) PFS3 only. File ART-315 either way, scoped to all writers.
+- A `.uaem` sidecar's own date is zone-less text parsed straight into an `AmigaDate` with no UTC step
+  (`uaem.rs:206`, `amiga_from_civil`) and written through unchanged (`copy.rs:372-373`) — already local, not part
+  of this defect. The defect is scoped to the two paths that do compute UTC: a date read from the host clock at
+  write time, and a date converted from a host file's modification time (`copy.rs:380-388`).
+- **Decision for the owner — decided 2026-09-14: local time everywhere.** An offset obtained outside `core/`
+  (command layer via a Windows API or the webview's `getTimezoneOffset`) injected into every writer for the two
+  paths above. File ART-317 either way, scoped to all writers (not ART-315, which is the allocator bound).
