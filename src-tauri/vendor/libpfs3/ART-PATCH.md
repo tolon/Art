@@ -1,4 +1,4 @@
-# `libpfs3` 0.1.3+art.2 — ART's vendored copy
+# `libpfs3` 0.1.3+art.3 — ART's vendored copy
 
 This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART for
 [ART-310](../../../docs/ISSUES.md). ART's build uses it through `[patch.crates-io]` in
@@ -9,8 +9,8 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 | Original | `https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`, SHA-256 `02f457ef99a09ddebf56e454c6a25dc3a6860a602c878489f132a4ca3eed4317` |
 | Upstream source | `metaneutrons/pfs3` commit `33e9ff6ba8462cc4e434dfb6e2783d91b7dd5b14`, `crates/libpfs3` (the crate's `.cargo_vcs_info.json`) |
 | Licence | LGPL-3.0-or-later. `LICENSE` is upstream's own file at that commit, unchanged; the full LGPL-3.0 text is `COPYING.LESSER`; the GPL-3.0 text it builds on is ART's `LICENSE` |
-| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs` and `src/ondisk/mod.rs`; each file's header says so |
-| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.2`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
+| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs` and `src/ondisk/mod.rs`; each file's header says so |
+| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.3`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
 | Not carried | `tests/`: `GPL-3.0-only` headers, 9.3 MB of fixtures, and a dev-dependency (`sevenz-rust` 0.6) with RUSTSEC-2026-0245 and RUSTSEC-2026-0246. ART's own tests prove the patch (`src-tauri/src/core/preload/native.rs`) |
 
 ## Changes against 0.1.3
@@ -43,7 +43,7 @@ any port of it. Reserved-area sizing, option flags, datestamps and everything el
    through the cache; it matters only when one operation allocates two new index blocks in SUPERINDEX
    mode.
 
-Everything else in the writer is 0.1.3's, including its anode ceiling (ART-311).
+Everything else in the writer is 0.1.3's.
 
 **2026-09-14, the debt round** (plan `docs/superpowers/plans/2026-09-14-debt-3-pfs3.md`; pfs3aio read at
 `tonioni/pfs3aio` `211f7f0`):
@@ -112,14 +112,24 @@ a local clone of `metaneutrons/pfs3`: the same change to `crates/libpfs3/src/for
 `tests/format.rs` (seen red on `main`, green on the change), upstream's fmt, clippy, test and deny checks
 clean, and a Conventional Commit with no AI attribution, as upstream's `CONTRIBUTING.md` requires. The
 owner opens the pull request after a patched volume has been mounted under real pfs3aio. That branch
-carries the format change only; the writer change (ART-312) is not prepared for upstream yet.
+carries the format change only; the writer change (ART-312) is not prepared for upstream yet. The
+2026-09-14 changes (items 4–9) are not prepared for upstream either.
 
 ## Diff against 0.1.3
 
 ```diff
 --- a/src/error.rs
 +++ b/src/error.rs
-@@ -30,6 +30,14 @@ pub enum Error {
+@@ -1,4 +1,8 @@
+ //! Error types for libpfs3.
++//!
++//! Modified by ART on 2026-09-14 (ART-314): the `NameTooLong` variant, for a
++//! name the volume cannot store and find again. `ART-PATCH.md` in this
++//! crate's root says what and why.
+ 
+ /// Result type alias using the PFS3 [`Error`].
+ pub type Result<T> = std::result::Result<T, Error>;
+@@ -30,6 +34,14 @@ pub enum Error {
      #[error("already exists: {0}")]
      AlreadyExists(String),
  

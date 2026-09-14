@@ -26,50 +26,13 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-313** 🟠 **PFS3 directories ART writes carry the wrong `parent`: the Amiga's handler cannot find a
-file's parent directory** — *found 2026-09-11 by the Windows machine's ART-310 research (D3); verified against
-pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed 2026-09-14*
-`src-tauri/vendor/libpfs3/src/format.rs:321-326` · `src-tauri/vendor/libpfs3/src/writer.rs:1135` · In pfs3aio a
-directory block's `parent` is the anode of the directory that *contains* the block's directory, and `0` marks the
-root's own blocks: `format.c:548` writes the root with parent 0, `directory.c:1653,1707` gives a subdirectory of
-the root parent 5, and a continuation block copies the directory's parent (`directory.c:3176,3204,3392`).
-`GetParent` reads the containing block's `parent` and treats 0 as "in root" (`directory.c:645-654`). `libpfs3`
-writes the root with parent 5 (`format.rs:321-326`) and gives every continuation block the directory's *own*
-anode (`writer.rs:1135`). `libpfs3`'s reader never reads `parent`, which is why ART never saw it.
-**How it hurts a user:** on the Amiga, asking for the parent of anything in the root, or of anything in a
-directory large enough to need a second block, goes wrong (reading-derived from pfs3aio's source — not run under
-a real handler). **Decided 2026-09-14:** fix both in the vendored copy (plan 3).
-
-**ART-314** 🟠 **A PFS3 name longer than 31 bytes lists on the Amiga but cannot be opened by name** — *found
-2026-09-11 (D14); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
-2026-09-14*
-`src-tauri/vendor/libpfs3/src/format.rs:239` · `src-tauri/vendor/libpfs3/src/writer.rs:1165` ·
-`src-tauri/src/core/preload/native.rs:839` · The format writes `fnsize` 32 (pfs3aio's own default,
-`format.c:520`); the writer accepts names up to 107 bytes and silently cuts longer ones (`writer.rs:1165`); ART
-checks only non-ASCII names. pfs3aio truncates a *search* name to `fnsize - 1` (`directory.c:721-722`) and its
-compare needs equal lengths (`assroutines.c:163`), so a 32–107-byte name is listed but never matched
-(reading-derived, not run). hst-imager formats `fnsize` 107 (`henrikstengaard/hst-amiga` @ `6b45584`,
-`Pfs3Formatter.cs:297`). **Decided 2026-09-14:**
-format `fnsize` 107, and refuse a name longer than 107 bytes by name instead of cutting it (plan 3).
-
-**ART-315** 🟡 **`libpfs3`'s data allocator accepts a block number up to `bitmapstart` past the partition** —
-*found 2026-09-11 (D8); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
-2026-09-14*
-`src-tauri/vendor/libpfs3/src/writer.rs:776-786` · The bound is `disksize + bitmapstart`; valid data blocks are
-`[bitmapstart, disksize)` (`format.rs:120,128,193`), and pfs3aio bounds on the partition's block count
-(`allocation.c:344`, `volume.c:637`). ART's own format clears the bitmap's tail bits (`format.rs:268-278`), so
-only a volume formatted elsewhere (pfs3aio leaves the tail free, `allocation.c:1054-1055`) near full
-can reach it, and ART's device refuses the write (`core/volume/device.rs:330-333`) — an error, not corruption.
-Not run. **To fix in plan 3.**
-
-**ART-316** 🔵 **`libpfs3`'s `FormatOptions.enable_deldir` is never read** — *found 2026-09-11 (D4); filed
-2026-09-14*
-`src-tauri/vendor/libpfs3/src/format.rs:25-28,101-111` · The option silently does nothing; ART passes `false`
-(`native.rs:189-192`, `sizing.rs:666`). pfs3aio formats a two-block deldir with `MODE_DELDIR | MODE_SUPERDELDIR`
-(`format.c:252-255`, `directory.c:4442-4480,4572-4637`); a volume without one is valid (`init.c:642-643`)
-(pfs3aio `211f7f0`, read, not run).
-**Decided 2026-09-14:** implement the deldir in the vendored format (plan 3); whether ART turns it on for cards
-is a separate choice recorded there.
+**ART-319** 🔵 **A PFS3 data allocation that runs out of space leaves its bitmap bits taken for the writer's next
+commit** — *found 2026-09-14 while implementing ART-315; reading-derived, not run*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_data_blocks`) · On `DiskFull` after a partial allocation the
+cleared bits stay cleared in memory and the touched bitmap blocks stay in `pending_writes`, without `blocksfree`
+being reduced; the next operation that commits writes them, and those blocks are lost to the volume.
+**Unreachable from ART today:** `copy_in_pfs3` refuses content larger than the free space before writing and stops
+at the first error.
 
 **ART-317** 🟡 **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
 the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
@@ -93,41 +56,6 @@ a Windows API. **How it hurts a user:** every file, directory and volume ART sta
 file's own modification time shows a time off by the machine's UTC offset on the Amiga; a file carrying its own
 `.uaem` sidecar date is unaffected. **Decided 2026-09-14:** local time everywhere, with the offset obtained
 outside `core/` (plan 5, design first).
-
-**ART-311** 🟡 **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
-mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit"; filed 2026-09-13, when ART-310's
-format fix left the writer untouched by the owner's decision*
-`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_anode`, `alloc_anode_block`) · pfs3aio allocates index blocks on
-demand (`NewIndexBlock`, `anodes.c:717-772`: up to `MAXSMALLINDEXNR` + 1 = 99 in small mode, through
-`NewSuperBlock` in SUPERINDEX mode). `libpfs3`'s writer does neither. In small mode it returns
-`DiskFull("no index block slot available")` as soon as `rootblock.indexblocks[idx_nr]` is unset
-(`writer.rs:1027`), so a volume keeps the one index block the format made: 253 × 84 − 6 = 21 246
-anodes. In SUPERINDEX mode it returns `DiskFull("no superindex slot available")` when
-`superindex[n]` is unset (`writer.rs:983`), but that is never reached: `alloc_anode` searches only
-anode blocks 0..256 (`writer.rs:904`) and then returns `DiskFull("no free anode slots")` (`:950`), so
-a SUPERINDEX-mode volume holds 256 × 84 − 6 = 21 498 anodes at 1024-byte reserved blocks. *Corrected
-2026-09-13 by the branch's final whole-branch review; this entry first said "only past 253² anode
-blocks".*
-**How it hurts a user:** content of more than ~21 000 files cannot go on a PFS3 partition ART fills,
-at any size. `core::card::sizing::pfs3_small_mode_anode_cap` sizes such content up past MAXSMALLDISK,
-which spends gigabytes of Work and does not lift the ceiling. Measured 2026-09-13 with ART-310's format fix applied: 20 655 files
-into one directory on a 1 GiB volume, then `disk full: no index block slot available`. **Scheduled 2026-09-14 by
-the owner, both modes:** small mode allocates index blocks on demand up to `MAXSMALLINDEXNR` and writes the
-rootblock's index union; SUPERINDEX mode allocates super blocks up to `MAXSUPER` and writes the rootblock
-extension; the anode search covers pfs3aio's 16-bit seqnr range and roves as `curranseqnr` does (pfs3aio
-`anodes.c:389-465,717-760,844-870`, `update.c:247-269`). `core::card::sizing` then stops pushing many-file
-content past MAXSMALLDISK (plan 3).
-**A small-mode fix already exists, unmerged and unpushed:** the Windows machine's earlier, independent
-ART-310 run (2026-09-11/12, branch `art-310-windows`, local only) allocates small-mode index blocks on
-demand up to `MAXSMALLINDEXNR` (`writer.rs:1140-1145` there, commit `de26e58`). That run's task-5 review
-also found a writer defect older than ART-310 that silently corrupts files: `alloc_anode` resolves an
-index entry through the cache, which reads the device and never the writer's `pending_writes`, so a
-second allocation in one operation re-creates the same anode block and hands out the same anode number
-twice. 3 of 22 000 files read back a directory block; 0 with one variable changed (`write_reserved`
-writing through); the same 3 files on 0.1.3's writer at 18 000 (fixed there in `9c7c845`; the review
-is that machine's git-ignored `.superpowers/sdd/2026-09-11-art-310-libpfs3-format/task-5-review.md`).
-That defect is ART-312, fixed 2026-09-13 on `art-312-anode-reuse`. The owner chose on 2026-09-13 to finish this branch first and port that work
-afterwards. Superseded on 2026-09-14: scheduled for plan 3.
 
 **ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
 by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
@@ -295,6 +223,211 @@ the core's own sentence and English by design (ART-060); the title is not the co
 the command layer's, and a job could carry a `Phrase` instead. A round of its own.
 
 ## Fixed
+
+**ART-318** 🟠 ✅ **`libpfs3`'s writer put a deleted file into the deldir in a layout pfs3aio does not read** —
+*found 2026-09-14 while implementing ART-316; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`delete_in`, `move_to_deldir`, `write_deldir_entry`, `undelete`) ·
+`src-tauri/vendor/libpfs3/src/ondisk/mod.rs` (`DelDirEntry::parse`, `deldir_entries_per_block`) · pfs3aio stores a
+deldir entry's name as a length byte then at most 15 bytes (`blocks.h:100-105,368-379`, `directory.c:4549-4550`),
+takes the slot at `deldirroving` and advances it over `deldirsize × 31` slots (`directory.c:4497-4507`), frees only
+the anodes of the file a slot evicts (`:4510-4518`), frees a deleted file's data blocks and keeps its anodes
+(`directory.c:1816-1830`, `allocation.c:520-665`), and refuses to undelete a file whose blocks were reused
+(`directory.c:4092-4114`). 0.1.3 wrote the raw name, took the first empty slot and evicted slot 0, kept the
+deleted file's blocks allocated, freed an evicted file's blocks, and computed 63/127 entries a block past 1024-byte
+reserved blocks. All read, not run under pfs3aio. **Cross-check:** hst-amiga `6b45584` matches pfs3aio's roving and
+eviction (`Directory.cs:2143-2178`) but writes the raw name, as 0.1.3 did (`DelDirEntryWriter.cs:14-20`,
+`Constants.cs:108-109`); pfs3aio, the Amiga's handler, is followed. **The brief's own name length disagreed with
+the pfs3aio build pfs3aio itself makes:** its struct comment names 15 bytes (`blocks.h:375-378`, the
+`LARGE_FILE_SIZE` build), but pfs3aio's only build file compiles with `-DLARGE_FILE_SIZE=0` (`makefile:21`),
+selecting `DELENTRYFNSIZE` 18 (17 name bytes; `blocks.h:100-105`) — the writer follows the makefile's build: 17
+name bytes on an ordinary volume, 15 on a `MODE_LARGEFILE` one.
+**How it would have hurt a user:** once ART's partitions carry a deldir (the owner's decision), a file deleted
+through this writer would have shown on the Amiga under a garbled name and could not be undeleted by name.
+**Fixed:** the writer follows pfs3aio, and `NativeFormatter` formats with the deldir on.
+- **Tests, each red first** (`cargo test --lib -- deldir undeletes_until`; the brief's `deldir` filter alone
+  misses the undelete test): `native_pfs3_format_turns_the_deldir_on` — `assertion left == right failed:
+  MODE_DELDIR | MODE_SUPERDELDIR / left: 0 / right: 264`; `a_deleted_pfs3_file_undeletes_until_its_blocks_are_reused`
+  — `` called `Result::unwrap()` on an `Err` value: NotFound("deldir index 0 out of range") ``;
+  `a_deleted_pfs3_file_goes_into_pfs3aios_deldir_entry` — `` assertion `left == right` failed: the deldir entry,
+  raw / left: [] ``; `the_pfs3_deldir_roves_and_the_63rd_delete_evicts_slot_zero` — `` assertion `left == right`
+  failed: a full deldir / left: 0 / right: 62 ``.
+- **Mutations:** 11 run (M1–M11), 10 killed at run time. **M8** (the deldir's two-block reserved-area charge
+  dropped from `pfs3_fits`) survived — judged a wrong mutation: `pfs3_fits`'s existing 8-block margin absorbs
+  the 2 blocks, so no partition size where the real format fits and the estimate disagrees is moved by it.
+  **M9** (`deldir_entries_per_block`'s `.min(DELENTRIES_PER_BLOCK)` removed) survived in the first run — every
+  test volume uses 1024-byte reserved blocks, where the computed count is already 31, so no volume test could
+  see the cap; judged a weak guard and closed with a direct test,
+  `a_pfs3_deldir_block_holds_31_entries_at_every_reserved_block_size` (asserts `[31, 31, 31]` at 1024/2048/4096
+  bytes — pre-fix it reads `[31, 63, 127]`), against which M9 was re-run and killed.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** a file deleted or undeleted on a real Amiga; hst-imager listing a deldir (the oracle reads the
+  directory tree, not the deldir). Not tested: the `MODE_LARGEFILE` branch (ART never sets it) and the `ST_FILE`
+  gate that keeps soft links out of the deldir. Two behaviours kept from the brief over pfs3aio, disclosed by the
+  implementer: a roving pointer naming a missing block frees slot 0's anodes (pfs3aio leaks them instead); a
+  refused undelete writes nothing (pfs3aio also frees the entry's anodes and clears the slot).
+
+**ART-311** 🟡 ✅ **`libpfs3`'s writer caps the anodes a PFS3 volume can hold: at most 21 246 in small
+mode and 21 498 in SUPERINDEX mode, whatever the volume's size** — *found 2026-09-11 as ART-310's "third limit";
+filed 2026-09-13, when ART-310's format fix left the writer untouched by the owner's decision; fixed 2026-09-14
+on `art-debt-0914` (commits `7ff422f`, `69123e5`)*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`alloc_anode`, `alloc_anode_block`, `update_rootblock`,
+`clear_single_anode`, new `anode_block_limit`/`refresh_anode_reader`) · `src-tauri/src/core/card/sizing.rs`
+(`pfs3_anode_cap`, `reserved_needed`, `pfs3_fits`) · pfs3aio allocates index blocks on
+demand (`NewIndexBlock`, `anodes.c:717-772`: up to `MAXSMALLINDEXNR` + 1 = 99 in small mode, through
+`NewSuperBlock` in SUPERINDEX mode, up to `MAXSUPER` + 1 = 16), searches an anode block's own address space as a
+16-bit seqnr (`anodes.c:582`), and roves from the block it last allocated from rather than rescanning from 0
+(`AllocAnode`, `anodes.c:366-471`). *Corrected 2026-09-13 by the branch's final whole-branch review; this entry
+first said "only past 253² anode blocks".*
+**What changed:** `alloc_anode` searches every anode block the volume can address instead of a fixed 256, via a
+new `anode_block_limit()`; in small mode `alloc_anode_block` makes a missing index block on demand up to
+`MAXSMALLINDEXNR`, writing the rootblock's `indexblocks` union in `update_rootblock` (Task 4); in SUPERINDEX mode
+it makes a missing super block up to `MAXSUPER`, reads a super block through the writer's own pending writes
+(not the cache), numbers a new index block across the volume rather than inside its own super block, and
+`update_rootblock` writes `rootblock_ext.superindex` when it changed; `alloc_anode` roves from the anode block it
+last allocated from, skipping blocks marked full, restarting from 0 only when the roving search itself started
+past 0; `clear_single_anode` clears a freed anode's block from the "full" set (Task 5). `sizing.rs`'s
+`pfs3_small_mode_anode_cap` (small mode only) is replaced by `pfs3_anode_cap` (both modes, pfs3aio's own limits);
+`reserved_needed` charges the index/super blocks this fix adds; `pfs3_fits` applies the cap unconditionally
+instead of only in small mode.
+- **Fill times, 22 000 files, before the roving search (Task 4) → after (Task 5):** small mode 6.15 s → 0.68 s;
+  SUPERINDEX mode 8.91 s → 1.19 s.
+- **Tests, each red first:** `a_small_pfs3_volume_takes_more_anodes_than_one_index_block_holds` —
+  `D103/F00025: disk full: no index block slot available`; `a_superindex_pfs3_volume_takes_more_anodes_than_256_anode_blocks_hold`
+  — `D104/F00070: disk full: no free anode slots`; `a_superindex_pfs3_volume_makes_its_second_super_block` —
+  `` called `Result::unwrap()` on an `Err` value: DiskFull("no superindex slot available") ``; sizing's
+  `many_files_stay_in_small_mode_and_fit_their_estimate` — `25 000 files: estimate 5244051456 bytes is past
+  MAXSMALLDISK (10241440 blocks)`; `the_anode_ceiling_is_pfs3aios` — `` assertion `left == right` failed / left:
+  21246 / right: 2103942 ``. Sizing's `many_files_cross_into_superindex_mode` was removed (superseded by these
+  two).
+- **Mutations:** Task 4's M1–M3, killed, no survivors. Task 5's M1–M4 and M8 killed; **M5** (roving start forced
+  to 0, full-block skip disabled) produced no test failure, as expected — a performance change, not a guard,
+  confirmed by the fill times reverting to the pre-roving numbers; disclosed. **M6** (`anode_block_full`'s clear
+  on free deleted) survived — disclosed: a freed anode's block is passed over as full for the rest of the
+  writer's session and a new block made instead, wasteful not wrong, and no ART path deletes through `libpfs3`
+  today. **M7** (`refresh_anode_reader` deleted from the super-block-creation branch) survived — disclosed:
+  nothing in the test's own session walks a chain through the new super block before the volume is reopened
+  (which rebuilds the reader fresh). **M9** (`reserved_needed`'s sum reduced to `dir_blocks + anode_blocks`)
+  survived — a real weak guard, parked for the final review: `pfs3_fits`'s 8-block margin absorbs the one or two
+  index/super blocks this fix adds for every size the suite exercises.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** the second super block is proved only on a volume made to look full in a test (`MAXSUPER`
+  super blocks are reachable only past 64 009 anode blocks at 1024-byte reserved blocks, and never at 2048 or
+  4096 — no real volume this size has been built and filled this way); `rext.curranseqnr` is not written, so the
+  roving search restarts at 0 each session rather than resuming pfs3aio's own hint; no volume filled this way has
+  been read by a real Amiga or under real pfs3aio.
+
+**ART-313** 🟠 ✅ **PFS3 directories ART writes carry the wrong `parent`: the Amiga's handler cannot find a
+file's parent directory** — *found 2026-09-11 by the Windows machine's ART-310 research (D3); verified against
+pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed 2026-09-14; fixed 2026-09-14 on
+`art-debt-0914` (commit `8cb6afb`)*
+`src-tauri/vendor/libpfs3/src/format.rs:321-326` · `src-tauri/vendor/libpfs3/src/writer.rs:1135` · In pfs3aio a
+directory block's `parent` is the anode of the directory that *contains* the block's directory, and `0` marks the
+root's own blocks: `format.c:548` writes the root with parent 0, `directory.c:1653,1707` gives a subdirectory of
+the root parent 5, and a continuation block copies the directory's parent (`directory.c:3176,3204,3392`).
+`GetParent` reads the containing block's `parent` and treats 0 as "in root" (`directory.c:645-654`). `libpfs3`
+wrote the root with parent 5 (`format.rs:321-326`) and gave every continuation block the directory's *own*
+anode (`writer.rs:1135`). `libpfs3`'s reader never reads `parent`, which is why ART never saw it.
+**How it hurt a user:** on the Amiga, asking for the parent of anything in the root, or of anything in a
+directory large enough to need a second block, went wrong (reading-derived from pfs3aio's source — not run under
+a real handler). **Fixed:** the root directory block is written with parent 0 (`format.rs`), and a continuation
+directory block copies the parent of the directory's existing blocks instead of its own anode (`writer.rs`
+`add_dir_entry`).
+- **Test, red first:** `pfs3_directory_blocks_carry_their_containing_directorys_anode_as_parent` — `` root (anode
+  5): every directory block's parent must be 0, read [5, 5] ``.
+- **Mutations, both killed:** M1 (`format.rs`'s parent write reverted to `ANODE_ROOTDIR`) — red, same message;
+  M2 (`writer.rs`'s continuation-block parent write reverted to the directory's own anode) — a compile-time red
+  under `libpfs3`'s `#![deny(warnings)]` (`unused variable: parent`) rather than a runtime panic, disclosed as
+  differing in kind but still a genuine "must fail".
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** `GetParent` run under a real handler; volumes ART formatted before this fix keep root parent 5
+  (reformat).
+
+**ART-314** 🟠 ✅ **A PFS3 name longer than 31 bytes lists on the Amiga but cannot be opened by name** — *found
+2026-09-11 (D14); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
+2026-09-14; fixed 2026-09-14 on `art-debt-0914` (commit `0f860af`)*
+`src-tauri/vendor/libpfs3/src/format.rs` (`FORMAT_FNSIZE`) · `src-tauri/vendor/libpfs3/src/error.rs`
+(`Error::NameTooLong`) · `src-tauri/vendor/libpfs3/src/writer.rs` (`max_name_bytes`, `check_name_len`, wired into
+`write_file_in`, `write_file_in_no_commit`, `create_dir_in`, `create_softlink_in`, `create_hardlink`,
+`rename_in`) · `src-tauri/src/core/error.rs` (`CoreError::Pfs3NamesTooLong`) ·
+`src-tauri/src/core/preload/native.rs` (`can_copy_in`, `copy_in_pfs3`, `from_pfs3`) · The format writes `fnsize`
+32 (pfs3aio's own default, `format.c:520`); the writer accepted names up to 107 bytes and silently cut longer
+ones; ART checked only non-ASCII names. pfs3aio truncates a *search* name to `fnsize - 1` (`directory.c:721-722`)
+and its compare needs equal lengths (`assroutines.c:163`), so a 32–107-byte name was listed but never matched
+(reading-derived, not run). hst-imager formats `fnsize` 107 (`henrikstengaard/hst-amiga` @ `6b45584`,
+`Pfs3Formatter.cs:297`). *Corrected 2026-09-14 by plan 3:* the limit is `fnsize − 1` = 106 bytes on a volume ART
+formats, not 107 — pfs3aio cuts names to `FILENAMESIZE − 1` on create and lookup (`blocks.h:516`,
+`directory.c:1489-1490,1663-1664,721-722`), so a 107-byte name would have been the same defect one byte out.
+*Confirmed by the owner 2026-09-14:* 106 bytes. **Fixed:** the format writes `fnsize` 107 (`FORMAT_FNSIZE`), and
+every writer call that names an entry refuses a name longer than `fnsize − 1` bytes before anything is
+allocated; `commands/preload.rs::FallbackReason::from_native_error` does not treat this as a capability gap —
+hst-imager formats `fnsize` 107 too.
+- **Tests, each red first:** `a_pfs3_name_longer_than_fnsize_minus_one_is_refused_before_anything_is_written` —
+  `` assertion `left == right` failed: rext.fnsize / left: 32 / right: 107 ``;
+  `a_pfs3_name_too_long_for_the_volume_is_refused_by_name_before_anything_is_written` — `` called
+  `Result::unwrap_err()` on an `Ok` value: () ``.
+- **Mutations, all four killed:** M1 (`check_name_len`'s body replaced by `Ok(())`) — red,
+  `unwrap_err()` on `Ok`; M2 (the format's `fnsize` write reverted to 32) — red both ways, the crate test's
+  `rext.fnsize` and the ART test's refusal at `max_bytes: 31` instead of 106; M3 (`can_copy_in`'s pre-flight
+  name-length check removed) — red, `unwrap_err()` on `Ok`; M4 (`copy_in_pfs3`'s name-length check removed) —
+  red, but on an earlier assertion than predicted (the error's bare name has no `Drawer/` prefix, since
+  `from_pfs3` maps the writer's own bare `name` field, not a path) — judged a correct kill via a different route,
+  not a weak guard.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** no name was looked up under a real pfs3aio handler.
+
+**ART-315** 🟡 ✅ **`libpfs3`'s data allocator accepts a block number up to `bitmapstart` past the partition** —
+*found 2026-09-11 (D8); verified against pfs3aio source 2026-09-14 (pfs3aio `211f7f0`, read, not run); filed
+2026-09-14; fixed 2026-09-14 on `art-debt-0914` (commit `04ce670`)*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`load_data_bitmap`, `alloc_data_blocks`, `free_data_block`) · The bound
+was `disksize + bitmapstart`; valid data blocks are `[bitmapstart, disksize)` (`format.rs:120,128,193`), and
+pfs3aio bounds on the partition's block count (`allocation.c:344`, `volume.c:637`). ART's own format clears the
+bitmap's tail bits (`format.rs:268-278`), so only a volume formatted elsewhere (pfs3aio leaves the tail free,
+`allocation.c:1054-1055`) near full could reach it, and ART's device refused the write
+(`core/volume/device.rs:330-333`) — an error, not corruption. **Fixed:** `load_data_bitmap` sizes the bitmap from
+`disksize − bitmapstart`, `alloc_data_blocks` skips a bitmap bit at or past `disksize` instead of
+`disksize + bitmapstart`, and `free_data_block` refuses a block outside `[bitmapstart, disksize)` instead of only
+checking the lower bound.
+- **Tests, each red first:** `a_pfs3_allocation_never_hands_out_a_block_past_the_partition` — `attempt to subtract
+  with overflow` (`blocksfree` underflows before the device write, in a test build; a release build would wrap
+  and the out-of-range write fail at the device); `freeing_a_pfs3_block_past_the_partition_changes_nothing` —
+  `` assertion `left == right` failed: blocksfree counted block 48000, past the partition, as freed / left: 45182
+  / right: 45181 ``.
+- **Mutations:** M1 (`alloc_data_blocks`'s bound reverted to the old, wider one) — killed, red with `attempt to
+  subtract with overflow`; M2 (`free_data_block`'s guard narrowed back to the lower bound only) — killed, red
+  with the same `blocksfree` assertion; M3 (`load_data_bitmap`'s bitmap size reverted to the whole `disksize`) —
+  **survived**, disclosed as a weak *test*, not a weak guard: the property is actually enforced by M1/M2's bounds,
+  and the wider bitmap size resolves to no bitmap block at all on this fixed-size test volume, so
+  `load_data_bitmap`'s extra loop iteration finds nothing to push.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** run on a pfs3aio- or hst-formatted volume (the tail bits that let this be reached were set by
+  the test itself, not by a real format).
+
+**ART-316** 🔵 ✅ **`libpfs3`'s `FormatOptions.enable_deldir` is never read** — *found 2026-09-11 (D4); filed
+2026-09-14; fixed 2026-09-14 on `art-debt-0914` (commit `351fc60`)*
+`src-tauri/vendor/libpfs3/src/format.rs` · The option silently did nothing; ART passed `false`
+(`native.rs:189-192`, `sizing.rs:666`). pfs3aio formats a two-block deldir with `MODE_DELDIR | MODE_SUPERDELDIR`
+(`format.c:252-255`, `directory.c:4442-4480,4572-4637`); a volume without one is valid (`init.c:642-643`)
+(pfs3aio `211f7f0`, read, not run). **Fixed:** when `opts.enable_deldir`, the format sets
+`MODE_DELDIR | MODE_SUPERDELDIR`, allocates two more reserved blocks after the root directory, writes
+`rext.deldirroving` (0), `rext.deldirsize` (2) and `rext.deldir[0..2]`, and writes each block as `DD` with its
+seqnr, protection 5 and the rootblock's creation date. **ART's PFS3 format has the deldir on since ART-318 (the
+owner's decision, 2026-09-14):** this task's own crate-level test proves the format; ART-318's
+`native_pfs3_format_turns_the_deldir_on` proves `NativeFormatter` turns the option on.
+- **Test, red first:** `a_pfs3_format_with_the_deldir_makes_pfs3aios_two_deldir_blocks` — `` assertion `left ==
+  right` failed: 48000: MODE_DELDIR | MODE_SUPERDELDIR / left: 0 / right: 264 ``.
+- **Mutations, all four killed:** M1 (`MODE_SUPERDELDIR` dropped from the flags write) — red, `left: 8 right:
+  264`; M2 (`deldirsize` write deleted) — red, `left: (0, 0, 0) right: (0, 2, 0)`; M3 (`protection` written to
+  the wrong offset, `0x12` instead of `0x16`) — red, `left: (0, 0) right: (0, 5)`; M4 (the deldir block's
+  creation-day write deleted) — red, `left: [0, 0, 1, 35, 6, 214] right: [69, 124, 1, 35, 6, 214]`.
+- **Suite:** `cd src-tauri && cargo test --lib` `test result: ok. 3289 passed; 0 failed; 58 ignored; 0 measured;
+  0 filtered out` twice; fmt and clippy clean.
+- **Not claimed:** nothing has been mounted under real pfs3aio on an Amiga or in WinUAE; that mount is still owed
+  by a person.
 
 **ART-302** 🔵 ✅ **The first tab question of a session still read two same-size discs whole, every
 start** — *found 2026-09-10 measuring ART-297; fixed 2026-09-14 on `art-debt-0914`*

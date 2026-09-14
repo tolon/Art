@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A file deleted on the Amiga from a PFS3 partition ART formatted can be
+  undeleted.** ART now formats PFS3 with the deleted-files area PFS3's own format
+  makes, and its writer keeps that area the way the Amiga's PFS3 handler reads it.
+
 ### Fixed
 
 - **The OS Builder answers its first question of a session without re-reading two identical
@@ -15,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fingerprint is dropped 30 days after it was stored.
 - **Adding an older update over a newer one says which is newer and in what order to add them**,
   instead of talking about a recipe's overrides.
+- **A PFS3 partition ART fills holds as many files and drawers as PFS3 allows.** It
+  used to stop at about 21 500, whatever the partition's size, and ART sized
+  many-file content gigabytes larger than it needed to trying to fit it.
+- **A file or drawer name the Amiga could not open is refused by name.** ART now
+  formats PFS3 for 107-byte names, as hst-imager does, and refuses a name longer
+  than 106 bytes before the copy starts. Before, a name longer than 31 bytes was
+  written, listed on the Amiga, and could not be opened.
+- **PFS3 drawers record the drawer they are in the way the Amiga's PFS3 handler
+  expects.** A PFS3 partition ART formatted before this fix is worth formatting
+  again.
 
 ## [0.9.3] - 2026-09-13
 

@@ -1,4 +1,8 @@
 //! Error types for libpfs3.
+//!
+//! Modified by ART on 2026-09-14 (ART-314): the `NameTooLong` variant, for a
+//! name the volume cannot store and find again. `ART-PATCH.md` in this
+//! crate's root says what and why.
 
 /// Result type alias using the PFS3 [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;

@@ -16,11 +16,13 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.2`): 0.1.3's format left out the super index level and left
-//! anodes 0–4 unreserved (ART-310), and its writer handed one anode number
-//! out twice in an operation that allocated twice (ART-312); `format.rs` and
-//! `writer.rs` differ. The writer's other limits below (ART-113, ART-116) and
-//! its anode ceiling (ART-311) still hold.
+//! (`0.1.3+art.3`): its format and writer differ from 0.1.3 — the super index
+//! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
+//! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
+//! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
+//! writes it (ART-316, ART-318), and pfs3aio's anode
+//! ceiling (ART-311); `ART-PATCH.md` there lists each. The writer's other
+//! limits below (ART-113, ART-116) still hold.
 //!
 //! ## `import_filesystem` refuses
 //!
@@ -117,15 +119,15 @@ use crate::core::volume::write::{dir, uaem, write_refusal, FileMeta, VolumeWrite
 use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version of the `libpfs3` ART builds: the vendored copy in
-/// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patch,
-/// `+art.2`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patches,
+/// `+art.3`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
 /// version, so this is kept in sync by hand, the same trade-off ART already
 /// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
 /// constant as which implementation did the work, and
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.2";
+const LIBPFS3_VERSION: &str = "0.1.3+art.3";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -3082,7 +3084,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.2 (native, no external tool)");
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.3 (native, no external tool)");
     }
 
     /// `import_filesystem` refuses by name rather than pretend — see the
