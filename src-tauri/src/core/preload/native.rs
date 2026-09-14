@@ -228,7 +228,13 @@ impl VolumeFormatter for NativeFormatter {
     ) -> CoreResult<()> {
         let planned = plan_copy(image, slot, drive, source)?;
         match family_of(planned.dos) {
-            DosFamily::Pfs3 => match non_ascii_refusal(&planned.entries) {
+            DosFamily::Pfs3 => match non_ascii_refusal(&planned.entries).or_else(|| {
+                // ART-314: against the volume `format_partition` is about to write.
+                long_name_refusal(
+                    &planned.entries,
+                    pfs3_name_limit(libpfs3::format::FORMAT_FNSIZE),
+                )
+            }) {
                 Some(err) => Err(err),
                 None => Ok(()),
             },
@@ -345,6 +351,11 @@ pub(crate) fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
             CoreError::InvalidInput(format!("not enough room on this PFS3 volume: {detail}"))
         }
         libpfs3::error::Error::Io(io) => CoreError::Io(io),
+        libpfs3::error::Error::NameTooLong { name, max, .. } => CoreError::Pfs3NamesTooLong {
+            paths: vec![name],
+            more: 0,
+            max_bytes: max,
+        },
         other => CoreError::Malformed {
             format: "pfs3".into(),
             detail: other.to_string(),
@@ -722,6 +733,37 @@ fn non_ascii_refusal(entries: &[CopyEntry]) -> Option<CoreError> {
     })
 }
 
+/// ART-314: the longest name a PFS3 volume with this `fnsize` can store and
+/// find again — pfs3aio cuts every name to `fnsize - 1` bytes
+/// (`directory.c:1489-1490,721-722`), and `libpfs3`'s entries hold 107.
+fn pfs3_name_limit(fnsize: u16) -> usize {
+    usize::from(fnsize).saturating_sub(1).min(107)
+}
+
+/// The ART-314 refusal, or `None`: every entry whose own name is longer than
+/// `max_bytes`, bounded the way [`non_ascii_refusal`] bounds its list. Bytes
+/// equal characters here, because non-ASCII names are refused before this.
+fn long_name_refusal(entries: &[CopyEntry], max_bytes: usize) -> Option<CoreError> {
+    let offending: Vec<&str> = entries
+        .iter()
+        .filter(|entry| leaf_name(&entry.relative).len() > max_bytes)
+        .map(|entry| entry.relative.as_str())
+        .collect();
+    if offending.is_empty() {
+        return None;
+    }
+    let more = offending.len().saturating_sub(MAX_NAMED_NON_ASCII);
+    Some(CoreError::Pfs3NamesTooLong {
+        paths: offending
+            .into_iter()
+            .take(MAX_NAMED_NON_ASCII)
+            .map(str::to_string)
+            .collect(),
+        more,
+        max_bytes,
+    })
+}
+
 /// Flatten `source` into an ordered list: a directory always appears before
 /// anything inside it, which is what lets `copy_in` look its parent's anode
 /// or header block up in a map built as it goes, rather than re-walking the
@@ -854,6 +896,12 @@ fn copy_in_pfs3(
             "'{volume_label}' already has files on it. NativeFormatter only fills a volume \
              immediately after formatting it — format '{volume_label}' first."
         )));
+    }
+
+    // ART-314: by name, against what this volume says it can store, before the
+    // writer opens — nothing has been written yet.
+    if let Some(refusal) = long_name_refusal(entries, pfs3_name_limit(vol.fnsize())) {
+        return Err(refusal);
     }
 
     // Binding requirement 5: the fit check, before the first byte, with real
@@ -1851,6 +1899,109 @@ mod tests {
             be32(&bm, 12 + (bit / 32) as usize * 4) & (0x8000_0000 >> (bit % 32)),
             0,
             "the bitmap bit for block {TOTAL}, past the partition, was set free"
+        );
+    }
+
+    /// **ART-314, the vendored crate.** ART's format writes `fnsize` 107, as
+    /// hst-imager's does, and the writer refuses a name longer than the
+    /// `fnsize - 1` = 106 bytes pfs3aio can find again — instead of storing it
+    /// and leaving it unopenable — before anything is written. 106 bytes is
+    /// written and read back.
+    #[test]
+    fn a_pfs3_name_longer_than_fnsize_minus_one_is_refused_before_anything_is_written() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image) as usize;
+        let before = std::fs::read(&image).unwrap();
+        // Rootblock at partition sector 2: extension 0x58; rext.fnsize at 0x38.
+        let ext = be32(&before[offset + 2 * 512..], 0x58) as usize;
+        assert_eq!(
+            be16(&before[offset + ext * 512..], 0x38),
+            107,
+            "rext.fnsize"
+        );
+
+        let too_long = "T".repeat(107);
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset as u64).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let err = w.write_file(&too_long, b"x").unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    libpfs3::error::Error::NameTooLong {
+                        len: 107,
+                        max: 106,
+                        ..
+                    }
+                ),
+                "write_file: {err}"
+            );
+            let err = w.create_dir(&too_long).unwrap_err();
+            assert!(
+                matches!(err, libpfs3::error::Error::NameTooLong { .. }),
+                "create_dir: {err}"
+            );
+        }
+        assert!(
+            std::fs::read(&image).unwrap() == before,
+            "a refused name changed the image"
+        );
+
+        let longest = "L".repeat(106);
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset as u64).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file(&longest, b"kept").unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::open(&image, offset as u64).unwrap();
+        assert_eq!(vol.read_file(&longest).unwrap(), b"kept");
+    }
+
+    /// **ART-314, ART's side.** A tree holding a name longer than the volume
+    /// can store is refused by name — in `can_copy_in`, so the partition is
+    /// never formatted for a copy that would stop partway, and in `copy_in`
+    /// before the volume is written.
+    #[test]
+    fn a_pfs3_name_too_long_for_the_volume_is_refused_by_name_before_anything_is_written() {
+        let (_guard, image) = formatted_pds3_image();
+        let before = std::fs::read(&image).unwrap();
+        let (_guard, tree) = fixtures::scratch("copy-in-long-name");
+        let long = format!("{}.info", "N".repeat(102)); // 107 bytes
+        std::fs::create_dir_all(tree.join("Drawer")).unwrap();
+        std::fs::write(tree.join("Drawer").join(&long), b"x").unwrap();
+        std::fs::write(tree.join("Short"), b"y").unwrap();
+
+        let err = NativeFormatter
+            .can_copy_in(&image, None, "DH0", &tree)
+            .unwrap_err();
+        let CoreError::Pfs3NamesTooLong {
+            paths,
+            more,
+            max_bytes,
+        } = err
+        else {
+            panic!("can_copy_in: expected Pfs3NamesTooLong, got {err}");
+        };
+        assert_eq!(
+            (paths, more, max_bytes),
+            (vec![format!("Drawer/{long}")], 0, 106)
+        );
+
+        let err = NativeFormatter
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap_err();
+        assert!(
+            matches!(&err, CoreError::Pfs3NamesTooLong { max_bytes: 106, .. }),
+            "copy_in: {err}"
+        );
+        assert!(
+            format!("{err}").contains(&format!("Drawer/{long}")),
+            "{err}"
+        );
+        assert_eq!(err.code(), "ART-PFS3-NAME-TOO-LONG");
+        assert!(
+            std::fs::read(&image).unwrap() == before,
+            "nothing may be written"
         );
     }
 

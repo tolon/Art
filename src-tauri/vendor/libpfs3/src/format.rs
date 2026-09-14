@@ -4,7 +4,8 @@
 //! Ported from pfs3aio/format.c and amitools PFSFormat.py.
 //!
 //! Modified by ART on 2026-09-13 (ART-310): the super index level and the
-//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent.
+//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent,
+//! (ART-314) names — `rext.fnsize` writes 107, not 32.
 //! `ART-PATCH.md` in this crate's root says what and why.
 //!
 //! Format sequence:
@@ -36,6 +37,12 @@ impl Default for FormatOptions {
         }
     }
 }
+
+/// ART-314: the `rext.fnsize` a format writes — the length limit, plus one, of
+/// every name on the volume. pfs3aio's own format writes 32 (`format.c:520`)
+/// and cuts every name to `fnsize - 1` bytes; hst-imager formats 107, the
+/// longest this crate's directory entries hold.
+pub const FORMAT_FNSIZE: u16 = 107;
 
 /// Result of a successful format operation.
 #[derive(Debug)]
@@ -237,7 +244,7 @@ pub fn format_with_size(
     put_u16(&mut rext, 0x10, cday);
     put_u16(&mut rext, 0x12, cmin);
     put_u16(&mut rext, 0x14, ctick);
-    put_u16(&mut rext, 0x38, 32); // fnsize
+    put_u16(&mut rext, 0x38, FORMAT_FNSIZE); // fnsize (ART-314)
     if let Some(sb_blk) = sb_blk {
         // superindex[0] names the super index block, never the anode index
         // block: every reader walks SB -> IB -> AB.

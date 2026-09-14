@@ -9,8 +9,9 @@
 //!
 //! Modified by ART on 2026-09-13 (ART-312): `get_anode_block_nr` sees this
 //! writer's own pending writes; on 2026-09-14 (ART-313): a continuation directory
-//! block's parent; (ART-315) the data bitmap's bounds. `ART-PATCH.md` in this
-//! crate's root says what and why.
+//! block's parent; (ART-315) the data bitmap's bounds; (ART-314) names — a name
+//! longer than `fnsize - 1` bytes is refused before anything is allocated.
+//! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
 use crate::ondisk::*;
@@ -79,6 +80,29 @@ impl Writer {
         self.datestamp
     }
 
+    /// ART-314: the longest name this volume can store and find again. pfs3aio
+    /// cuts a new name to `fnsize - 1` bytes (`directory.c:1489-1490,1663-1664`)
+    /// and a searched-for name the same way (`:721-722`) before a compare that
+    /// needs equal lengths (`assroutines.c:163`). 107 is the longest name this
+    /// writer's directory entries hold (`build_dir_entry`).
+    fn max_name_bytes(&self) -> usize {
+        usize::from(self.vol.fnsize()).saturating_sub(1).min(107)
+    }
+
+    /// ART-314: refuse a name the volume would store and never find again,
+    /// before anything is allocated. 0.1.3 stored up to 107 bytes and cut the rest.
+    fn check_name_len(&self, name: &str) -> Result<()> {
+        let max = self.max_name_bytes();
+        if name.len() > max {
+            return Err(Error::NameTooLong {
+                name: name.to_string(),
+                len: name.len(),
+                max,
+            });
+        }
+        Ok(())
+    }
+
     // ---- High-level API (path-based, for CLI) ----
 
     /// Write a file at the given path. Parent directories must exist.
@@ -129,6 +153,7 @@ impl Writer {
 
     /// Create a file in a directory identified by anode.
     pub fn write_file_in(&mut self, parent_anode: u32, name: &str, data: &[u8]) -> Result<()> {
+        self.check_name_len(name)?;
         // Check if file already exists — if so, overwrite it
         if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
             let entry_type = entry_data[pos + 1] as i8;
@@ -149,6 +174,7 @@ impl Writer {
         name: &str,
         data: &[u8],
     ) -> Result<()> {
+        self.check_name_len(name)?;
         let bs = self.vol.block_size() as usize;
         let num_blocks = data.len().div_ceil(bs).max(1);
 
@@ -170,6 +196,7 @@ impl Writer {
 
     /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
     pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
+        self.check_name_len(name)?;
         let dir_blk = self.alloc_reserved_block()?;
         let anodenr = self.alloc_anode(1, dir_blk, 0)?;
 
@@ -197,6 +224,7 @@ impl Writer {
         name: &str,
         target: &str,
     ) -> Result<()> {
+        self.check_name_len(name)?;
         let data = target.as_bytes();
         let bs = self.vol.block_size() as usize;
         let num_blocks = data.len().div_ceil(bs).max(1);
@@ -226,6 +254,7 @@ impl Writer {
     /// Create a hardlink in a parent directory.
     pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
         let (parent_anode, name) = self.split_path(path)?;
+        self.check_name_len(&name)?;
         self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
         self.update_rootblock()
     }
@@ -600,6 +629,7 @@ impl Writer {
         dst_parent: u32,
         dst_name: &str,
     ) -> Result<()> {
+        self.check_name_len(dst_name)?;
         let entries = self.vol.list_dir_by_anode(src_parent)?;
         let entry = entries
             .iter()

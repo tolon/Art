@@ -58,6 +58,12 @@ Everything else in the writer is 0.1.3's, including its anode ceiling (ART-311).
    block at or past it, and `load_data_bitmap` sizes the bitmap from `disksize − bitmapstart`. pfs3aio refuses
    `blocknr >= numblocks` (`allocation.c:344`) and leaves the bits past the last block set, so on a volume
    formatted by pfs3aio or hst-imager 0.1.3 could hand out a block past the partition.
+6. **A name the volume cannot find again is refused ([ART-314](../../../docs/ISSUES.md)).** The format writes
+   `rext.fnsize` 107 (`FORMAT_FNSIZE`; 0.1.3 wrote 32), and every writer call that names an entry returns
+   `Error::NameTooLong` for a name longer than `fnsize − 1` bytes (at most 107), before anything is allocated.
+   0.1.3 stored up to 107 bytes whatever the volume's `fnsize`, and cut longer names silently. pfs3aio cuts
+   every name to `fnsize − 1` on create and on lookup (`directory.c:1489-1490,721-722`) and compares lengths
+   first (`assroutines.c:163`), so a longer name lists and never opens.
 
 ## Re-vendoring
 
@@ -78,14 +84,32 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 ## Diff against 0.1.3
 
 ```diff
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -30,6 +30,14 @@ pub enum Error {
+     #[error("already exists: {0}")]
+     AlreadyExists(String),
+ 
++    /// ART-314: a name longer than the volume can store and find again.
++    #[error("name too long: '{name}' is {len} bytes, this volume stores at most {max}")]
++    NameTooLong {
++        name: String,
++        len: usize,
++        max: usize,
++    },
++
+     #[error("disk full: {0}")]
+     DiskFull(String),
+ 
 --- a/src/format.rs
 +++ b/src/format.rs
-@@ -3,13 +3,18 @@
+@@ -3,13 +3,19 @@
  //! Creates a new PFS3 filesystem on a block device.
  //! Ported from pfs3aio/format.c and amitools PFSFormat.py.
  //!
 +//! Modified by ART on 2026-09-13 (ART-310): the super index level and the
-+//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent.
++//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent,
++//! (ART-314) names — `rext.fnsize` writes 107, not 32.
 +//! `ART-PATCH.md` in this crate's root says what and why.
 +//!
  //! Format sequence:
@@ -100,7 +124,20 @@ carries the format change only; the writer change (ART-312) is not prepared for 
  //! 7. Write root directory block (empty)
  
  use crate::error::{Error, Result};
-@@ -146,7 +151,14 @@ pub fn format_with_size(
+@@ -32,6 +38,12 @@ impl Default for FormatOptions {
+     }
+ }
+ 
++/// ART-314: the `rext.fnsize` a format writes — the length limit, plus one, of
++/// every name on the volume. pfs3aio's own format writes 32 (`format.c:520`)
++/// and cuts every name to `fnsize - 1` bytes; hst-imager formats 107, the
++/// longest this crate's directory entries hold.
++pub const FORMAT_FNSIZE: u16 = 107;
++
+ /// Result of a successful format operation.
+ #[derive(Debug)]
+ pub struct FormatResult {
+@@ -146,7 +158,14 @@ pub fn format_with_size(
          bmi_blocknrs.push(firstreserved + idx * rescluster);
      }
  
@@ -116,12 +153,14 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      let anidx_blk = firstreserved + alloc.alloc()? * rescluster;
      let anode_blk = firstreserved + alloc.alloc()? * rescluster;
  
-@@ -226,8 +238,10 @@ pub fn format_with_size(
+@@ -225,9 +244,11 @@ pub fn format_with_size(
+     put_u16(&mut rext, 0x10, cday);
      put_u16(&mut rext, 0x12, cmin);
      put_u16(&mut rext, 0x14, ctick);
-     put_u16(&mut rext, 0x38, 32); // fnsize
+-    put_u16(&mut rext, 0x38, 32); // fnsize
 -    if supermode {
 -        put_u32(&mut rext, 0x40, anidx_blk); // superindex[0]
++    put_u16(&mut rext, 0x38, FORMAT_FNSIZE); // fnsize (ART-314)
 +    if let Some(sb_blk) = sb_blk {
 +        // superindex[0] names the super index block, never the anode index
 +        // block: every reader walks SB -> IB -> AB.
@@ -129,7 +168,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      }
      write_reserved_blocks(dev, rext_blk as u64, &rext, rescluster, bs)?;
  
-@@ -267,6 +281,17 @@ pub fn format_with_size(
+@@ -267,6 +288,17 @@ pub fn format_with_size(
          write_reserved_blocks(dev, bm_blknr as u64, &bm, rescluster, bs)?;
      }
  
@@ -147,7 +186,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      // Write anode index block
      let mut anidx = vec![0u8; resblocksize as usize];
      put_u16(&mut anidx, 0, IBLKID);
-@@ -280,18 +305,27 @@ pub fn format_with_size(
+@@ -280,18 +312,27 @@ pub fn format_with_size(
      put_u16(&mut an, 0, ABLKID);
      put_u32(&mut an, 4, 1);
      put_u32(&mut an, 8, 0); // seqnr
@@ -179,19 +218,98 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      dev.flush()?;
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,11 @@
+@@ -6,6 +6,12 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
 +//!
 +//! Modified by ART on 2026-09-13 (ART-312): `get_anode_block_nr` sees this
 +//! writer's own pending writes; on 2026-09-14 (ART-313): a continuation directory
-+//! block's parent; (ART-315) the data bitmap's bounds. `ART-PATCH.md` in this
-+//! crate's root says what and why.
++//! block's parent; (ART-315) the data bitmap's bounds; (ART-314) names — a name
++//! longer than `fnsize - 1` bytes is refused before anything is allocated.
++//! `ART-PATCH.md` in this crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -739,9 +744,11 @@ impl Writer {
+@@ -74,6 +80,29 @@ impl Writer {
+         self.datestamp
+     }
+ 
++    /// ART-314: the longest name this volume can store and find again. pfs3aio
++    /// cuts a new name to `fnsize - 1` bytes (`directory.c:1489-1490,1663-1664`)
++    /// and a searched-for name the same way (`:721-722`) before a compare that
++    /// needs equal lengths (`assroutines.c:163`). 107 is the longest name this
++    /// writer's directory entries hold (`build_dir_entry`).
++    fn max_name_bytes(&self) -> usize {
++        usize::from(self.vol.fnsize()).saturating_sub(1).min(107)
++    }
++
++    /// ART-314: refuse a name the volume would store and never find again,
++    /// before anything is allocated. 0.1.3 stored up to 107 bytes and cut the rest.
++    fn check_name_len(&self, name: &str) -> Result<()> {
++        let max = self.max_name_bytes();
++        if name.len() > max {
++            return Err(Error::NameTooLong {
++                name: name.to_string(),
++                len: name.len(),
++                max,
++            });
++        }
++        Ok(())
++    }
++
+     // ---- High-level API (path-based, for CLI) ----
+ 
+     /// Write a file at the given path. Parent directories must exist.
+@@ -124,6 +153,7 @@ impl Writer {
+ 
+     /// Create a file in a directory identified by anode.
+     pub fn write_file_in(&mut self, parent_anode: u32, name: &str, data: &[u8]) -> Result<()> {
++        self.check_name_len(name)?;
+         // Check if file already exists — if so, overwrite it
+         if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
+             let entry_type = entry_data[pos + 1] as i8;
+@@ -144,6 +174,7 @@ impl Writer {
+         name: &str,
+         data: &[u8],
+     ) -> Result<()> {
++        self.check_name_len(name)?;
+         let bs = self.vol.block_size() as usize;
+         let num_blocks = data.len().div_ceil(bs).max(1);
+ 
+@@ -165,6 +196,7 @@ impl Writer {
+ 
+     /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
+     pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
++        self.check_name_len(name)?;
+         let dir_blk = self.alloc_reserved_block()?;
+         let anodenr = self.alloc_anode(1, dir_blk, 0)?;
+ 
+@@ -192,6 +224,7 @@ impl Writer {
+         name: &str,
+         target: &str,
+     ) -> Result<()> {
++        self.check_name_len(name)?;
+         let data = target.as_bytes();
+         let bs = self.vol.block_size() as usize;
+         let num_blocks = data.len().div_ceil(bs).max(1);
+@@ -221,6 +254,7 @@ impl Writer {
+     /// Create a hardlink in a parent directory.
+     pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
+         let (parent_anode, name) = self.split_path(path)?;
++        self.check_name_len(&name)?;
+         self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
+         self.update_rootblock()
+     }
+@@ -595,6 +629,7 @@ impl Writer {
+         dst_parent: u32,
+         dst_name: &str,
+     ) -> Result<()> {
++        self.check_name_len(dst_name)?;
+         let entries = self.vol.list_dir_by_anode(src_parent)?;
+         let entry = entries
+             .iter()
+@@ -739,9 +774,11 @@ impl Writer {
      fn load_data_bitmap(&mut self) -> Result<()> {
          let no_bmb = {
              let bits_per_bmb = self.index_per_block * 32;
@@ -205,7 +323,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          };
          for seq in 0..no_bmb {
              if let Some(blk) = self.get_bitmap_block_nr(seq)? {
-@@ -778,7 +785,10 @@ impl Writer {
+@@ -778,7 +815,10 @@ impl Writer {
                              .ok_or_else(|| {
                                  Error::Corrupt("block number overflow in bitmap".into())
                              })?;
@@ -217,7 +335,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                              continue; // skip out-of-range bitmap bits
                          }
                          longs[li] &= !(0x8000_0000 >> bit);
-@@ -825,7 +835,9 @@ impl Writer {
+@@ -825,7 +865,9 @@ impl Writer {
      }
  
      fn free_data_block(&mut self, blk: u32) -> Result<()> {
@@ -228,7 +346,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
              return Ok(());
          }
          let rel = blk - self.bitmapstart;
-@@ -1097,6 +1109,7 @@ impl Writer {
+@@ -1097,6 +1139,7 @@ impl Writer {
                  .anodes
                  .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
  
@@ -236,7 +354,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,6 +1117,11 @@ impl Writer {
+@@ -1104,6 +1147,11 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -248,7 +366,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
                  // Find end of entries
                  let mut pos = DIR_BLOCK_HEADER_SIZE;
                  while pos < self.resblocksize as usize {
-@@ -1123,13 +1141,17 @@ impl Writer {
+@@ -1123,13 +1171,17 @@ impl Writer {
                  }
              }
          }
@@ -268,7 +386,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
          new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
              .copy_from_slice(&entry_bytes);
          self.write_reserved(new_blk, &new_data)?;
-@@ -1286,10 +1308,44 @@ impl Writer {
+@@ -1286,10 +1338,44 @@ impl Writer {
          Ok(())
      }
  
