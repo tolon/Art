@@ -196,7 +196,7 @@
         "applyLayout_other": "{{target}} içine {{count}} öğe yerleştiriliyor",
         "buildCard": "{{target}} oluşturuluyor",
         "copyArchiveInto": "{{target}} içine bir arşiv kopyalanıyor",
-        "copyDiscInto": "{{target}} içine bir disk kopyalanıyor",
+        "copyDiscInto": "{{target}} içine bir CD imajı kopyalanıyor",
         "copyInto": "{{target}} içine kopyalanıyor",
         "copyOutOf": "{{source}} içinden kopyalanıyor",
         "copySelectionBetween": "Seçilenler {{source}} içinden {{target}} içine kopyalanıyor",
@@ -211,7 +211,7 @@
         "downloadPackages_other": "{{count}} paket indiriliyor",
         "fetchArtwork": "Görseller getiriliyor",
         "identifyMedia": "{{source}} içindeki kurulum diskleri tanınıyor",
-        "indexTitles": "Başlıklar dizinleniyor",
+        "indexTitles": "Oyunlar dizinleniyor",
         "installArchive": "{{name}} kuruluyor",
         "installArchiveInto": "{{target}} içine {{name}} kuruluyor",
         "installArchivesInto_one": "{{target}} içine {{count}} arşiv kuruluyor",
@@ -231,11 +231,11 @@
         "readLocalPictures": "Dosyalarınızdaki resimler okunuyor",
         "readReadme": "{{name}} okunuyor",
         "refreshCatalogue": "Katalog yenileniyor",
-        "rehearseFirstBoot": "İlk açılış {{machine}} üzerinde deneniyor",
+        "rehearseFirstBoot": "İlk açılış {{machine}} üzerinde prova ediliyor",
         "restorePictures": "Kendi resimleriniz geri yükleniyor",
         "syncAminet": "Aminet kataloğu eşitleniyor",
-        "writeIgameData_one": "{{count}} başlık için igame.data yazılıyor",
-        "writeIgameData_other": "{{count}} başlık için igame.data yazılıyor"
+        "writeIgameData_one": "{{count}} oyun için igame.data yazılıyor",
+        "writeIgameData_other": "{{count}} oyun için igame.data yazılıyor"
       }
     },
     "fileViewer": {
