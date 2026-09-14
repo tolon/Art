@@ -252,8 +252,9 @@ impl<'a> VolumeWriter<'a> {
         })
     }
 
-    /// [`open_with_clock`](Self::open_with_clock) with UTC — ART's dates
-    /// before ART-317. Task 9 makes this test-only.
+    /// Tests only (ART-317): the product passes a clock through
+    /// [`open_with_clock`](Self::open_with_clock).
+    #[cfg(test)]
     pub fn open(
         device: &'a mut dyn BlockDeviceMut,
         geometry: VolumeGeometry,

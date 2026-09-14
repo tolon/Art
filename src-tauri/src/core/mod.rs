@@ -892,6 +892,43 @@ fn production_after() -> u32 {
         );
     }
 
+    /// ART-317: an Amiga date is made from an instant only through
+    /// `core::clock::AmigaClock`. Production code naming the epoch constant is
+    /// doing that arithmetic by hand, which is how every writer came to stamp
+    /// UTC. `bcpl.rs` defines it and `clock.rs` is the one converter.
+    ///
+    /// Mutate by pasting create.rs's old `get_current_amiga_date` above its
+    /// `#[cfg(test)]`; this fails.
+    #[test]
+    fn core_makes_amiga_dates_only_through_the_clock() {
+        let needle = concat!("AMIGA_EPOCH", "_UNIX");
+        let allowed = ["adf/bcpl.rs", "clock.rs"];
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let shown = path.display().to_string().replace('\\', "/");
+            if allowed.iter().any(|ok| shown.ends_with(ok)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&path.display().to_string(), &lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                if line.contains(needle) {
+                    offenders.push(format!("{shown}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "an Amiga date made outside core::clock (ART-317):\n{}",
+            offenders.join("\n")
+        );
+    }
+
     /// I1 (2026-09-07 final review). `strip_string_literals` used to track
     /// only string literals, so a stray, unpaired `"` inside a `//` comment
     /// or a `'"'` char literal opened a phantom span that could blank a
