@@ -882,11 +882,16 @@ export function FileManager() {
     volumeIndex: number;
     entryBlock: number;
   } | null>(null);
-  /** An unfinished operation the user has been offered a recovery for. */
+  /**
+   * An unfinished operation the user has been offered a recovery for — or,
+   * when `finished`, a finished one whose journal was left behind, which is
+   * offered for deletion only and never for undoing (ART-117).
+   */
   const [recovery, setRecovery] = useState<{
     side: Side;
     path: string;
     description: string;
+    finished: boolean;
   } | null>(null);
 
   // Which copy job this screen is waiting on, and where to refresh when it
@@ -4093,8 +4098,10 @@ export function FileManager() {
     for (const side of ["left", "right"] as Side[]) {
       const state = pane(side);
       const pending = state.capability?.pending_recovery;
-      if (pending && recovery?.path !== state.location) {
-        setRecovery({ side, path: state.location, description: pending });
+      const finished = state.capability?.finished_journal;
+      const description = pending ?? finished;
+      if (description && recovery?.path !== state.location) {
+        setRecovery({ side, path: state.location, description, finished: !pending });
         return;
       }
     }
@@ -4138,24 +4145,38 @@ export function FileManager() {
           role="alertdialog"
           aria-label={t("files.recovery.ariaLabel")}
         >
-          <strong>{t("files.recovery.title")}</strong>
+          <strong>
+            {recovery.finished ? t("files.recovery.finishedTitle") : t("files.recovery.title")}
+          </strong>
           <div style={{ fontSize: 13, marginTop: 4 }}>
-            {t("files.recovery.body", { description: recovery.description })}
+            {recovery.finished
+              ? t("files.recovery.finishedBody", { description: recovery.description })
+              : t("files.recovery.body", { description: recovery.description })}
           </div>
           <div className="faint" style={{ fontSize: 11, marginTop: 4, wordBreak: "break-all" }}>
             {recovery.path}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-            <button className="btn btn-primary" onClick={() => void resolveRecovery(true)}>
-              {t("files.recovery.undo")}
-            </button>
-            <button
-              className="btn"
-              onClick={() => void resolveRecovery(false)}
-              title={t("files.recovery.leaveTitle")}
-            >
-              {t("files.recovery.leave")}
-            </button>
+            {/* A finished operation's journal is never offered for undoing:
+                that would take a verified change back out (ART-117). */}
+            {recovery.finished ? (
+              <button className="btn btn-primary" onClick={() => void resolveRecovery(false)}>
+                {t("files.recovery.deleteJournal")}
+              </button>
+            ) : (
+              <>
+                <button className="btn btn-primary" onClick={() => void resolveRecovery(true)}>
+                  {t("files.recovery.undo")}
+                </button>
+                <button
+                  className="btn"
+                  onClick={() => void resolveRecovery(false)}
+                  title={t("files.recovery.leaveTitle")}
+                >
+                  {t("files.recovery.leave")}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}

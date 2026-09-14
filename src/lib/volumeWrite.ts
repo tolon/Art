@@ -59,6 +59,12 @@ export interface WriteCapability {
   filesystem: string;
   /** An unfinished operation waiting to be undone. */
   pending_recovery: string | null;
+  /**
+   * A finished operation whose journal file was left behind (ART-117). It
+   * blocks writing like `pending_recovery`, but the journal is deleted, never
+   * undone — undoing it would take a verified change back out.
+   */
+  finished_journal: string | null;
 }
 
 export interface NameProblem {

@@ -80,6 +80,34 @@ pub struct RecoveryResult {
     pub was_truncated: bool,
 }
 
+/// Refuse a write while a journal sits beside `image`.
+///
+/// Two journals, two next steps: an unfinished operation's waits to be undone,
+/// and a finished one's — marked by ART-117's RDB edit when its journal file
+/// would not go — waits to be deleted, and undoing it would take a verified
+/// change back out (ART-117 scoped re-review).
+fn refuse_while_journal(image: &Path) -> CoreResult<()> {
+    let Some(pending) = find_journal(image)? else {
+        return Ok(());
+    };
+    let description = &pending.header().description;
+    Err(CoreError::SafetyRefused(if pending.is_finished() {
+        format!(
+            "'{}' still has the journal of an operation that finished and was verified \
+             ({description}) beside it. Delete that journal in the File Manager — do not undo \
+             it, which would take the finished change back out. ART will not write until it is \
+             gone.",
+            image.display()
+        )
+    } else {
+        format!(
+            "'{}' has an unfinished operation ({description}) waiting to be undone. \
+             Recover it first — ART will not write over it.",
+            image.display()
+        )
+    }))
+}
+
 fn describe(strategy: WriteStrategy) -> &'static str {
     match strategy {
         WriteStrategy::WholeFile => "whole-file",
@@ -132,14 +160,7 @@ where
     // An unfinished operation blocks every write. Overwriting a half-written
     // volume would leave its journal describing blocks that no longer hold
     // what it recorded — the one state from which nothing can be recovered.
-    if let Some(pending) = find_journal(image)? {
-        return Err(CoreError::SafetyRefused(format!(
-            "'{}' has an unfinished operation ({}) waiting to be undone. \
-             Recover it first — ART will not write over it.",
-            image.display(),
-            pending.header().description
-        )));
-    }
+    refuse_while_journal(image)?;
 
     let bytes = std::fs::metadata(image)?.len();
     let strategy = WriteStrategy::for_image(bytes);
@@ -1022,6 +1043,9 @@ pub struct WriteCapability {
     pub filesystem: String,
     /// An unfinished operation blocking every write.
     pub pending_recovery: Option<String>,
+    /// A finished operation whose journal was left behind (ART-117 scoped
+    /// re-review): it blocks writing too, but is deleted, never undone.
+    pub finished_journal: Option<String>,
 }
 
 /// What the pane footer shows, and whether F5–F8 are offered (§8).
@@ -1030,8 +1054,13 @@ pub fn volume_write_capability(path: String, volume_index: usize) -> AppResult<W
     let image = PathBuf::from(path.trim());
     let entry = pick(&image, volume_index)?;
 
-    let pending_recovery =
-        find_journal(&image)?.map(|journal| journal.header().description.clone());
+    let (pending_recovery, finished_journal) = match find_journal(&image)? {
+        Some(journal) if journal.is_finished() => {
+            (None, Some(journal.header().description.clone()))
+        }
+        Some(journal) => (Some(journal.header().description.clone()), None),
+        None => (None, None),
+    };
 
     // A volume ART cannot even mount cannot be written either, and the reason
     // is the more specific of the two.
@@ -1054,6 +1083,7 @@ pub fn volume_write_capability(path: String, volume_index: usize) -> AppResult<W
             volume_name: entry.name.clone(),
             filesystem: entry.filesystem.clone(),
             pending_recovery,
+            finished_journal,
         });
     };
 
@@ -1069,12 +1099,21 @@ pub fn volume_write_capability(path: String, volume_index: usize) -> AppResult<W
     let volume_name = read_volume_name(&device, &geometry).unwrap_or_else(|| entry.name.clone());
 
     Ok(WriteCapability {
-        writable: refusal.is_none() && pending_recovery.is_none(),
-        reason: refusal.or_else(|| {
-            pending_recovery.as_ref().map(|description| {
-                format!("an unfinished operation ({description}) is waiting to be undone")
+        writable: refusal.is_none() && pending_recovery.is_none() && finished_journal.is_none(),
+        reason: refusal
+            .or_else(|| {
+                pending_recovery.as_ref().map(|description| {
+                    format!("an unfinished operation ({description}) is waiting to be undone")
+                })
             })
-        }),
+            .or_else(|| {
+                finished_journal.as_ref().map(|description| {
+                    format!(
+                        "the journal of a finished operation ({description}) is still beside \
+                         this image — delete it; do not undo it"
+                    )
+                })
+            }),
         strategy: describe(WriteStrategy::for_image(bytes)).into(),
         free_blocks,
         free_bytes: free_blocks as u64 * geometry.block_size as u64,
@@ -1082,6 +1121,7 @@ pub fn volume_write_capability(path: String, volume_index: usize) -> AppResult<W
         volume_name,
         filesystem: entry.filesystem.clone(),
         pending_recovery,
+        finished_journal,
     })
 }
 
@@ -1445,13 +1485,7 @@ pub fn run_copy_in_folder_with(
     let entry = pick(image, volume_index)?;
     let geometry = geometry_of(image, &entry)?;
 
-    if let Some(pending) = find_journal(image)? {
-        return Err(CoreError::SafetyRefused(format!(
-            "'{}' has an unfinished operation ({}) waiting to be undone.",
-            image.display(),
-            pending.header().description
-        )));
-    }
+    refuse_while_journal(image)?;
 
     let bytes = std::fs::metadata(image)?.len();
     match WriteStrategy::for_image(bytes) {
@@ -2051,13 +2085,7 @@ fn run_copy_in_staged_with(
     let entry = pick(image, volume_index)?;
     let geometry = geometry_of(image, &entry)?;
 
-    if let Some(pending) = find_journal(image)? {
-        return Err(CoreError::SafetyRefused(format!(
-            "'{}' has an unfinished operation ({}) waiting to be undone.",
-            image.display(),
-            pending.header().description
-        )));
-    }
+    refuse_while_journal(image)?;
 
     let bytes = std::fs::metadata(image)?.len();
     match WriteStrategy::for_image(bytes) {
@@ -2864,6 +2892,57 @@ mod tests {
             Some("Delete Readme")
         );
         assert!(capability.reason.unwrap().contains("Delete Readme"));
+        assert!(capability.finished_journal.is_none());
+    }
+
+    /// ART-117 scoped re-review: a journal marked finished blocks writing
+    /// too, but the footer and every write say to delete it — never "waiting
+    /// to be undone" — and the screen is told it apart from an unfinished one.
+    #[test]
+    fn a_finished_operations_journal_is_reported_as_finished_not_as_waiting_to_be_undone() {
+        let image = Image::new("capability-finished", 1760);
+        {
+            let entry = pick(&image.path, 0).unwrap();
+            let mut device = FileRegionMut::open(
+                &image.path,
+                entry.byte_offset,
+                entry.byte_length,
+                entry.block_size,
+            )
+            .unwrap();
+            let mut journal = crate::core::volume::journal::Journalled::begin(
+                &mut device,
+                &image.path,
+                0,
+                "Embed PDS3 19.3 in the RDB",
+                &[900],
+            )
+            .unwrap();
+            journal.mark_finished().unwrap();
+            std::mem::forget(journal);
+        }
+
+        let capability = volume_write_capability(image.text(), 0).unwrap();
+        assert!(!capability.writable);
+        assert!(capability.pending_recovery.is_none());
+        assert_eq!(
+            capability.finished_journal.as_deref(),
+            Some("Embed PDS3 19.3 in the RDB")
+        );
+        let reason = capability.reason.unwrap();
+        assert!(reason.contains("do not undo it"), "{reason}");
+
+        let err = with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("finished and was verified"), "{message}");
+        assert!(!message.contains("waiting to be undone"), "{message}");
+
+        find_journal(&image.path)
+            .unwrap()
+            .unwrap()
+            .discard()
+            .unwrap();
+        assert!(with_writer(&image.path, 0, |writer| writer.make_dir(0, "Tools")).is_ok());
     }
 
     /// Explain before modify: the plan carries real numbers and nothing has

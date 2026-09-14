@@ -45,6 +45,13 @@ pub enum RdbEditRefusal {
     DynamicVhd,
     /// An unfinished operation's journal is beside the image.
     JournalPending { journal: PathBuf },
+    /// A journal marked finished is beside the image: the previous operation
+    /// was written and verified, and only its journal file was left (ART-117
+    /// scoped re-review). The opposite next step to `JournalPending`'s.
+    JournalFinished {
+        description: String,
+        journal: PathBuf,
+    },
     /// No backup location was chosen.
     NoBackup,
     /// The chosen backup file already exists (SAFE_CREATE).
@@ -88,6 +95,7 @@ impl RdbEditRefusal {
             Self::DifferentDriver { .. } => "ART-RDB-EDIT-DIFFERENT-DRIVER",
             Self::DynamicVhd => "ART-RDB-EDIT-DYNAMIC-VHD",
             Self::JournalPending { .. } => "ART-RDB-EDIT-JOURNAL-PENDING",
+            Self::JournalFinished { .. } => "ART-RDB-EDIT-JOURNAL-FINISHED",
             Self::NoBackup => "ART-RDB-EDIT-NO-BACKUP",
             Self::BackupExists { .. } => "ART-RDB-EDIT-BACKUP-EXISTS",
         }
@@ -219,6 +227,17 @@ impl std::fmt::Display for RdbEditRefusal {
                 f,
                 "an unfinished operation's journal is waiting beside this image ({}). Undo it \
                  first in the File Manager — ART will not write over it. Nothing was written.",
+                journal.display()
+            ),
+            Self::JournalFinished {
+                description,
+                journal,
+            } => write!(
+                f,
+                "the previous operation on this image ({description}) finished and was verified; \
+                 only its undo journal was left behind, at '{}'. Do not undo it — that would take \
+                 the finished change back out. Delete that file (the File Manager offers to), then \
+                 run this again. Nothing was written.",
                 journal.display()
             ),
             Self::NoBackup => write!(
@@ -780,6 +799,10 @@ mod tests {
             }),
             CoreError::RdbEditRefused(RdbEditRefusal::DynamicVhd),
             CoreError::RdbEditRefused(RdbEditRefusal::JournalPending {
+                journal: "x".into(),
+            }),
+            CoreError::RdbEditRefused(RdbEditRefusal::JournalFinished {
+                description: "x".into(),
                 journal: "x".into(),
             }),
             CoreError::RdbEditRefused(RdbEditRefusal::NoBackup),

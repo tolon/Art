@@ -21,7 +21,7 @@ use crate::core::rdbedit::{
 };
 use crate::core::safety::{atomic_create_new, Created};
 use crate::core::volume::device::{FileRegion, FileRegionMut};
-use crate::core::volume::journal::{journal_path_for, Journalled};
+use crate::core::volume::journal::{find_journal, journal_path_for, Journalled};
 use crate::core::volume::{read_block_vec, BlockDeviceMut};
 
 /// Up to 8 MiB of the Amiga disk at `area_offset` — the window decision 5
@@ -163,7 +163,16 @@ fn open_rdb(image: &Path, slot: Option<usize>) -> CoreResult<(u64, Vec<u8>, Stri
     }
     let journal = journal_path_for(image);
     if journal.exists() {
-        return Err(refuse(RdbEditRefusal::JournalPending { journal }));
+        // A journal marked finished gets the truth — delete it, never undo it
+        // (ART-117 scoped re-review). Anything else, unmarked or unreadable,
+        // is still an operation to undo first.
+        return Err(refuse(match find_journal(image) {
+            Ok(Some(pending)) if pending.is_finished() => RdbEditRefusal::JournalFinished {
+                description: pending.header().description.clone(),
+                journal,
+            },
+            _ => RdbEditRefusal::JournalPending { journal },
+        }));
     }
     let area_offset = area_offset_for(image, slot)?;
     let range = read_range(image, area_offset)?;
@@ -353,6 +362,31 @@ pub(crate) fn verify(
     Ok(())
 }
 
+pub(crate) type MarkJournal = dyn Fn(&mut Journalled<'_>) -> CoreResult<()>;
+pub(crate) type RemoveJournal = dyn Fn(Journalled<'_>) -> CoreResult<()>;
+
+/// The two file steps that end a verified edit: mark the journal finished,
+/// then remove it (ART-117 scoped re-review). Injectable so a mark that will
+/// not write and a journal that will not go can each be tested.
+pub(crate) struct JournalEnd<'h> {
+    pub mark: &'h MarkJournal,
+    pub remove: &'h RemoveJournal,
+}
+
+fn mark_journal(journal: &mut Journalled<'_>) -> CoreResult<()> {
+    journal.mark_finished()
+}
+
+fn remove_journal(journal: Journalled<'_>) -> CoreResult<()> {
+    journal.close_after_sync()
+}
+
+/// What the product runs.
+pub(crate) const REAL_END: JournalEnd<'static> = JournalEnd {
+    mark: &mark_journal,
+    remove: &remove_journal,
+};
+
 /// Journal exactly the planned blocks, write the stages, verify, then commit
 /// or roll back.
 pub(crate) fn write_journalled(
@@ -363,6 +397,30 @@ pub(crate) fn write_journalled(
     plan: &EditPlan,
     driver: &[u8],
     description: &str,
+) -> Result<(), WriteFailure> {
+    write_journalled_with(
+        device,
+        image,
+        area_offset,
+        before,
+        plan,
+        driver,
+        description,
+        &REAL_END,
+    )
+}
+
+/// [`write_journalled`] with the journal's last two steps injected.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_journalled_with(
+    device: &mut dyn BlockDeviceMut,
+    image: &Path,
+    area_offset: u64,
+    before: &[u8],
+    plan: &EditPlan,
+    driver: &[u8],
+    description: &str,
+    end: &JournalEnd<'_>,
 ) -> Result<(), WriteFailure> {
     let mut journal = Journalled::begin(device, image, area_offset, description, &plan.blocks())
         .map_err(WriteFailure::BeforeFirstWrite)?;
@@ -381,14 +439,24 @@ pub(crate) fn write_journalled(
                      journal failed, so ART cannot tell whether the card keeps it: {err}"
                 )
             })
+        })
+        // ART-117 scoped re-review: a journal that outlives this point has to
+        // say the edit finished, or the next run would offer to undo it. A
+        // mark that will not write leaves the edit unclaimed, and undone.
+        .and_then(|()| {
+            (end.mark)(&mut journal).map_err(|err| {
+                format!(
+                    "the edit was written and verified, but ART could not mark its journal \
+                     finished, so a journal left behind could not be told from an interrupted \
+                     edit: {err}"
+                )
+            })
         });
     match written {
-        Ok(()) => journal
-            .close_after_sync()
-            .map_err(|err| WriteFailure::JournalNotClosed {
-                detail: err.to_string(),
-                journal: journal_path,
-            }),
+        Ok(()) => (end.remove)(journal).map_err(|err| WriteFailure::JournalNotClosed {
+            detail: err.to_string(),
+            journal: journal_path,
+        }),
         Err(detail) => match journal.roll_back() {
             Ok(()) => Err(WriteFailure::RolledBack(detail)),
             Err(rollback) => Err(WriteFailure::RollbackFailed {
@@ -499,6 +567,17 @@ pub(crate) fn run_with(
     sink: &dyn ProgressSink,
     open: &OpenDevice,
 ) -> CoreResult<EmbedReport> {
+    run_with_end(target, backup, sink, open, &REAL_END)
+}
+
+/// [`run_with`] with the journal's last two steps injected.
+pub(crate) fn run_with_end(
+    target: EmbedTarget<'_>,
+    backup: Option<&Path>,
+    sink: &dyn ProgressSink,
+    open: &OpenDevice,
+    end: &JournalEnd<'_>,
+) -> CoreResult<EmbedReport> {
     let Some(backup) = backup else {
         return Err(refuse(RdbEditRefusal::NoBackup));
     };
@@ -556,7 +635,7 @@ pub(crate) fn run_with(
         DriverVersion::from(plan.file_version)
     );
 
-    match write_journalled(
+    match write_journalled_with(
         &mut *device,
         target.image,
         ready.area_offset,
@@ -564,6 +643,7 @@ pub(crate) fn run_with(
         plan,
         &ready.driver,
         &description,
+        end,
     ) {
         Ok(()) => Ok(EmbedReport {
             slot: target.slot,
@@ -1368,10 +1448,6 @@ mod tests {
         FromWrite(usize),
         /// Only this sync (counting from 1) fails; every write lands.
         SyncAt(usize),
-        /// At this sync the journal file is swapped for a folder of the same
-        /// name, so removing it fails — as a file held open or refused by the
-        /// OS would. The sync itself succeeds.
-        JournalStuckAtSync(usize),
     }
 
     struct Faulty {
@@ -1379,7 +1455,6 @@ mod tests {
         writes: usize,
         syncs: usize,
         fault: Fault,
-        journal: PathBuf,
     }
 
     impl BlockDevice for Faulty {
@@ -1400,7 +1475,7 @@ mod tests {
             let fails = match self.fault {
                 Fault::OnceAt(at) => self.writes == at,
                 Fault::FromWrite(at) => self.writes >= at,
-                Fault::SyncAt(_) | Fault::JournalStuckAtSync(_) => false,
+                Fault::SyncAt(_) => false,
             };
             if fails {
                 return Err(CoreError::Io(std::io::Error::other("the card was pulled")));
@@ -1409,18 +1484,10 @@ mod tests {
         }
         fn sync(&mut self) -> CoreResult<()> {
             self.syncs += 1;
-            match self.fault {
-                Fault::SyncAt(at) if self.syncs == at => {
-                    return Err(CoreError::Io(std::io::Error::other(
-                        "the card stopped answering",
-                    )));
-                }
-                Fault::JournalStuckAtSync(at) if self.syncs == at => {
-                    std::fs::remove_file(&self.journal).unwrap();
-                    std::fs::create_dir(&self.journal).unwrap();
-                    std::fs::write(self.journal.join("held"), b"x").unwrap();
-                }
-                _ => {}
+            if matches!(self.fault, Fault::SyncAt(at) if self.syncs == at) {
+                return Err(CoreError::Io(std::io::Error::other(
+                    "the card stopped answering",
+                )));
             }
             self.inner.sync()
         }
@@ -1473,7 +1540,6 @@ mod tests {
                 writes: 0,
                 syncs: 0,
                 fault: fault(),
-                journal: journal_path_for(image),
             }) as Box<dyn BlockDeviceMut>)
         }
     }
@@ -1639,21 +1705,46 @@ mod tests {
         assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
     }
 
-    /// **Final review I2.** Written, verified and synced, and only the
-    /// journal file will not go: the edit succeeded, and the sentence says so,
-    /// names the journal and the backup, and never tells anyone to undo it.
-    /// Sync 5 is the one after the four stages' own syncs.
-    #[test]
-    fn a_verified_edit_whose_journal_cannot_be_removed_says_it_succeeded() {
-        let run = art_run("run-journal-left");
+    /// Holds a journal's removal back the way a file another program has open
+    /// would: the journal stays exactly where and what it is.
+    fn held_open(journal: Journalled<'_>) -> CoreResult<()> {
+        drop(journal);
+        Err(CoreError::Io(std::io::Error::other(
+            "the journal is held open by another program",
+        )))
+    }
+
+    /// A verified edit whose journal will not go: the real mark, then a
+    /// removal that fails. Returns the run and its ending, the journal left;
+    /// the backup is `run.dir.join("rdb.bin")`.
+    fn finished_with_journal_left(tag: &str) -> (Run, CoreError) {
+        let run = art_run(tag);
         let backup = run.dir.join("rdb.bin");
-        let err = run_with(
+        let err = run_with_end(
             target(&run),
             Some(&backup),
             &NoProgress,
-            &with_fault(|| Fault::JournalStuckAtSync(5)),
+            &open_region,
+            &JournalEnd {
+                mark: REAL_END.mark,
+                remove: &held_open,
+            },
         )
         .unwrap_err();
+        assert!(
+            journal_path_for(&run.image).exists(),
+            "the journal was left"
+        );
+        (run, err)
+    }
+
+    /// **Final review I2.** Written, verified and synced, and only the
+    /// journal file will not go: the edit succeeded, and the sentence says so,
+    /// names the journal and the backup, and never tells anyone to undo it.
+    #[test]
+    fn a_verified_edit_whose_journal_cannot_be_removed_says_it_succeeded() {
+        let (run, err) = finished_with_journal_left("run-journal-left");
+        let backup = run.dir.join("rdb.bin");
         assert_eq!(err.code(), "ART-RDB-EDIT-JOURNAL-LEFT", "{err}");
         let journal = journal_path_for(&run.image);
         let sentence = err.to_string();
@@ -1676,6 +1767,175 @@ mod tests {
             "the card holds the edit"
         );
         assert_eq!(std::fs::read(&backup).unwrap(), run.range[..131 * 512]);
+    }
+
+    /// **ART-117 scoped re-review.** The journal I2 leaves is marked, so the
+    /// next edit on that card says the last one finished — delete the file,
+    /// never undo it — instead of "undo it first".
+    #[test]
+    fn the_next_edit_after_a_journal_left_says_the_last_one_finished_not_undo_it() {
+        let (run, _) = finished_with_journal_left("next-after-left");
+        let after = std::fs::read(&run.image).unwrap();
+        let journal = journal_path_for(&run.image);
+
+        let err = prepare_append(&run.image, None, "PDS3", &run.driver).unwrap_err();
+        let sentence = err.to_string();
+        assert_refused(
+            &run.image,
+            &after,
+            err,
+            "ART-RDB-EDIT-JOURNAL-FINISHED",
+            &journal.display().to_string(),
+        );
+        for needle in [
+            "finished and was verified",
+            "Embed PDS3 19.3 in the RDB",
+            "Do not undo it",
+            "Delete that file",
+        ] {
+            assert!(sentence.contains(needle), "{needle:?} in: {sentence}");
+        }
+        assert!(!sentence.contains("Undo it first"), "{sentence}");
+        assert!(journal.exists());
+    }
+
+    /// **ART-117 scoped re-review.** The File Manager's recovery never takes a
+    /// finished edit back out: it refuses, says the operation finished, and
+    /// leaves the card holding the edit; discarding still removes the file.
+    #[test]
+    fn a_journal_left_by_a_finished_edit_is_never_rolled_back_by_recovery() {
+        let (run, _) = finished_with_journal_left("recover-after-left");
+        let after = std::fs::read(&run.image).unwrap();
+        let journal = journal_path_for(&run.image);
+
+        let pending = find_journal(&run.image)
+            .unwrap()
+            .expect("the journal was left");
+        assert!(pending.is_finished());
+        let refusal = pending
+            .refusal()
+            .unwrap()
+            .expect("a finished journal is not applied");
+        assert!(refusal.contains("finished and was verified"), "{refusal}");
+
+        let err = pending.roll_back().unwrap_err();
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
+        let sentence = err.to_string();
+        for needle in [
+            "finished and was verified",
+            "ART will not undo it",
+            &journal.display().to_string(),
+        ] {
+            assert!(sentence.contains(needle), "{needle:?} in: {sentence}");
+        }
+        assert_eq!(
+            std::fs::read(&run.image).unwrap(),
+            after,
+            "the card keeps the edit"
+        );
+        assert!(crate::core::card::read_card(&run.image)
+            .unwrap()
+            .provides_file_system(PDS3));
+        assert!(journal.exists());
+
+        find_journal(&run.image)
+            .unwrap()
+            .unwrap()
+            .discard()
+            .unwrap();
+        assert!(!journal.exists());
+        assert_eq!(std::fs::read(&run.image).unwrap(), after);
+    }
+
+    fn mark_then_fail(journal: &mut Journalled<'_>) -> CoreResult<()> {
+        journal.mark_finished()?;
+        Err(CoreError::Io(std::io::Error::other(
+            "the disk filled up after the mark",
+        )))
+    }
+
+    fn fail_before_mark(_: &mut Journalled<'_>) -> CoreResult<()> {
+        Err(CoreError::Io(std::io::Error::other(
+            "the journal could not be opened",
+        )))
+    }
+
+    /// **ART-117 scoped re-review.** A mark that cannot be written or synced
+    /// leaves the journal unable to say the edit finished, so the edit is not
+    /// claimed: it is rolled back, the card is the bytes it was, and the
+    /// rolled-back ending is the one used. Both arms — the mark failing before
+    /// a byte landed, and after (which `roll_back` has to take back out).
+    #[test]
+    fn a_mark_that_cannot_be_written_rolls_the_edit_back() {
+        let arms: [(&str, &MarkJournal); 2] = [
+            ("mark-fails-after-writing", &mark_then_fail),
+            ("mark-fails-before-writing", &fail_before_mark),
+        ];
+        for (tag, mark) in arms {
+            let run = art_run(tag);
+            let backup = run.dir.join("rdb.bin");
+            let err = run_with_end(
+                target(&run),
+                Some(&backup),
+                &NoProgress,
+                &open_region,
+                &JournalEnd {
+                    mark,
+                    remove: REAL_END.remove,
+                },
+            )
+            .unwrap_err();
+            assert_eq!(err.code(), "ART-RDB-EDIT-ROLLED-BACK", "{tag}: {err}");
+            let sentence = err.to_string();
+            for needle in [
+                "could not mark its journal finished",
+                &backup.display().to_string(),
+            ] {
+                assert!(
+                    sentence.contains(needle),
+                    "{tag}: {needle:?} in: {sentence}"
+                );
+            }
+            assert_eq!(
+                std::fs::read(&run.image).unwrap(),
+                run.before,
+                "{tag}: the card is the bytes it was"
+            );
+            assert!(!journal_path_for(&run.image).exists(), "{tag}");
+        }
+    }
+
+    /// The control: a journal left by a crash mid-stage carries no mark, so
+    /// it is still `JOURNAL-PENDING` and the File Manager's roll-back still
+    /// puts the card back.
+    #[test]
+    fn a_journal_left_by_a_crash_mid_stage_is_still_pending_and_rolls_back() {
+        let run = art_run("crash-still-pending");
+        let ready = prepare_append(&run.image, None, "PDS3", &run.driver).unwrap();
+        crash_during(&run.image, ready.area_offset, &ready.plan, Stage::Header);
+        let crashed = std::fs::read(&run.image).unwrap();
+        assert_ne!(crashed, run.before, "the crash left stages written");
+
+        let err = prepare_append(&run.image, None, "PDS3", &run.driver).unwrap_err();
+        let sentence = err.to_string();
+        assert_refused(
+            &run.image,
+            &crashed,
+            err,
+            "ART-RDB-EDIT-JOURNAL-PENDING",
+            "Undo it first",
+        );
+        assert!(
+            !sentence.contains("finished and was verified"),
+            "{sentence}"
+        );
+
+        let pending = find_journal(&run.image).unwrap().unwrap();
+        assert!(!pending.is_finished());
+        assert!(pending.refusal().unwrap().is_none());
+        pending.roll_back().unwrap();
+        assert_eq!(std::fs::read(&run.image).unwrap(), run.before);
+        assert!(!journal_path_for(&run.image).exists());
     }
 
     /// The other half of I2: when the last sync is what fails, nobody knows

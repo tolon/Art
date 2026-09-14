@@ -1401,7 +1401,10 @@
       "body": "“{{description}}” was interrupted. ART kept a record of every block it was about to change, so the image can be put back exactly as it was. Writing is refused until you decide.",
       "undo": "Undo it",
       "leave": "Leave the image alone",
-      "leaveTitle": "Leave the image exactly as it is and forget the record. Only do this if you know the operation completed."
+      "leaveTitle": "Leave the image exactly as it is and forget the record. Only do this if you know the operation completed.",
+      "finishedTitle": "An operation on this image finished, and its journal was left behind",
+      "finishedBody": "“{{description}}” finished and was verified; only its journal file could not be removed. Do not undo it — that would take the finished change back out. Delete the journal to write to this image again.",
+      "deleteJournal": "Delete the journal"
     },
     "writeRefusal": {
       "local": "This pane holds a folder, not a disk image",

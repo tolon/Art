@@ -42,10 +42,31 @@
 //! replaying. Size is the strong invariant instead — these writes are in-place
 //! and never resize the file, so a size that no longer matches means a
 //! different file, and ART touches nothing (§89).
+//!
+//! ## A finished operation's journal
+//!
+//! A journal that outlives its process normally means the operation died, and
+//! undoing it is right. ART-117's RDB edit has one more ending: written,
+//! verified and synced, and then the journal file will not go. Left as it was,
+//! that journal is byte-identical to a crash's, and undoing it would take a
+//! finished edit back out (ART-117 scoped re-review).
+//!
+//! So such a caller [marks](Journalled::mark_finished) the journal before it
+//! removes it: the header's version field is overwritten with
+//! [`FINISHED_MARK`] and synced. Every leftover journal is then one of two
+//! things — unmarked, an interrupted operation to undo, or marked, a finished
+//! one to delete and never undo. [`PendingJournal::roll_back`] refuses a marked
+//! journal; [`PendingJournal::discard`] still removes it.
+//!
+//! The mark lives in the header, not in a record, so it cannot be mistaken for
+//! a truncated or damaged entry. An ART build from before the mark reads the
+//! field as an unknown version and refuses the whole file — it neither undoes
+//! nor deletes it. The volume writer never marks, so its journals are
+//! version 1 exactly as before.
 
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use super::BlockDeviceMut;
@@ -57,6 +78,14 @@ pub const JOURNAL_EXTENSION: &str = "artjournal";
 const MAGIC: &[u8; 8] = b"ARTJRNL\x00";
 const FORMAT_VERSION: u32 = 1;
 const ENTRY_MAGIC: u32 = 0x454e_5452; // "ENTR"
+
+/// Where the version field sits: straight after the magic.
+const VERSION_OFFSET: u64 = MAGIC.len() as u64;
+
+/// What a finished operation's journal carries in its version field instead of
+/// [`FORMAT_VERSION`] — see "A finished operation's journal" above. Not a
+/// version number, so it can never collide with a later format's.
+pub const FINISHED_MARK: u32 = 0x444f_4e45; // "DONE"
 
 /// The most blocks one operation may journal.
 ///
@@ -114,6 +143,12 @@ pub struct Journalled<'a> {
     /// Saved contents, kept in memory too so a rollback in the same process
     /// needs no re-read. The disk copy is what survives a crash.
     previous: Vec<(u32, Vec<u8>)>,
+    /// A mark may have reached the journal file: [`mark_finished`] got as
+    /// far as opening it. [`roll_back`] takes the mark out before a block.
+    ///
+    /// [`mark_finished`]: Journalled::mark_finished
+    /// [`roll_back`]: Journalled::roll_back
+    marked: bool,
 }
 
 impl<'a> Journalled<'a> {
@@ -172,6 +207,7 @@ impl<'a> Journalled<'a> {
             header,
             saved: wanted.into_iter().collect(),
             previous,
+            marked: false,
         })
     }
 
@@ -223,8 +259,9 @@ impl<'a> Journalled<'a> {
         remove_journal(&self.path)
     }
 
-    /// The caller has already [`sync`](Journalled::sync)ed and validated the
-    /// operation: remove the journal, and nothing else.
+    /// The caller has already [`sync`](Journalled::sync)ed, validated and
+    /// [marked](Journalled::mark_finished) the operation: remove the journal,
+    /// and nothing else.
     ///
     /// For a caller that has to tell a failed sync (the new data may not be
     /// durable) from a failed removal (it is, and only the journal file is
@@ -234,6 +271,21 @@ impl<'a> Journalled<'a> {
         remove_journal(&self.path)
     }
 
+    /// Mark this journal as belonging to an operation that has finished: the
+    /// caller has written, verified and synced it, so a journal left behind
+    /// from here on is one to delete, never to undo.
+    ///
+    /// Overwrites the header's version field with [`FINISHED_MARK`], syncs
+    /// the file and reads the header back. On an error the mark may or may not
+    /// be on disk; [`roll_back`](Journalled::roll_back) takes it out again
+    /// before it restores a block.
+    pub fn mark_finished(&mut self) -> CoreResult<()> {
+        let mut file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+        // From here a byte may land even if a later step fails.
+        self.marked = true;
+        put_version(&mut file, FINISHED_MARK)
+    }
+
     /// The operation failed: put every saved block back, then drop the journal.
     ///
     /// Restores from the in-memory copy, which is byte-identical to the one on
@@ -241,6 +293,14 @@ impl<'a> Journalled<'a> {
     /// the next mount tries again rather than the image being left half-undone
     /// with nothing to say so.
     pub fn roll_back(self) -> CoreResult<()> {
+        if self.marked {
+            // Before any block: a roll-back that dies part-way has to leave a
+            // journal the next run undoes, not one it calls finished. When the
+            // mark cannot be taken out, no block is touched — the card still
+            // holds the verified edit the mark describes.
+            let mut file = OpenOptions::new().read(true).write(true).open(&self.path)?;
+            put_version(&mut file, FORMAT_VERSION)?;
+        }
         for (block, bytes) in &self.previous {
             self.device.write_block(*block, bytes)?;
         }
@@ -258,6 +318,9 @@ pub struct PendingJournal {
     entries: Vec<(u32, Vec<u8>)>,
     /// True when the file ended part-way through an entry.
     truncated: bool,
+    /// The journal carries [`FINISHED_MARK`]: its operation finished and was
+    /// verified, and only the file was left behind.
+    finished: bool,
 }
 
 /// What a recovery did.
@@ -290,12 +353,19 @@ pub fn find_journal(image: &Path) -> CoreResult<Option<PendingJournal>> {
         header: parsed.header,
         entries: parsed.entries,
         truncated: parsed.truncated,
+        finished: parsed.finished,
     }))
 }
 
 impl PendingJournal {
     pub fn header(&self) -> &JournalHeader {
         &self.header
+    }
+
+    /// Whether this journal's operation finished and was verified, so the
+    /// journal is to be deleted and never undone.
+    pub fn is_finished(&self) -> bool {
+        self.finished
     }
 
     pub fn path(&self) -> &Path {
@@ -318,8 +388,23 @@ impl PendingJournal {
         Ok(metadata.len() == self.header.image_bytes)
     }
 
+    /// The sentence for a finished operation's journal: what it is, why ART
+    /// will not undo it, and the one thing left to do.
+    fn finished_sentence(&self) -> String {
+        format!(
+            "This journal belongs to an operation that finished and was verified ({}); only the \
+             journal file itself could not be removed. ART will not undo it — that would take the \
+             finished change back out — and has not touched the image. Delete '{}' and carry on.",
+            self.header.description,
+            self.path.display()
+        )
+    }
+
     /// Why this journal cannot be applied, or `None` when it can.
     pub fn refusal(&self) -> CoreResult<Option<String>> {
+        if self.finished {
+            return Ok(Some(self.finished_sentence()));
+        }
         if self.matches_image()? {
             return Ok(None);
         }
@@ -336,8 +421,12 @@ impl PendingJournal {
 
     /// Undo the unfinished operation, then delete the journal.
     ///
-    /// Refuses outright when the header does not describe this image.
+    /// Refuses outright when the operation finished (the journal is marked),
+    /// and when the header does not describe this image.
     pub fn roll_back(self) -> CoreResult<RecoveryReport> {
+        if self.finished {
+            return Err(CoreError::SafetyRefused(self.finished_sentence()));
+        }
         if let Some(reason) = self.refusal()? {
             return Err(CoreError::InvalidInput(reason));
         }
@@ -407,6 +496,9 @@ impl PendingJournal {
 //          volume_offset:u64 path_len:u16 path desc_len:u16 desc
 // entries: ENTRY_MAGIC:u32 block_no:u32 payload[block_size] checksum:u32
 //
+// `version` is FORMAT_VERSION as written, and FINISHED_MARK once a caller has
+// marked the operation finished — rewritten in place, four bytes, synced.
+//
 // Each entry carries its own checksum so a replay can tell a complete entry
 // from one interrupted mid-write. There is no entry count in the header: it
 // would have to be written last, and a header that has to be revisited after
@@ -419,6 +511,27 @@ struct ParsedJournal {
     /// The file ended part-way through an entry, so the crash happened while
     /// the journal itself was still being written.
     truncated: bool,
+    /// The version field holds [`FINISHED_MARK`].
+    finished: bool,
+}
+
+/// Overwrite the version field of the journal open in `file` with `value`,
+/// sync, and read the magic and the field back.
+fn put_version(file: &mut File, value: u32) -> CoreResult<()> {
+    file.seek(SeekFrom::Start(VERSION_OFFSET))?;
+    file.write_all(&value.to_be_bytes())?;
+    file.sync_all()?;
+
+    let mut head = [0u8; MAGIC.len() + 4];
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut head)?;
+    if &head[..MAGIC.len()] != MAGIC || head[MAGIC.len()..] != value.to_be_bytes() {
+        return Err(CoreError::Malformed {
+            format: "journal".into(),
+            detail: "the journal's version field did not read back as it was written".into(),
+        });
+    }
+    Ok(())
 }
 
 fn write_journal(
@@ -478,11 +591,15 @@ fn read_journal(path: &Path) -> CoreResult<ParsedJournal> {
     cursor += MAGIC.len();
 
     let version = take_u32(&bytes, &mut cursor)?;
-    if version != FORMAT_VERSION {
-        return Err(CoreError::UnsupportedFormat(format!(
-            "this journal is version {version}; this ART writes version {FORMAT_VERSION}"
-        )));
-    }
+    let finished = match version {
+        FORMAT_VERSION => false,
+        FINISHED_MARK => true,
+        _ => {
+            return Err(CoreError::UnsupportedFormat(format!(
+                "this journal is version {version}; this ART writes version {FORMAT_VERSION}"
+            )))
+        }
+    };
 
     let block_size = take_u32(&bytes, &mut cursor)?;
     if block_size == 0 || !(block_size as usize).is_multiple_of(super::SECTOR_BYTES) {
@@ -540,6 +657,7 @@ fn read_journal(path: &Path) -> CoreResult<ParsedJournal> {
         header,
         entries,
         truncated,
+        finished,
     })
 }
 
@@ -898,6 +1016,127 @@ mod tests {
         assert!(!journal_path_for(&image).exists());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ART-117 scoped re-review: a journal marked finished is one to delete,
+    /// never to undo — recovery refuses it, says why, and touches nothing;
+    /// discarding still removes it.
+    #[test]
+    fn a_marked_journal_is_finished_and_is_never_rolled_back() {
+        let (_guard, dir) = scratch("marked");
+        let image_path = dir.join("disk.hdf");
+        image_at(&image_path, 8);
+
+        {
+            let mut device = open(&image_path, 8);
+            let mut op =
+                Journalled::begin(&mut device, &image_path, 0, "Embed PDS3 19.3", &[2, 4]).unwrap();
+            op.write_block(2, &filled(0xAA)).unwrap();
+            op.write_block(4, &filled(0xBB)).unwrap();
+            op.sync().unwrap();
+            op.mark_finished().unwrap();
+            // …and the journal file will not go.
+            std::mem::forget(op);
+        }
+        let finished = std::fs::read(&image_path).unwrap();
+        let journal = journal_path_for(&image_path);
+
+        let pending = find_journal(&image_path).unwrap().unwrap();
+        assert!(pending.is_finished());
+        let refusal = pending
+            .refusal()
+            .unwrap()
+            .expect("a finished journal is not applied");
+        assert!(refusal.contains("finished and was verified"), "{refusal}");
+
+        let err = pending.roll_back().unwrap_err();
+        assert_eq!(err.code(), "ART-SAFETY-REFUSED", "{err}");
+        let sentence = err.to_string();
+        for needle in [
+            "Embed PDS3 19.3",
+            "ART will not undo it",
+            &journal.display().to_string(),
+        ] {
+            assert!(sentence.contains(needle), "{needle:?} in: {sentence}");
+        }
+        assert_eq!(std::fs::read(&image_path).unwrap(), finished);
+        assert!(journal.exists(), "a refused journal stays where it is");
+
+        find_journal(&image_path)
+            .unwrap()
+            .unwrap()
+            .discard()
+            .unwrap();
+        assert!(!journal.exists());
+        assert_eq!(std::fs::read(&image_path).unwrap(), finished);
+    }
+
+    /// The mark is four bytes in the header and nothing else: an unmarked
+    /// journal — every volume-writer journal — is version 1 as before.
+    #[test]
+    fn the_mark_rewrites_only_the_version_field() {
+        let (_guard, dir) = scratch("mark-bytes");
+        let image = dir.join("disk.hdf");
+        image_at(&image, 8);
+        let journal = journal_path_for(&image);
+
+        let mut device = open(&image, 8);
+        let mut op = Journalled::begin(&mut device, &image, 0, "Copy in", &[1, 3]).unwrap();
+        let unmarked = std::fs::read(&journal).unwrap();
+        assert_eq!(&unmarked[..8], MAGIC);
+        assert_eq!(unmarked[8..12], 1u32.to_be_bytes(), "version 1, unmarked");
+
+        op.mark_finished().unwrap();
+        let marked = std::fs::read(&journal).unwrap();
+        assert_eq!(marked.len(), unmarked.len());
+        assert_eq!(marked[8..12], FINISHED_MARK.to_be_bytes());
+        assert_eq!(marked[..8], unmarked[..8]);
+        assert_eq!(marked[12..], unmarked[12..], "no entry changes");
+        std::mem::forget(op);
+    }
+
+    /// A mark that `roll_back` meets is taken out before a block is restored,
+    /// and the roll-back is still exact.
+    #[test]
+    fn a_roll_back_after_a_mark_restores_every_byte() {
+        let (_guard, dir) = scratch("mark-rollback");
+        let image = dir.join("disk.hdf");
+        let before = image_at(&image, 8);
+
+        let mut device = open(&image, 8);
+        let mut op = Journalled::begin(&mut device, &image, 0, "Copy in", &[2, 5]).unwrap();
+        op.write_block(2, &filled(0xAA)).unwrap();
+        op.mark_finished().unwrap();
+        op.roll_back().unwrap();
+        drop(device);
+
+        assert_eq!(std::fs::read(&image).unwrap(), before);
+        assert!(!journal_path_for(&image).exists());
+    }
+
+    /// What an ART build from before the mark does with a marked journal is
+    /// this arm: a version field it does not know refuses the whole file, and
+    /// nothing is applied or deleted.
+    #[test]
+    fn a_journal_whose_version_is_unknown_is_refused_and_left_alone() {
+        let (_guard, dir) = scratch("unknown-version");
+        let image = dir.join("disk.hdf");
+        image_at(&image, 8);
+        {
+            let mut device = open(&image, 8);
+            let op = Journalled::begin(&mut device, &image, 0, "Copy in", &[2]).unwrap();
+            std::mem::forget(op);
+        }
+        let journal = journal_path_for(&image);
+        let mut bytes = std::fs::read(&journal).unwrap();
+        bytes[8..12].copy_from_slice(&7u32.to_be_bytes());
+        std::fs::write(&journal, &bytes).unwrap();
+        let before = std::fs::read(&image).unwrap();
+
+        let err = find_journal(&image).unwrap_err();
+        assert_eq!(err.code(), "ART-FORMAT-UNSUPPORTED", "{err}");
+        assert!(journal.exists());
+        assert_eq!(std::fs::read(&image).unwrap(), before);
     }
 
     #[test]

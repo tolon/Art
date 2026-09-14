@@ -1401,7 +1401,10 @@
       "body": "“{{description}}” yarıda kesildi. ART, değiştirmek üzere olduğu her bloğun kaydını tuttu, böylece imaj tam olarak eski haline getirilebilir. Siz karar verene kadar yazma engellenir.",
       "undo": "Geri al",
       "leave": "İmajı olduğu gibi bırak",
-      "leaveTitle": "İmajı tam olarak şu anki haliyle bırakın ve kaydı unutun. Bunu yalnızca işlemin tamamlandığından eminseniz yapın."
+      "leaveTitle": "İmajı tam olarak şu anki haliyle bırakın ve kaydı unutun. Bunu yalnızca işlemin tamamlandığından eminseniz yapın.",
+      "finishedTitle": "Bu imaj üzerindeki bir işlem tamamlandı, ama günlüğü geride kaldı",
+      "finishedBody": "“{{description}}” tamamlandı ve doğrulandı; yalnızca günlük dosyası kaldırılamadı. Geri almayın — bu, tamamlanan değişikliği yeniden çıkarır. Bu imaja yeniden yazmak için günlüğü silin.",
+      "deleteJournal": "Günlüğü sil"
     },
     "writeRefusal": {
       "local": "Bu bölme bir disk imajı değil, bir klasör içeriyor",
