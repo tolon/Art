@@ -27,7 +27,7 @@ use crate::core::artwork::local::{adopt_local, LocalOutcome, LocalPreview, MAX_P
 use crate::core::artwork::rebind::{rebind_manual_art, Binding, RebindOutcome};
 use crate::core::artwork::{ArtKind, ArtRef};
 use crate::core::gameindex::store::{read_overrides, set_override, ArtBinding};
-use crate::core::jobs::JobId;
+use crate::core::jobs::{JobId, JobTitle};
 use crate::error::AppResult;
 use crate::net::http_mirror::HttpMirrorClient;
 
@@ -185,27 +185,23 @@ pub fn artwork_enrich(
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
 
-    let id = spawn_job(
-        &app,
-        registry,
-        "Fetching artwork",
-        move |job_id, progress| {
-            let client = HttpMirrorClient::default();
-            let outcome = enrich(
-                EnrichRequest {
-                    titles: &titles,
-                    sources: &sources,
-                    cache_dir: &dir,
-                    wanted: &DISPLAYED_KINDS,
-                    pinned: &pinned,
-                },
-                &client,
-                progress,
-            )?;
-            let _ = emit_app.emit(ARTWORK_RESULT_EVENT, ArtworkResult { job_id, outcome });
-            Ok(())
-        },
-    );
+    let title = JobTitle::new("components.jobBar.title.fetchArtwork");
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        let client = HttpMirrorClient::default();
+        let outcome = enrich(
+            EnrichRequest {
+                titles: &titles,
+                sources: &sources,
+                cache_dir: &dir,
+                wanted: &DISPLAYED_KINDS,
+                pinned: &pinned,
+            },
+            &client,
+            progress,
+        )?;
+        let _ = emit_app.emit(ARTWORK_RESULT_EVENT, ArtworkResult { job_id, outcome });
+        Ok(())
+    });
 
     Ok(id)
 }
@@ -386,16 +382,12 @@ pub fn artwork_adopt_local(
         })
         .collect();
 
-    let id = spawn_job(
-        &app,
-        registry,
-        "Reading pictures from your files",
-        move |job_id, progress| {
-            let outcome = adopt_local(&dir, &previews, progress)?;
-            let _ = emit_app.emit(LOCAL_RESULT_EVENT, LocalResult { job_id, outcome });
-            Ok(())
-        },
-    );
+    let title = JobTitle::new("components.jobBar.title.readLocalPictures");
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        let outcome = adopt_local(&dir, &previews, progress)?;
+        let _ = emit_app.emit(LOCAL_RESULT_EVENT, LocalResult { job_id, outcome });
+        Ok(())
+    });
 
     Ok(id)
 }
@@ -449,49 +441,44 @@ pub fn artwork_rebind_manual(
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
 
-    let id = spawn_job(
-        &app,
-        registry,
-        "Restoring your own pictures",
-        move |job_id, progress| {
-            let overrides = read_overrides(&catalogue)?;
-            let bindings: Vec<Binding> = titles
-                .iter()
-                .filter_map(|shown| {
-                    let art = overrides.edits.get(&shown.id)?.art.as_ref()?;
-                    Some(Binding {
-                        id: shown.id.clone(),
-                        title: shown.title.clone(),
-                        chosen: PathBuf::from(&art.chosen),
-                        cached: art.cached.clone(),
-                    })
+    let title = JobTitle::new("components.jobBar.title.restorePictures");
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        let overrides = read_overrides(&catalogue)?;
+        let bindings: Vec<Binding> = titles
+            .iter()
+            .filter_map(|shown| {
+                let art = overrides.edits.get(&shown.id)?.art.as_ref()?;
+                Some(Binding {
+                    id: shown.id.clone(),
+                    title: shown.title.clone(),
+                    chosen: PathBuf::from(&art.chosen),
+                    cached: art.cached.clone(),
                 })
-                .collect();
+            })
+            .collect();
 
-            let outcome = rebind_manual_art(&dir, &bindings, progress)?;
+        let outcome = rebind_manual_art(&dir, &bindings, progress)?;
 
-            // Only where the name actually moved — see the doc comment.
-            for rebound in &outcome.restored {
-                let Some(binding) = bindings.iter().find(|b| b.id == rebound.id) else {
-                    continue;
-                };
-                if binding.cached == rebound.cached {
-                    continue;
-                }
-                if let Some(mut edit) = read_overrides(&catalogue)?.edits.get(&rebound.id).cloned()
-                {
-                    edit.art = Some(ArtBinding {
-                        chosen: binding.chosen.to_string_lossy().to_string(),
-                        cached: rebound.cached.clone(),
-                    });
-                    set_override(&catalogue, &rebound.id, edit)?;
-                }
+        // Only where the name actually moved — see the doc comment.
+        for rebound in &outcome.restored {
+            let Some(binding) = bindings.iter().find(|b| b.id == rebound.id) else {
+                continue;
+            };
+            if binding.cached == rebound.cached {
+                continue;
             }
+            if let Some(mut edit) = read_overrides(&catalogue)?.edits.get(&rebound.id).cloned() {
+                edit.art = Some(ArtBinding {
+                    chosen: binding.chosen.to_string_lossy().to_string(),
+                    cached: rebound.cached.clone(),
+                });
+                set_override(&catalogue, &rebound.id, edit)?;
+            }
+        }
 
-            let _ = emit_app.emit(REBIND_RESULT_EVENT, RebindResult { job_id, outcome });
-            Ok(())
-        },
-    );
+        let _ = emit_app.emit(REBIND_RESULT_EVENT, RebindResult { job_id, outcome });
+        Ok(())
+    });
 
     Ok(id)
 }
