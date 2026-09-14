@@ -85,7 +85,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::ProgressSink;
+use crate::core::jobs::{JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{
     add_package_staging_in, apply_staging_in, refuse_unless_free, ApplyOutcome,
@@ -483,7 +483,8 @@ pub fn osinstall_identify_media(
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<u64> {
-    let title = format!("Identifying media in {}", folder.display());
+    let title =
+        JobTitle::new("components.jobBar.title.identifyMedia").text("source", &folder.display());
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
     let scratch_root = crate::scratch::root()?;
@@ -491,7 +492,7 @@ pub fn osinstall_identify_media(
     let id = spawn_job_in_lane(
         &app,
         registry,
-        &title,
+        title,
         IDENTIFY_MEDIA_LANE,
         move |job_id, progress| {
             let cache = ScanCache::in_dir(&scratch_root);
@@ -2288,11 +2289,9 @@ pub fn osinstall_component_collisions(
     app: AppHandle,
     registry: State<'_, Arc<JobRegistry>>,
 ) -> AppResult<u64> {
-    let title = format!(
-        "Previewing {} component(s) of {}",
-        components.len(),
-        plan.release
-    );
+    let title = JobTitle::new("components.jobBar.title.previewComponents")
+        .count(components.len())
+        .text("release", &plan.release);
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
 
@@ -2304,7 +2303,7 @@ pub fn osinstall_component_collisions(
     let id = spawn_job_in_lane(
         &app,
         registry,
-        &title,
+        title,
         COMPONENT_PREVIEW_LANE,
         move |job_id, progress| {
             let preview =
@@ -2419,11 +2418,9 @@ pub fn osinstall_collisions(
             return Err(CoreError::InvalidInput(message).into());
         }
     };
-    let title = format!(
-        "Previewing {} package(s) against {}",
-        ordered.len(),
-        tree_root.display()
-    );
+    let title = JobTitle::new("components.jobBar.title.previewPackages")
+        .count(ordered.len())
+        .text("target", &tree_root.display());
     let emit_app = app.clone();
     let registry = Arc::clone(&registry);
 
@@ -2435,7 +2432,7 @@ pub fn osinstall_collisions(
     let id = spawn_job_in_lane(
         &app,
         registry,
-        &title,
+        title,
         PACKAGE_PREVIEW_LANE,
         move |job_id, progress| {
             let reports = preview_collisions(
@@ -2632,7 +2629,9 @@ pub fn osinstall_add_package(
     let root = tree_root.clone();
     let for_log = tree_root.display().to_string();
     let package_names: Vec<String> = resolved.iter().map(|(p, _)| p.id.clone()).collect();
-    let title = format!("Adding {} package(s) to {for_log}", resolved.len());
+    let title = JobTitle::new("components.jobBar.title.addPackages")
+        .count(resolved.len())
+        .text("target", &for_log);
     let log_path = oplog.path().to_path_buf();
     let emit_app = app.clone();
 
@@ -2644,7 +2643,7 @@ pub fn osinstall_add_package(
     let id = spawn_job(
         &app,
         Arc::clone(&registry),
-        &title,
+        title,
         move |job_id, progress| {
             let mut total = ApplyOutcome {
                 root: root.clone(),
@@ -2777,7 +2776,9 @@ pub fn osinstall_apply(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Installing {} into {destination}", request.plan.release);
+    let title = JobTitle::new("components.jobBar.title.installRelease")
+        .text("release", &request.plan.release)
+        .text("target", &destination);
     let for_log = destination.clone();
     let plan = request.plan;
     let root = request.destination;
@@ -2787,7 +2788,7 @@ pub fn osinstall_apply(
     // button they pressed (ART-196).
     let scratch_root = crate::scratch::root()?;
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = apply_staging_in(&plan, &root, &scratch_root, progress);
 
         // Background jobs run on their own thread and cannot carry a Tauri

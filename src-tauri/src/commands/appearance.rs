@@ -56,7 +56,7 @@ use crate::core::appearance::apply_appearance;
 use crate::core::appearance::{
     apply_appearance_with, backdrops_in_tree, AppearanceOutcome, AppearanceRequest, WallpaperSource,
 };
-use crate::core::jobs::JobId;
+use crate::core::jobs::{JobId, JobTitle};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::error::AppResult;
 
@@ -322,10 +322,11 @@ pub fn appearance_apply(
     let emit_app = app.clone();
     let for_log = tree.display().to_string();
 
+    let title = JobTitle::new("components.jobBar.title.applyAppearance");
     let id = spawn_job(
         &app,
         Arc::clone(&registry),
-        "Applying appearance to distribution tree",
+        title,
         move |job_id, progress| {
             let core_request: AppearanceRequest = request.into();
             let result = apply_appearance_with(&tree, &core_request, progress)

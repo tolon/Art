@@ -69,7 +69,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::core::card::manifest::{manifest_path_for, read_manifest};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::ProgressSink;
+use crate::core::jobs::{JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::osinstall::apply::MANIFEST_FILE_NAME;
 use crate::core::osinstall::PairedRom;
@@ -604,10 +604,12 @@ pub fn preload_run(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Preparing {} volume(s) on {image}", made.formats());
+    let title = JobTitle::new("components.jobBar.title.preparePartitions")
+        .count(made.formats())
+        .text("target", &image);
     let for_log = image.clone();
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let native = NativeFormatter;
         let run_result = run_with_fallback(
             &made,

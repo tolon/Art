@@ -35,7 +35,7 @@ use crate::core::firstboot::cardread::{read_card_report, CardFirstBootReport};
 use crate::core::firstboot::plan::{plan, FirstBootPlan, FirstBootRequest};
 use crate::core::firstboot::write::{write, Written};
 use crate::core::firstboot::DISPATCHER_PATH;
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::profile::AmigaProfile;
 use crate::core::winuae::detect_winuae;
@@ -303,12 +303,13 @@ pub fn firstboot_rehearse(
     let emit_app = app.clone();
     let for_log = tree.display().to_string();
     let machine = profile.id.clone();
-    let title = format!("Rehearsing the first boot on {}", profile.name);
+    let title =
+        JobTitle::new("components.jobBar.title.rehearseFirstBoot").text("machine", &profile.name);
 
     let id = spawn_job(
         &app,
         Arc::clone(&registry),
-        &title,
+        title,
         move |job_id, progress| {
             let mut copy_path: Option<PathBuf> = None;
             let result = perform(

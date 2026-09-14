@@ -102,7 +102,7 @@ use crate::core::amigainstall::{
     packagevol, workvol, PlannedRun, RunOutcome, PACKAGE_VOLUME, RESULT_FILE, WORK_VOLUME,
 };
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::osinstall::source::MediaSource;
 use crate::core::osinstall::source_archive::ArchiveSource;
@@ -1154,7 +1154,8 @@ pub fn amiga_install_run(
     let emulator = PathBuf::from(emulator);
     let log_path = oplog.path().to_path_buf();
     let emit_app = app.clone();
-    let title = format!("Installing {} on the Amiga", composed.package_name);
+    let title = JobTitle::new("components.jobBar.title.installOnAmiga")
+        .text("name", &composed.package_name);
 
     let for_log = tree.display().to_string();
     let command_line = command_line_of(&plan);
@@ -1168,7 +1169,7 @@ pub fn amiga_install_run(
     let id = spawn_job(
         &app,
         Arc::clone(&registry),
-        &title,
+        title,
         move |job_id, progress| {
             let result = install(
                 &composed,

@@ -28,7 +28,7 @@ use crate::core::card::{read_card, CardImage};
 use crate::core::detect::detect;
 use crate::core::error::CoreResult;
 use crate::core::hashing::{sha256_bytes, sha256_file};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::mbr::{plan_card, CardLayout};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::pistorm::firmware::FirmwareConfig;
@@ -805,9 +805,9 @@ pub fn card_build(
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
     let dest = request.dest.trim().to_string();
-    let title = format!("Building {dest}");
+    let title = JobTitle::new("components.jobBar.title.buildCard").text("target", &dest);
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = build_requested_card(&request, progress);
 
         // §53: a card is user data the moment it exists, and where it came
