@@ -1470,14 +1470,19 @@ mod tests {
 
     /// ART-117 on the owner's own card — on a byte copy the owner made.
     ///
+    /// `TMP`/`TEMP` no longer need setting by hand (ART-320,
+    /// `src-tauri/.cargo/config.toml` already forces them onto
+    /// `E:\amiga\ProjeART\build\tmp`), so this runs as a plain `cargo test --lib`
+    /// and its own TMP-on-`E:` pre-flight below passes without the
+    /// compiled-binary workaround ART-320 needed before the fix.
+    ///
     /// ```text
     /// cd src-tauri
-    /// TMP="E:\amiga\ProjeART\build\tmp" TEMP="E:\amiga\ProjeART\build\tmp" \
     /// ART_CARD_IN="E:\amiga\Amigatolon\caffeine\CaffeineOS_Storm_9317.img" \
     /// ART_RDB_EMBED_COPY="E:\amiga\ProjeART\caffeine-copy.img" \
     /// ART_RDB_EMBED_DRIVER="E:\amiga\ProjeART\pfs3aio-newer" \
     /// ART_RDB_EMBED_OUT="E:\amiga\ProjeART\art117-owner" \
-    ///   cargo test replace_the_driver_on_a_copy_of_the_owners_card_when_asked -- --nocapture --ignored
+    ///   cargo test --lib replace_the_driver_on_a_copy_of_the_owners_card_when_asked -- --nocapture --ignored
     /// ```
     ///
     /// The card carries `pfs3aio` 19.2. If no newer `pfs3aio` exists, the

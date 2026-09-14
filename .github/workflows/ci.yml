@@ -64,9 +64,25 @@ jobs:
         # geometry entirely, hidden for months behind continue-on-error).
         run: cargo clippy --all-targets -- -D warnings
 
+      # src-tauri/.cargo/config.toml (machine-local, gitignored — never checked
+      # out here) forces TMP/TEMP onto E:\amiga\ProjeART\build\tmp on the
+      # owner's own machine (ART-320); this runner has neither that file nor
+      # that disk. Point cargo test at the runner's own temp directory
+      # instead, with `force = true`: `--config env.TMP.value=...` alone was
+      # tried and measured NOT to win when a var of the same name is already
+      # set (Windows always sets one) — a controlled local test with no
+      # config.toml present showed the linker still using the shell's own TMP
+      # without `force`, and switching to the runner's temp only once `force`
+      # was added. Both keys are needed because there is no config.toml here
+      # for `force` to already be true in.
       - name: Rust tests
         working-directory: src-tauri
-        run: cargo test
+        run: >-
+          cargo test
+          --config "env.TMP.value='${{ runner.temp }}'"
+          --config "env.TMP.force=true"
+          --config "env.TEMP.value='${{ runner.temp }}'"
+          --config "env.TEMP.force=true"
 
       - name: Setup Python
         uses: actions/setup-python@v5
