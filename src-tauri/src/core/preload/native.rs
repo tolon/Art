@@ -1379,6 +1379,47 @@ mod tests {
         }
     }
 
+    fn be16(b: &[u8], at: usize) -> u16 {
+        u16::from_be_bytes([b[at], b[at + 1]])
+    }
+
+    fn be32(b: &[u8], at: usize) -> u32 {
+        u32::from_be_bytes(b[at..at + 4].try_into().unwrap())
+    }
+
+    /// **ART-313.** Every directory block in a PFS3 partition's reserved area,
+    /// read straight off the image as `(anodenr, parent)`: `anodenr` (0x0C) is
+    /// the directory's own first anode on every one of its blocks, and `parent`
+    /// (0x10) is what pfs3aio's `GetParent` reads. Not through `libpfs3`'s
+    /// reader, which never reads `parent` at all.
+    fn dir_block_parents(image: &Path) -> Vec<(u32, u32)> {
+        use std::io::{Read, Seek, SeekFrom};
+        let offset = partition_offset(image);
+        let mut file = std::fs::File::open(image).unwrap();
+        let mut sectors = |sector: u32, len: usize| -> Vec<u8> {
+            file.seek(SeekFrom::Start(offset + u64::from(sector) * 512))
+                .unwrap();
+            let mut buf = vec![0u8; len];
+            file.read_exact(&mut buf).unwrap();
+            buf
+        };
+        // Rootblock: lastreserved 0x34, firstreserved 0x38, reserved_blksize 0x40.
+        let root = sectors(2, 512);
+        let lastreserved = be32(&root, 0x34);
+        let resblk = usize::from(be16(&root, 0x40));
+        let rescluster = (resblk / 512) as u32;
+        let mut found = Vec::new();
+        let mut blk = be32(&root, 0x38);
+        while blk + rescluster - 1 <= lastreserved {
+            let block = sectors(blk, resblk);
+            if &block[0..2] == b"DB" {
+                found.push((be32(&block, 0x0C), be32(&block, 0x10)));
+            }
+            blk += rescluster;
+        }
+        found
+    }
+
     /// The pieces needed to reopen a formatted `DOS\3` partition's volume for
     /// verification, without going through `NativeFormatter` a second time.
     fn ffs_region(image: &Path) -> (FileRegionMut, VolumeGeometry, u64) {
@@ -1644,6 +1685,56 @@ mod tests {
             wrong.len(),
             written.len()
         );
+    }
+
+    /// **ART-313.** pfs3aio's directory blocks name the directory that holds
+    /// theirs: the root's own blocks carry `parent` 0 (`format.c:548`), a
+    /// directory in the root carries 5 (`directory.c:1652-1655,1707-1708`),
+    /// and a continuation block copies the parent of the block it grew from
+    /// (`directory.c:3176,3204`). 0.1.3 wrote the root with 5 and gave every
+    /// continuation block the directory's own anode. 60-byte names make an
+    /// 82-byte entry, 12 to a 1024-byte block, so 20 of them give the root, `D`
+    /// and `D/E` a second block each.
+    #[test]
+    fn pfs3_directory_blocks_carry_their_containing_directorys_anode_as_parent() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        let long = |prefix: &str, i: usize| format!("{prefix}{i:0>59}");
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.create_dir("D").unwrap();
+            w.create_dir("D/E").unwrap();
+            for i in 0..20 {
+                w.write_file(&long("R", i), b"r").unwrap();
+                w.write_file(&format!("D/{}", long("F", i)), b"d").unwrap();
+                w.write_file(&format!("D/E/{}", long("G", i)), b"e")
+                    .unwrap();
+            }
+            drop(w.into_volume());
+        }
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        let d = vol.lookup("D").unwrap().unwrap().anode;
+        let e = vol.lookup("D/E").unwrap().unwrap().anode;
+        let blocks = dir_block_parents(&image);
+        let root = libpfs3::ondisk::ANODE_ROOTDIR;
+        for (dir, expected, label) in [(root, 0, "root"), (d, root, "D"), (e, d, "D/E")] {
+            let parents: Vec<u32> = blocks
+                .iter()
+                .filter(|(anodenr, _)| *anodenr == dir)
+                .map(|(_, parent)| *parent)
+                .collect();
+            assert!(
+                parents.len() >= 2,
+                "{label}: expected a continuation block, found {} block(s)",
+                parents.len()
+            );
+            assert!(
+                parents.iter().all(|&p| p == expected),
+                "{label} (anode {dir}): every directory block's parent must be {expected}, read {parents:?}"
+            );
+        }
     }
 
     // ---- ART-113: a non-ASCII name is refused before anything is written ----

@@ -9,7 +9,7 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 | Original | `https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`, SHA-256 `02f457ef99a09ddebf56e454c6a25dc3a6860a602c878489f132a4ca3eed4317` |
 | Upstream source | `metaneutrons/pfs3` commit `33e9ff6ba8462cc4e434dfb6e2783d91b7dd5b14`, `crates/libpfs3` (the crate's `.cargo_vcs_info.json`) |
 | Licence | LGPL-3.0-or-later. `LICENSE` is upstream's own file at that commit, unchanged; the full LGPL-3.0 text is `COPYING.LESSER`; the GPL-3.0 text it builds on is ART's `LICENSE` |
-| Modified | 2026-09-13, by ART: `src/format.rs` for ART-310 and `src/writer.rs` for ART-312; each file's header says so |
+| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs` and `src/writer.rs`; each file's header says so |
 | Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.2`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
 | Not carried | `tests/`: `GPL-3.0-only` headers, 9.3 MB of fixtures, and a dev-dependency (`sevenz-rust` 0.6) with RUSTSEC-2026-0245 and RUSTSEC-2026-0246. ART's own tests prove the patch (`src-tauri/src/core/preload/native.rs`) |
 
@@ -45,6 +45,15 @@ any port of it. Reserved-area sizing, option flags, datestamps and everything el
 
 Everything else in the writer is 0.1.3's, including its anode ceiling (ART-311).
 
+**2026-09-14, the debt round** (plan `docs/superpowers/plans/2026-09-14-debt-3-pfs3.md`; pfs3aio read at
+`tonioni/pfs3aio` `211f7f0`):
+
+4. **A directory block's `parent` is the directory that holds it ([ART-313](../../../docs/ISSUES.md)).** The
+   root directory's block is written with parent 0 (`format.rs`; pfs3aio `format.c:548`), and a continuation
+   directory block copies the parent of the directory's existing blocks (`writer.rs` `add_dir_entry`; pfs3aio
+   `directory.c:3176,3204`). 0.1.3 wrote the root with 5 and every continuation block with the directory's
+   own anode. `libpfs3`'s reader never reads `parent`.
+
 ## Re-vendoring
 
 After replacing this directory, run `cargo update -p libpfs3 --precise <version>` in `src-tauri`: Cargo
@@ -66,12 +75,13 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 ```diff
 --- a/src/format.rs
 +++ b/src/format.rs
-@@ -3,13 +3,17 @@
+@@ -3,13 +3,18 @@
  //! Creates a new PFS3 filesystem on a block device.
  //! Ported from pfs3aio/format.c and amitools PFSFormat.py.
  //!
 +//! Modified by ART on 2026-09-13 (ART-310): the super index level and the
-+//! reserved anodes 0-4. `ART-PATCH.md` in this crate's root says what and why.
++//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent.
++//! `ART-PATCH.md` in this crate's root says what and why.
 +//!
  //! Format sequence:
  //! 1. Write boot block (PFS\1 magic)
@@ -85,7 +95,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
  //! 7. Write root directory block (empty)
  
  use crate::error::{Error, Result};
-@@ -146,7 +150,14 @@ pub fn format_with_size(
+@@ -146,7 +151,14 @@ pub fn format_with_size(
          bmi_blocknrs.push(firstreserved + idx * rescluster);
      }
  
@@ -101,7 +111,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      let anidx_blk = firstreserved + alloc.alloc()? * rescluster;
      let anode_blk = firstreserved + alloc.alloc()? * rescluster;
  
-@@ -226,8 +237,10 @@ pub fn format_with_size(
+@@ -226,8 +238,10 @@ pub fn format_with_size(
      put_u16(&mut rext, 0x12, cmin);
      put_u16(&mut rext, 0x14, ctick);
      put_u16(&mut rext, 0x38, 32); // fnsize
@@ -114,7 +124,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      }
      write_reserved_blocks(dev, rext_blk as u64, &rext, rescluster, bs)?;
  
-@@ -267,6 +280,17 @@ pub fn format_with_size(
+@@ -267,6 +281,17 @@ pub fn format_with_size(
          write_reserved_blocks(dev, bm_blknr as u64, &bm, rescluster, bs)?;
      }
  
@@ -132,7 +142,7 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      // Write anode index block
      let mut anidx = vec![0u8; resblocksize as usize];
      put_u16(&mut anidx, 0, IBLKID);
-@@ -280,6 +304,13 @@ pub fn format_with_size(
+@@ -280,18 +305,27 @@ pub fn format_with_size(
      put_u16(&mut an, 0, ABLKID);
      put_u32(&mut an, 4, 1);
      put_u32(&mut an, 8, 0); // seqnr
@@ -146,19 +156,76 @@ carries the format change only; the writer change (ART-312) is not prepared for 
      let an_off = ANODE_BLOCK_HEADER_SIZE + ANODE_ROOTDIR as usize * ANODE_SIZE;
      put_u32(&mut an, an_off, 1); // clustersize = 1
      put_u32(&mut an, an_off + 4, rootdir_blk); // blocknr
+     put_u32(&mut an, an_off + 8, 0); // next = EOF
+     write_reserved_blocks(dev, anode_blk as u64, &an, rescluster, bs)?;
+ 
+-    // Write root directory block (empty)
++    // Write root directory block (empty). ART-313: the root's own blocks carry
++    // parent 0 — pfs3aio's format.c:548 `MakeDirBlock(blocknr, anodenr, anodenr, 0, g)`,
++    // and GetParent treats 0 as "this is the root". 0.1.3 wrote ANODE_ROOTDIR here.
+     let mut dir = vec![0u8; resblocksize as usize];
+     put_u16(&mut dir, 0x00, DBLKID);
+     put_u32(&mut dir, 0x04, 1); // datestamp
+     put_u32(&mut dir, 0x0C, ANODE_ROOTDIR);
+-    put_u32(&mut dir, 0x10, ANODE_ROOTDIR); // parent = self
++    put_u32(&mut dir, 0x10, 0); // parent: none, this is the root
+     write_reserved_blocks(dev, rootdir_blk as u64, &dir, rescluster, bs)?;
+ 
+     dev.flush()?;
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,9 @@
+@@ -6,6 +6,10 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
 +//!
 +//! Modified by ART on 2026-09-13 (ART-312): `get_anode_block_nr` sees this
-+//! writer's own pending writes. `ART-PATCH.md` in this crate's root says what and why.
++//! writer's own pending writes; on 2026-09-14 (ART-313): a continuation directory
++//! block's parent. `ART-PATCH.md` in this crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -1286,10 +1289,44 @@ impl Writer {
+@@ -1097,6 +1101,7 @@ impl Writer {
+                 .anodes
+                 .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
+ 
++        let mut dir_parent = None;
+         for an in &chain {
+             for i in 0..an.clustersize {
+                 let blk = an.blocknr + i;
+@@ -1104,6 +1109,11 @@ impl Writer {
+                 if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
+                     continue;
+                 }
++                // ART-313: every block of a directory carries the same parent;
++                // a new continuation block copies it (pfs3aio directory.c:3176,3204).
++                if dir_parent.is_none() {
++                    dir_parent = Some(u32::from_be_bytes(data[0x10..0x14].try_into().unwrap()));
++                }
+                 // Find end of entries
+                 let mut pos = DIR_BLOCK_HEADER_SIZE;
+                 while pos < self.resblocksize as usize {
+@@ -1123,13 +1133,17 @@ impl Writer {
+                 }
+             }
+         }
+-        // No space — allocate new dir block and extend chain
++        // No space — allocate new dir block and extend chain. Refused before
++        // anything is allocated when the directory has no block to copy from.
++        let parent = dir_parent.ok_or_else(|| {
++            Error::Corrupt(format!("directory {dir_anode} has no directory block"))
++        })?;
+         let new_blk = self.alloc_reserved_block()?;
+         let mut new_data = vec![0u8; self.resblocksize as usize];
+         put_u16(&mut new_data, 0x00, DBLKID);
+         put_u32(&mut new_data, 0x04, self.next_datestamp());
+         put_u32(&mut new_data, 0x0C, dir_anode);
+-        put_u32(&mut new_data, 0x10, dir_anode);
++        put_u32(&mut new_data, 0x10, parent);
+         new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
+             .copy_from_slice(&entry_bytes);
+         self.write_reserved(new_blk, &new_data)?;
+@@ -1286,10 +1300,44 @@ impl Writer {
          Ok(())
      }
  

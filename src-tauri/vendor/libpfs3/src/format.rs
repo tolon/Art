@@ -4,7 +4,8 @@
 //! Ported from pfs3aio/format.c and amitools PFSFormat.py.
 //!
 //! Modified by ART on 2026-09-13 (ART-310): the super index level and the
-//! reserved anodes 0-4. `ART-PATCH.md` in this crate's root says what and why.
+//! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent.
+//! `ART-PATCH.md` in this crate's root says what and why.
 //!
 //! Format sequence:
 //! 1. Write boot block (PFS\1 magic)
@@ -317,12 +318,14 @@ pub fn format_with_size(
     put_u32(&mut an, an_off + 8, 0); // next = EOF
     write_reserved_blocks(dev, anode_blk as u64, &an, rescluster, bs)?;
 
-    // Write root directory block (empty)
+    // Write root directory block (empty). ART-313: the root's own blocks carry
+    // parent 0 — pfs3aio's format.c:548 `MakeDirBlock(blocknr, anodenr, anodenr, 0, g)`,
+    // and GetParent treats 0 as "this is the root". 0.1.3 wrote ANODE_ROOTDIR here.
     let mut dir = vec![0u8; resblocksize as usize];
     put_u16(&mut dir, 0x00, DBLKID);
     put_u32(&mut dir, 0x04, 1); // datestamp
     put_u32(&mut dir, 0x0C, ANODE_ROOTDIR);
-    put_u32(&mut dir, 0x10, ANODE_ROOTDIR); // parent = self
+    put_u32(&mut dir, 0x10, 0); // parent: none, this is the root
     write_reserved_blocks(dev, rootdir_blk as u64, &dir, rescluster, bs)?;
 
     dev.flush()?;
