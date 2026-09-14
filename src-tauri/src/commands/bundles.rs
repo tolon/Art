@@ -19,7 +19,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::JobId;
+use crate::core::jobs::{JobId, JobTitle};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::sources::bundle::run::{
     download_entries, BundleReport, DownloadContext, EntryOutcome,
@@ -163,13 +163,9 @@ pub fn bundles_download(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!(
-        "Downloading {} package{}",
-        entries.len(),
-        if entries.len() == 1 { "" } else { "s" }
-    );
+    let title = JobTitle::new("components.jobBar.title.downloadPackages").count(entries.len());
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         // The state is managed by Tauri and outlives every job, so the
         // worker reaches it through the handle rather than capturing a
         // borrow across the thread boundary — the same shape

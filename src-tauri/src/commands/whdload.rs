@@ -34,7 +34,7 @@ use tauri::{AppHandle, Emitter, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, ProgressSink};
+use crate::core::jobs::{JobId, JobTitle, ProgressSink};
 use crate::core::lha::OverwritePolicy;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
 use crate::core::volume::write::copy::{copy_into_volume, CopyReport, HostFolder};
@@ -166,12 +166,12 @@ pub fn whdload_install(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!(
-        "Installing {}",
-        archive_path
+    let title = JobTitle::new("components.jobBar.title.installArchive").text(
+        "name",
+        &archive_path
             .file_name()
             .map(|name| name.to_string_lossy().to_string())
-            .unwrap_or_default()
+            .unwrap_or_default(),
     );
 
     // Resolved here rather than inside the job: a scratch root that has
@@ -183,7 +183,7 @@ pub fn whdload_install(
     // out of it is resolved here, on the command thread, once.
     let catalogue_dir = super::gameindex::catalogue_dir(&app);
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = install_pack(
             &archive_path,
             &image_path,

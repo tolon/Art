@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use super::jobs::{spawn_job, JobRegistry};
 use super::oplog::user_operation;
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::JobId;
+use crate::core::jobs::{JobId, JobTitle};
 use crate::core::lha::OverwritePolicy;
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::sources::cache::CacheLayout;
@@ -482,27 +482,23 @@ pub fn sources_sync(
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
 
-    let id = spawn_job(
-        &app,
-        registry,
-        "Syncing the Aminet catalog",
-        move |job_id, progress| {
-            // The state is managed by Tauri and outlives every job, so the
-            // worker reaches it through the handle rather than capturing a
-            // borrow across the thread boundary.
-            let state = emit_app.state::<SourcesState>();
-            let result = sync_catalog(&provider, &state.client, &state.catalog, progress);
+    let title = JobTitle::new("components.jobBar.title.syncAminet");
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        // The state is managed by Tauri and outlives every job, so the
+        // worker reaches it through the handle rather than capturing a
+        // borrow across the thread boundary.
+        let state = emit_app.state::<SourcesState>();
+        let result = sync_catalog(&provider, &state.client, &state.catalog, progress);
 
-            let record = user_operation("Sync software catalog")
-                .source(provider_label(&provider))
-                .destination(state.catalog.path().display().to_string());
-            record_sync(&log_path, record, &result);
+        let record = user_operation("Sync software catalog")
+            .source(provider_label(&provider))
+            .destination(state.catalog.path().display().to_string());
+        record_sync(&log_path, record, &result);
 
-            let outcome = result?;
-            let _ = emit_app.emit(SOURCES_EVENT, SourcesResult::Sync { job_id, outcome });
-            Ok(())
-        },
-    );
+        let outcome = result?;
+        let _ = emit_app.emit(SOURCES_EVENT, SourcesResult::Sync { job_id, outcome });
+        Ok(())
+    });
 
     Ok(id)
 }
@@ -549,11 +545,11 @@ pub fn sources_fetch(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Downloading {}", meta.name);
+    let title = JobTitle::new("components.jobBar.title.downloadPackage").text("name", &meta.name);
     let subfolder = options.subfolder;
     let policy = options.overwrite;
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let state = emit_app.state::<SourcesState>();
         let result = fetch_package(
             &meta,
@@ -723,12 +719,12 @@ pub fn sources_install_adf(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!(
-        "Installing {}",
-        archive_path
+    let title = JobTitle::new("components.jobBar.title.installArchive").text(
+        "name",
+        &archive_path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| archive.clone())
+            .unwrap_or_else(|| archive.clone()),
     );
 
     // Resolved here rather than inside the job: a scratch root that has
@@ -736,7 +732,7 @@ pub fn sources_install_adf(
     // button they pressed (ART-196).
     let scratch_root = crate::scratch::root()?;
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         // An ADF is a bare volume at index 0 — the same install, a different
         // destination (§41.5.3).
         let result = install_archive_into_volume(
@@ -809,9 +805,9 @@ pub fn sources_readme(
     let readme_path = meta.readme_path();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!("Reading {}", meta.name);
+    let title = JobTitle::new("components.jobBar.title.readReadme").text("name", &meta.name);
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let state = emit_app.state::<SourcesState>();
 
         let mut buffer: Vec<u8> = Vec::new();
@@ -960,21 +956,22 @@ pub fn sources_install_volume(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    let title = format!(
-        "Installing {} into {}",
-        archive_path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        image_path.display()
-    );
+    let title = JobTitle::new("components.jobBar.title.installArchiveInto")
+        .text(
+            "name",
+            &archive_path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default(),
+        )
+        .text("target", &image_path.display());
 
     // Resolved here rather than inside the job: a scratch root that has
     // gone away is the user's to fix, and they should hear it from the
     // button they pressed (ART-196).
     let scratch_root = crate::scratch::root()?;
 
-    let id = spawn_job(&app, registry, &title, move |job_id, progress| {
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = install_archive_into_volume(
             &archive_path,
             &image_path,
