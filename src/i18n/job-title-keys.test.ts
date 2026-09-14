@@ -132,10 +132,23 @@ describe("job title keys (ART-301)", () => {
 });
 
 describe("the job titles Rust sets (ART-301)", () => {
-  it("finds the Rust sites", () => {
-    // A moved folder or a renamed type would make every assertion below
-    // vacuously true.
-    expect(RUST.sites.length).toBeGreaterThan(0);
+  it("finds all forty sites", () => {
+    // 40 on 2026-09-14: 33 titles that were `format!` and 7 that were fixed
+    // strings, in 19 command files. A new job moves this number on purpose.
+    // A moved folder or a renamed type moves it to 0.
+    expect(
+      RUST.sites.length,
+      "The number of JobTitle::new(…) sites in src-tauri/src changed. If you added or removed a " +
+        "background job on purpose, change 40 here and in the comment above in the same commit, " +
+        "with its key in JOB_TITLE_KEYS and both catalogues. If you did not, a site was lost."
+    ).toBe(40);
+  });
+
+  it("leaves no listed key without a Rust site", () => {
+    // The other direction: a key whose job was removed or renamed would stay
+    // in both catalogues, reachable only through this list, and never shown.
+    const named = new Set(RUST.sites.map((s) => s.key));
+    expect(JOB_TITLE_KEYS.filter((key) => !named.has(key))).toEqual([]);
   });
 
   it("names every key as a literal, in its own `let title` statement", () => {

@@ -210,16 +210,11 @@ impl ProgressSink for JobSink {
 ///
 /// `title` is what the job bar shows: a catalogue key and its values, never
 /// an English sentence (ART-301).
-pub fn spawn_job<F>(
-    app: &AppHandle,
-    registry: Arc<JobRegistry>,
-    title: impl Into<JobTitle>,
-    work: F,
-) -> JobId
+pub fn spawn_job<F>(app: &AppHandle, registry: Arc<JobRegistry>, title: JobTitle, work: F) -> JobId
 where
     F: FnOnce(JobId, &dyn ProgressSink) -> Result<(), CoreError> + Send + 'static,
 {
-    spawn_in_lane(app, registry, title.into(), None, work)
+    spawn_in_lane(app, registry, title, None, work)
 }
 
 /// [`spawn_job`], but the new job **supersedes** every unfinished job already
@@ -238,14 +233,14 @@ where
 pub fn spawn_job_in_lane<F>(
     app: &AppHandle,
     registry: Arc<JobRegistry>,
-    title: impl Into<JobTitle>,
+    title: JobTitle,
     lane: &'static str,
     work: F,
 ) -> JobId
 where
     F: FnOnce(JobId, &dyn ProgressSink) -> Result<(), CoreError> + Send + 'static,
 {
-    spawn_in_lane(app, registry, title.into(), Some(lane), work)
+    spawn_in_lane(app, registry, title, Some(lane), work)
 }
 
 fn spawn_in_lane<F>(
@@ -303,26 +298,6 @@ where
     });
 
     id
-}
-
-// ---------------------------------------------------------------------------
-// ART-301 migration bridge — Task 7 of the plan deletes this block
-//
-// Forty call sites pass a sentence today. These two conversions keep them
-// compiling while they move to `JobTitle::new("…")` a batch at a time; once
-// the last has moved, deleting this block is what proves none was missed.
-// ---------------------------------------------------------------------------
-
-impl From<&str> for JobTitle {
-    fn from(sentence: &str) -> Self {
-        JobTitle::untranslated(sentence)
-    }
-}
-
-impl From<&String> for JobTitle {
-    fn from(sentence: &String) -> Self {
-        JobTitle::untranslated(sentence)
-    }
 }
 
 // ---------------------------------------------------------------------------

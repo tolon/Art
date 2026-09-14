@@ -138,15 +138,6 @@ impl JobTitle {
     pub fn params(&self) -> &BTreeMap<String, JobParam> {
         &self.params
     }
-
-    /// **ART-301 migration bridge — Task 7 of the plan deletes this.** Carries
-    /// a sentence from a call site that has not moved to [`JobTitle::new`] yet.
-    pub(crate) fn untranslated(sentence: &str) -> Self {
-        Self {
-            key: Cow::Owned(sentence.to_string()),
-            params: BTreeMap::new(),
-        }
-    }
 }
 
 /// A snapshot of a job, safe to send to the UI.
