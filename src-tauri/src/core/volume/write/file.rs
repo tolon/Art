@@ -22,10 +22,10 @@ use crate::core::volume::{BlockDevice, VolumeGeometry};
 
 use super::dir::{block_type, subtype};
 use super::layout::{
-    amiga_now, payload_per_block, pointer_slot, pointers_per_block, set_date, set_i32, set_u32,
-    BlockSet, BYTE_SIZE_OFFSET, CHECKSUM_OFFSET, DATA_SIZE_OFFSET, DEFAULT_PROTECTION,
-    EXTENSION_OFFSET, FIRST_DATA_OFFSET, HEADER_KEY_OFFSET, HIGH_SEQ_OFFSET, OFS_DATA_HEADER,
-    PARENT_OFFSET, PROTECT_OFFSET, SUBTYPE_OFFSET, TYPE_OFFSET,
+    payload_per_block, pointer_slot, pointers_per_block, set_date, set_i32, set_u32, BlockSet,
+    BYTE_SIZE_OFFSET, CHECKSUM_OFFSET, DATA_SIZE_OFFSET, DEFAULT_PROTECTION, EXTENSION_OFFSET,
+    FIRST_DATA_OFFSET, HEADER_KEY_OFFSET, HIGH_SEQ_OFFSET, OFS_DATA_HEADER, PARENT_OFFSET,
+    PROTECT_OFFSET, SUBTYPE_OFFSET, TYPE_OFFSET,
 };
 
 /// The largest file ART will write into a volume in one operation.
@@ -117,7 +117,7 @@ pub fn write_file_blocks(
     name: &str,
     data: &[u8],
     protection: u32,
-    date: Option<crate::core::adf::bcpl::AmigaDate>,
+    date: crate::core::adf::bcpl::AmigaDate,
 ) -> CoreResult<WrittenFile> {
     let checked = super::dir::check_name(name)?;
     let budget = budget_for(data.len() as u64, geometry)?;
@@ -205,7 +205,7 @@ pub fn write_file_blocks(
         }
         set_u32(bytes, PROTECT_OFFSET, protection)?;
         set_u32(bytes, BYTE_SIZE_OFFSET, data.len() as u32)?;
-        set_date(bytes, date.unwrap_or_else(amiga_now))?;
+        set_date(bytes, date)?;
         set_u32(bytes, PARENT_OFFSET, parent)?;
         set_u32(
             bytes,
@@ -448,7 +448,7 @@ mod tests {
             "Data.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -475,7 +475,7 @@ mod tests {
             "Data.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -508,7 +508,7 @@ mod tests {
             "Ofs.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -561,7 +561,7 @@ mod tests {
             "Big.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -592,7 +592,7 @@ mod tests {
             "Bigger.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -622,7 +622,7 @@ mod tests {
             "Empty",
             &[],
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -645,7 +645,7 @@ mod tests {
             "Empty",
             &[],
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap_err();
         assert!(
@@ -675,7 +675,7 @@ mod tests {
             "Data.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -706,7 +706,7 @@ mod tests {
             "Data.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -735,7 +735,7 @@ mod tests {
             "Loop.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 
@@ -764,7 +764,7 @@ mod tests {
             "Big.bin",
             &data,
             default_protection(),
-            None,
+            crate::core::adf::bcpl::AmigaDate::default(),
         )
         .unwrap();
 

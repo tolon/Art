@@ -19,15 +19,15 @@
 //! the user cannot cancel (ART-008). Every walk here stops after
 //! [`MAX_CHAIN_STEPS`].
 
-use crate::core::adf::bcpl::read_bcpl_string;
+use crate::core::adf::bcpl::{read_bcpl_string, AmigaDate};
 use crate::core::adf::hash::name_hash;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::volume::{BlockDevice, VolumeGeometry};
 
 use super::layout::{
-    amiga_now, get_i32, get_u32, hash_table_size, set_date, set_i32, set_u32, BlockSet,
-    CHECKSUM_OFFSET, DEFAULT_PROTECTION, NAME_FIELD_LEN, NAME_OFFSET, NEXT_HASH_OFFSET,
-    PARENT_OFFSET, PROTECT_OFFSET, SUBTYPE_OFFSET, TABLE_OFFSET, TYPE_OFFSET,
+    get_i32, get_u32, hash_table_size, set_date, set_i32, set_u32, BlockSet, CHECKSUM_OFFSET,
+    DEFAULT_PROTECTION, NAME_FIELD_LEN, NAME_OFFSET, NEXT_HASH_OFFSET, PARENT_OFFSET,
+    PROTECT_OFFSET, SUBTYPE_OFFSET, TABLE_OFFSET, TYPE_OFFSET,
 };
 
 /// The longest hash chain ART will walk.
@@ -386,7 +386,13 @@ pub fn unlink_from<D: BlockDevice + ?Sized>(
 /// The block must already be allocated and blank in the set; linking it into
 /// its parent is a separate step, so a caller can build several and link them
 /// in one journalled operation.
-pub fn write_dir_header(set: &mut BlockSet, block: u32, parent: u32, name: &str) -> CoreResult<()> {
+pub fn write_dir_header(
+    set: &mut BlockSet,
+    block: u32,
+    parent: u32,
+    name: &str,
+    now: AmigaDate,
+) -> CoreResult<()> {
     let checked = check_name(name)?;
 
     {
@@ -394,7 +400,7 @@ pub fn write_dir_header(set: &mut BlockSet, block: u32, parent: u32, name: &str)
         set_i32(dir, TYPE_OFFSET, block_type::HEADER)?;
         set_u32(dir, super::layout::HEADER_KEY_OFFSET, block)?;
         set_u32(dir, PROTECT_OFFSET, DEFAULT_PROTECTION)?;
-        set_date(dir, amiga_now())?;
+        set_date(dir, now)?;
         put_name(dir, &checked)?;
         set_u32(dir, PARENT_OFFSET, parent)?;
         set_i32(dir, SUBTYPE_OFFSET, subtype::USERDIR)?;
@@ -483,7 +489,7 @@ mod tests {
         )
         .unwrap();
         set_u32(dir, PROTECT_OFFSET, DEFAULT_PROTECTION).unwrap();
-        set_date(dir, amiga_now()).unwrap();
+        set_date(dir, AmigaDate::default()).unwrap();
         put_name(dir, name).unwrap();
         set_u32(dir, PARENT_OFFSET, parent).unwrap();
         set_i32(dir, SUBTYPE_OFFSET, subtype::FILE).unwrap();
@@ -577,7 +583,14 @@ mod tests {
         let (device, geometry) = volume(*b"DOS\x01");
         let mut set = BlockSet::new(512);
 
-        write_dir_header(&mut set, 900, geometry.root_block, "Tools").unwrap();
+        write_dir_header(
+            &mut set,
+            900,
+            geometry.root_block,
+            "Tools",
+            AmigaDate::default(),
+        )
+        .unwrap();
         link_into(
             &device,
             &mut set,
@@ -628,7 +641,14 @@ mod tests {
         )
         .unwrap();
 
-        write_dir_header(&mut set, 902, geometry.root_block, "Tools").unwrap();
+        write_dir_header(
+            &mut set,
+            902,
+            geometry.root_block,
+            "Tools",
+            AmigaDate::default(),
+        )
+        .unwrap();
         link_into(
             &device,
             &mut set,
@@ -656,7 +676,14 @@ mod tests {
         let names: Vec<String> = (0..40).map(|i| format!("File{i:02}")).collect();
         for (index, name) in names.iter().enumerate() {
             let block = 900 + index as u32;
-            write_dir_header(&mut set, block, geometry.root_block, name).unwrap();
+            write_dir_header(
+                &mut set,
+                block,
+                geometry.root_block,
+                name,
+                AmigaDate::default(),
+            )
+            .unwrap();
             link_into(
                 &device,
                 &mut set,
@@ -687,7 +714,14 @@ mod tests {
 
         for (index, name) in ["Alpha", "Beta", "Gamma"].iter().enumerate() {
             let block = 900 + index as u32;
-            write_dir_header(&mut set, block, geometry.root_block, name).unwrap();
+            write_dir_header(
+                &mut set,
+                block,
+                geometry.root_block,
+                name,
+                AmigaDate::default(),
+            )
+            .unwrap();
             link_into(
                 &device,
                 &mut set,
@@ -728,7 +762,14 @@ mod tests {
         let colliding = colliding_names(&geometry, 3);
         for (index, name) in colliding.iter().enumerate() {
             let block = 900 + index as u32;
-            write_dir_header(&mut set, block, geometry.root_block, name).unwrap();
+            write_dir_header(
+                &mut set,
+                block,
+                geometry.root_block,
+                name,
+                AmigaDate::default(),
+            )
+            .unwrap();
             link_into(
                 &device,
                 &mut set,
@@ -775,7 +816,14 @@ mod tests {
         let colliding = colliding_names(&geometry, 2);
         for (index, name) in colliding.iter().enumerate() {
             let block = 900 + index as u32;
-            write_dir_header(&mut set, block, geometry.root_block, name).unwrap();
+            write_dir_header(
+                &mut set,
+                block,
+                geometry.root_block,
+                name,
+                AmigaDate::default(),
+            )
+            .unwrap();
             link_into(
                 &device,
                 &mut set,
@@ -819,7 +867,14 @@ mod tests {
         let (device, geometry) = volume(*b"DOS\x01");
         let mut set = BlockSet::new(512);
 
-        write_dir_header(&mut set, 900, geometry.root_block, "Readme").unwrap();
+        write_dir_header(
+            &mut set,
+            900,
+            geometry.root_block,
+            "Readme",
+            AmigaDate::default(),
+        )
+        .unwrap();
         link_into(
             &device,
             &mut set,
@@ -840,7 +895,14 @@ mod tests {
         let (device, geometry) = volume(*b"DOS\x01");
         let mut set = BlockSet::new(512);
 
-        write_dir_header(&mut set, 900, geometry.root_block, "MyStuff").unwrap();
+        write_dir_header(
+            &mut set,
+            900,
+            geometry.root_block,
+            "MyStuff",
+            AmigaDate::default(),
+        )
+        .unwrap();
         link_into(
             &device,
             &mut set,
@@ -864,7 +926,14 @@ mod tests {
         let (device, geometry) = volume(*b"DOS\x01");
         let mut set = BlockSet::new(512);
 
-        write_dir_header(&mut set, 900, geometry.root_block, "Loop").unwrap();
+        write_dir_header(
+            &mut set,
+            900,
+            geometry.root_block,
+            "Loop",
+            AmigaDate::default(),
+        )
+        .unwrap();
         link_into(
             &device,
             &mut set,

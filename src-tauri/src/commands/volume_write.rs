@@ -167,8 +167,13 @@ where
                 entry.block_size,
             )?;
             let outcome = {
-                let mut writer =
-                    VolumeWriter::open(&mut device, geometry, image, entry.byte_offset)?;
+                let mut writer = VolumeWriter::open_with_clock(
+                    &mut device,
+                    geometry,
+                    image,
+                    entry.byte_offset,
+                    &crate::tools::local_time::LOCAL_TIME,
+                )?;
                 run(&mut writer)?
             };
             device.sync()?;
@@ -285,7 +290,13 @@ impl WholeFileVolume {
         image: &Path,
         volume_offset: u64,
     ) -> CoreResult<VolumeWriter<'a>> {
-        VolumeWriter::open(&mut self.device, geometry, image, volume_offset)
+        VolumeWriter::open_with_clock(
+            &mut self.device,
+            geometry,
+            image,
+            volume_offset,
+            &crate::tools::local_time::LOCAL_TIME,
+        )
     }
 
     /// `VALIDATE → BACKUP → APPLY`, with the volume put back where it came
@@ -1467,8 +1478,13 @@ pub fn run_copy_in_folder_with(
                 entry.block_size,
             )?;
             let report = {
-                let mut writer =
-                    VolumeWriter::open(&mut device, geometry, image, entry.byte_offset)?;
+                let mut writer = VolumeWriter::open_with_clock(
+                    &mut device,
+                    geometry,
+                    image,
+                    entry.byte_offset,
+                    &crate::tools::local_time::LOCAL_TIME,
+                )?;
                 copy_into_volume(&mut writer, parent, source, policy, progress)?
             };
             device.sync()?;
@@ -2067,8 +2083,13 @@ fn run_copy_in_staged_with(
                 entry.block_size,
             )?;
             let report = {
-                let mut writer =
-                    VolumeWriter::open(&mut device, geometry, image, entry.byte_offset)?;
+                let mut writer = VolumeWriter::open_with_clock(
+                    &mut device,
+                    geometry,
+                    image,
+                    entry.byte_offset,
+                    &crate::tools::local_time::LOCAL_TIME,
+                )?;
                 copy_into_volume(&mut writer, parent, staged.source(), policy, progress)?
             };
             device.sync()?;
@@ -2136,7 +2157,13 @@ pub fn volume_attributes(
         entry.byte_length,
         entry.block_size,
     )?;
-    let writer = VolumeWriter::open(&mut device, geometry, &image, entry.byte_offset)?;
+    let writer = VolumeWriter::open_with_clock(
+        &mut device,
+        geometry,
+        &image,
+        entry.byte_offset,
+        &crate::tools::local_time::LOCAL_TIME,
+    )?;
     let attributes = writer.attributes(entry_block)?;
 
     Ok(view_of(attributes))

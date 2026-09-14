@@ -96,19 +96,6 @@ pub fn payload_per_block(block_size: usize, ofs: bool) -> usize {
 /// The header OFS puts on every data block.
 pub const OFS_DATA_HEADER: usize = 24;
 
-/// Now, as AmigaDOS counts it.
-///
-/// The Amiga epoch is 1978-01-01. A clock set before that clamps to the epoch
-/// rather than wrapping into a negative day count — a file dated 1969 would
-/// display as far in the future on a real Amiga.
-pub fn amiga_now() -> AmigaDate {
-    let unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(crate::core::adf::bcpl::AMIGA_EPOCH_UNIX);
-    amiga_from_unix(unix)
-}
-
 /// Convert a Unix timestamp to the Amiga triplet, clamping anything before
 /// 1978 to the epoch (§4.1).
 pub fn amiga_from_unix(unix: i64) -> AmigaDate {
