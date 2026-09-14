@@ -8,10 +8,16 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::core::card::read_card;
-use crate::core::error::{CoreError, CoreResult};
-use crate::core::rdb::{dos_type_string, BLOCK_SIZE};
-use crate::core::rdbedit::{block_at, walk_strict, EditPlan, Stage, EDIT_WINDOW_BYTES};
+use serde::{Deserialize, Serialize};
+
+use crate::core::card::{is_dynamic_vhd, read_card};
+use crate::core::error::{CoreError, CoreResult, RdbEditRefusal};
+use crate::core::rdb::{dos_type_string, version_from_ver_string, BLOCK_SIZE};
+use crate::core::rdbedit::{
+    block_at, check_driver_bytes, check_same_driver, compare_versions, dostype_from_label,
+    plan_append, plan_replace, walk_strict, EditPlan, Stage, StrictRdb, VersionVerdict,
+    DRIVER_MAX_BYTES, EDIT_WINDOW_BYTES,
+};
 use crate::core::volume::device::FileRegion;
 use crate::core::volume::journal::{journal_path_for, Journalled};
 use crate::core::volume::{read_block_vec, BlockDeviceMut};
@@ -30,6 +36,178 @@ pub fn read_range(image: &Path, area_offset: u64) -> CoreResult<Vec<u8>> {
     file.seek(SeekFrom::Start(area_offset))?;
     file.read_exact(&mut bytes)?;
     Ok(bytes)
+}
+
+/// A driver's version as the FSHD stores it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DriverVersion {
+    pub version: u16,
+    pub revision: u16,
+}
+
+impl From<(u16, u16)> for DriverVersion {
+    fn from((version, revision): (u16, u16)) -> Self {
+        Self { version, revision }
+    }
+}
+
+impl std::fmt::Display for DriverVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.version, self.revision)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedMode {
+    Append,
+    Replace,
+}
+
+/// An edit ART has planned and can carry out: the range it read is the
+/// backup, the baseline for verification and what the plan was made from.
+#[derive(Debug)]
+pub struct EditReady {
+    pub area_offset: u64,
+    pub range: Vec<u8>,
+    pub plan: EditPlan,
+    pub driver: Vec<u8>,
+}
+
+/// What a replace comes to.
+#[derive(Debug)]
+pub enum Prepared {
+    Edit(Box<EditReady>),
+    /// The card's driver is not older than the file's: nothing to write.
+    Keep {
+        card: DriverVersion,
+        file: Option<DriverVersion>,
+    },
+}
+
+fn refuse(refusal: RdbEditRefusal) -> CoreError {
+    CoreError::RdbEditRefused(refusal)
+}
+
+fn dos_type_of(label: &str) -> CoreResult<u32> {
+    dostype_from_label(label)
+        .ok_or_else(|| CoreError::InvalidInput(format!("'{label}' is not a DosType ART can name")))
+}
+
+/// The driver: its size from metadata before a byte is read, then its bytes.
+#[allow(clippy::type_complexity)]
+fn load_driver(path: &Path) -> CoreResult<(Vec<u8>, Option<(u16, u16)>)> {
+    let bytes = std::fs::metadata(path)?.len();
+    if bytes > DRIVER_MAX_BYTES {
+        return Err(refuse(RdbEditRefusal::DriverTooLarge {
+            bytes,
+            cap: DRIVER_MAX_BYTES,
+        }));
+    }
+    let data = std::fs::read(path)?;
+    check_driver_bytes(&data).map_err(refuse)?;
+    let version = version_from_ver_string(&data);
+    Ok((data, version))
+}
+
+/// Where the Amiga disk in `slot` starts: `None` means a plain image's one
+/// disk at byte 0, and a slot must be a readable `0x76` area.
+fn area_offset_for(image: &Path, slot: Option<usize>) -> CoreResult<u64> {
+    let card = read_card(image)?;
+    let offset = match (&card.mbr, slot) {
+        (None, None) => card.areas.first().map(|area| area.offset_bytes),
+        (Some(mbr), Some(slot)) => mbr
+            .amiga_areas()
+            .into_iter()
+            .find(|part| part.slot_number() == slot)
+            .map(|part| part.start_bytes())
+            .filter(|start| card.areas.iter().any(|area| area.offset_bytes == *start)),
+        _ => None,
+    };
+    offset.ok_or_else(|| {
+        CoreError::InvalidInput(match slot {
+            Some(slot) => format!("this card has no readable Amiga disk in MBR slot {slot}"),
+            None => "this image has no readable Amiga disk at its start".into(),
+        })
+    })
+}
+
+/// The card's refusals, then its range walked strictly.
+fn open_rdb(image: &Path, slot: Option<usize>) -> CoreResult<(u64, Vec<u8>, StrictRdb)> {
+    if is_dynamic_vhd(image)? {
+        return Err(refuse(RdbEditRefusal::DynamicVhd));
+    }
+    let journal = journal_path_for(image);
+    if journal.exists() {
+        return Err(refuse(RdbEditRefusal::JournalPending { journal }));
+    }
+    let area_offset = area_offset_for(image, slot)?;
+    let range = read_range(image, area_offset)?;
+    let walk = walk_strict(&range).map_err(refuse)?;
+    Ok((area_offset, range, walk))
+}
+
+/// Plan an append, or say why not. Reads; writes nothing.
+pub fn prepare_append(
+    image: &Path,
+    slot: Option<usize>,
+    dostype: &str,
+    driver: &Path,
+) -> CoreResult<EditReady> {
+    let dos_type = dos_type_of(dostype)?;
+    let (data, version) = load_driver(driver)?;
+    let version = version.ok_or_else(|| refuse(RdbEditRefusal::DriverNoVersion))?;
+    let (area_offset, range, walk) = open_rdb(image, slot)?;
+    let plan = plan_append(&range, &walk, dos_type, version, &data).map_err(refuse)?;
+    Ok(EditReady {
+        area_offset,
+        range,
+        plan,
+        driver: data,
+    })
+}
+
+/// Plan a replace, keep the card's driver, or say why not. Reads; writes
+/// nothing.
+pub fn prepare_replace(
+    image: &Path,
+    slot: Option<usize>,
+    dostype: &str,
+    driver: &Path,
+) -> CoreResult<Prepared> {
+    let dos_type = dos_type_of(dostype)?;
+    let (data, version) = load_driver(driver)?;
+    let (area_offset, range, walk) = open_rdb(image, slot)?;
+    let Some(on_card) = walk.fshds.iter().find(|fs| fs.dos_type == dos_type) else {
+        return Err(refuse(RdbEditRefusal::Unaccounted {
+            block: walk.rdsk.block,
+            check: format!("this RDB carries no {dostype} driver to replace"),
+        }));
+    };
+    // Spec decision 13, before the versions mean anything: the same program
+    // on both sides, or no replace.
+    check_same_driver(&on_card.payload, &data).map_err(refuse)?;
+    let card = DriverVersion {
+        version: on_card.version,
+        revision: on_card.revision,
+    };
+    match (
+        compare_versions((card.version, card.revision), version),
+        version,
+    ) {
+        (VersionVerdict::Newer, Some(file)) => {
+            let plan = plan_replace(&range, &walk, dos_type, file, &data).map_err(refuse)?;
+            Ok(Prepared::Edit(Box::new(EditReady {
+                area_offset,
+                range,
+                plan,
+                driver: data,
+            })))
+        }
+        _ => Ok(Prepared::Keep {
+            card,
+            file: version.map(DriverVersion::from),
+        }),
+    }
 }
 
 /// How a journalled write ended when it did not succeed — kept apart so the
@@ -178,9 +356,10 @@ pub(crate) fn write_journalled(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use super::*;
+    use crate::core::error::RdbEditRefusal;
     use crate::core::rdbedit::fixtures::*;
     use crate::core::rdbedit::{block_at, plan_append, plan_replace, walk_strict, EditPlan, Stage};
     use crate::core::volume::device::FileRegionMut;
@@ -572,6 +751,290 @@ mod tests {
                     "{tag}: the journal restores the pre-image"
                 );
             }
+        }
+    }
+
+    fn driver_file(dir: &Path, bytes: &[u8]) -> PathBuf {
+        let path = dir.join("pfs3aio");
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// A refusal says which one it is, in a sentence, and the image is the
+    /// bytes it was.
+    fn assert_refused(image: &Path, before: &[u8], err: CoreError, code: &str, needle: &str) {
+        assert!(matches!(err, CoreError::RdbEditRefused(_)), "{err:?}");
+        assert_eq!(err.code(), code, "{err}");
+        let sentence = err.to_string();
+        assert!(sentence.contains(needle), "{sentence}");
+        assert!(sentence.contains("Nothing was written."), "{sentence}");
+        assert_eq!(
+            std::fs::read(image).unwrap(),
+            before,
+            "a refusal writes nothing"
+        );
+    }
+
+    fn scratch_card(
+        tag: &str,
+        range: &[u8],
+    ) -> (crate::core::ScratchDir, PathBuf, PathBuf, Vec<u8>) {
+        let (guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", tag);
+        let image = write_image(&dir, range, 16 * 1024 * 1024);
+        let before = std::fs::read(&image).unwrap();
+        (guard, dir, image, before)
+    }
+
+    #[test]
+    fn unaccounted_is_refused_through_prepare() {
+        let mut range = caffeine_like(false);
+        range[2 * 512 + 100] ^= 1;
+        let (_guard, dir, image, before) = scratch_card("refuse-unaccounted", &range);
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        assert_refused(
+            &image,
+            &before,
+            err,
+            "ART-RDB-EDIT-UNACCOUNTED",
+            "PART block 2 fails its checksum",
+        );
+    }
+
+    #[test]
+    fn a_bad_block_list_is_refused_through_prepare() {
+        let mut range = caffeine_like(false);
+        put(&mut range, 0, 6, 9);
+        seal(&mut range, 0);
+        let (_guard, dir, image, before) = scratch_card("refuse-badb", &range);
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        assert_refused(
+            &image,
+            &before,
+            err,
+            "ART-RDB-EDIT-BAD-BLOCKS",
+            "hst-imager can",
+        );
+    }
+
+    #[test]
+    fn no_room_is_refused_through_prepare() {
+        let mut range = art_like(false);
+        range[50 * 512] = 1;
+        let (_guard, dir, image, before) = scratch_card("refuse-no-room", &range);
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        assert_refused(
+            &image,
+            &before,
+            err,
+            "ART-RDB-EDIT-NO-ROOM",
+            "block 50 above it is not empty",
+        );
+    }
+
+    #[test]
+    fn an_archive_is_refused_as_not_executable() {
+        let (_guard, dir, image, before) = scratch_card("refuse-lha", &caffeine_like(false));
+        let mut lha = vec![0u8; 1024];
+        lha[..7].copy_from_slice(b"\x2a\x00-lh5-");
+        let driver = driver_file(&dir, &lha);
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        assert_refused(
+            &image,
+            &before,
+            err,
+            "ART-RDB-EDIT-NOT-EXECUTABLE",
+            "An .lha archive has to be unpacked first",
+        );
+    }
+
+    #[test]
+    fn a_driver_over_512_kib_is_refused_by_its_size() {
+        let (_guard, dir, image, before) = scratch_card("refuse-large", &caffeine_like(false));
+        let mut big = hunk_driver(1024, "19.3");
+        big.resize(512 * 1024 + 4, 0);
+        let driver = driver_file(&dir, &big);
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        assert_refused(
+            &image,
+            &before,
+            err,
+            "ART-RDB-EDIT-DRIVER-TOO-LARGE",
+            "524292 bytes, over the 524288-byte limit",
+        );
+    }
+
+    #[test]
+    fn an_append_whose_driver_states_no_version_is_refused() {
+        let (_guard, dir, image, before) = scratch_card("refuse-no-ver", &caffeine_like(false));
+        let mut silent = hunk_driver(62_604, "19.3");
+        silent[64..69].copy_from_slice(b"$XXX:");
+        let driver = driver_file(&dir, &silent);
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        assert_refused(
+            &image,
+            &before,
+            err,
+            "ART-RDB-EDIT-DRIVER-NO-VERSION",
+            "will not write one it guessed",
+        );
+    }
+
+    #[test]
+    fn a_dynamic_vhd_is_refused() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", "refuse-vhd");
+        let image = dir.join("card.vhd");
+        let mut bytes = vec![0u8; 4096];
+        bytes[..8].copy_from_slice(b"conectix");
+        std::fs::write(&image, &bytes).unwrap();
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        assert_refused(
+            &image,
+            &bytes,
+            err,
+            "ART-RDB-EDIT-DYNAMIC-VHD",
+            "a write can grow a dynamic VHD",
+        );
+    }
+
+    #[test]
+    fn a_journal_beside_the_image_is_refused_by_its_path() {
+        let (_guard, dir, image, before) = scratch_card("refuse-journal", &caffeine_like(false));
+        let journal = journal_path_for(&image);
+        std::fs::write(&journal, b"left by a crash").unwrap();
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let err = prepare_append(&image, None, "PDS3", &driver).unwrap_err();
+        let path = journal.display().to_string();
+        assert_refused(&image, &before, err, "ART-RDB-EDIT-JOURNAL-PENDING", &path);
+    }
+
+    /// Decision 1: equal, older and silent files plan no edit — and say so.
+    #[test]
+    fn a_replace_with_an_equal_older_or_silent_file_keeps_the_cards_driver() {
+        let (_guard, dir, image, _) = scratch_card("replace-keep", &caffeine_like(true));
+        let card = DriverVersion {
+            version: 19,
+            revision: 2,
+        };
+        for (version, file) in [("19.2", Some((19, 2))), ("19.1", Some((19, 1)))] {
+            let driver = driver_file(&dir, &hunk_driver(62_604, version));
+            match prepare_replace(&image, None, "PDS3", &driver).unwrap() {
+                Prepared::Keep {
+                    card: kept,
+                    file: stated,
+                } => {
+                    assert_eq!(
+                        (kept, stated),
+                        (card, file.map(DriverVersion::from)),
+                        "{version}"
+                    );
+                }
+                Prepared::Edit(_) => panic!("{version} is not newer than 19.2"),
+            }
+        }
+        let mut silent = hunk_driver(62_604, "19.3");
+        silent[64..69].copy_from_slice(b"$XXX:");
+        let driver = driver_file(&dir, &silent);
+        assert!(matches!(
+            prepare_replace(&image, None, "PDS3", &driver).unwrap(),
+            Prepared::Keep { file: None, .. }
+        ));
+
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.10"));
+        match prepare_replace(&image, None, "PDS3", &driver).unwrap() {
+            Prepared::Edit(ready) => assert_eq!(ready.plan.file_version, (19, 10)),
+            Prepared::Keep { .. } => panic!("19.10 is newer than 19.2"),
+        }
+    }
+
+    /// Spec decision 13 through prepare: the names are asked before the
+    /// versions. An `SFS\0` driver is not replaced by pfs3aio although 19.3 >
+    /// 1.293, and a card driver that names no program is refused even against
+    /// an older file — a "not newer" note would hide that ART never knew what
+    /// the card's driver was.
+    #[test]
+    fn a_replace_across_different_drivers_is_refused_before_anything_is_written() {
+        let shape = |dos_type: u32, driver: Vec<u8>, version: (u16, u16)| {
+            build(&Shape {
+                cylinders: 38_488,
+                heads: 12,
+                sectors: 256,
+                rdb_blocks_hi: 6143,
+                lo_cylinder: 2,
+                parts: vec![("SDH0", 2, 535, dos_type)],
+                fshds: vec![FshdSpec {
+                    dos_type,
+                    version,
+                    driver,
+                    name: None,
+                    summed_longs: 64,
+                }],
+                high_rdsk_block: None,
+                total_blocks: WINDOW_BLOCKS,
+            })
+        };
+
+        let sfs = shape(
+            SFS0,
+            named_driver(4096, "SmartFilesystem", "1.293"),
+            (1, 293),
+        );
+        let (_guard, dir, image, before) = scratch_card("replace-different", &sfs);
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let err = prepare_replace(&image, None, "SFS0", &driver).unwrap_err();
+        assert!(
+            matches!(&err, CoreError::RdbEditRefused(RdbEditRefusal::DifferentDriver { card: Some(card), file })
+                if card == "SmartFilesystem" && file == "pfs3aio"),
+            "{err:?}"
+        );
+        assert_refused(
+            &image,
+            &before,
+            err,
+            "ART-RDB-EDIT-DIFFERENT-DRIVER",
+            "calls itself 'SmartFilesystem'",
+        );
+
+        let mut unnamed = hunk_driver(4096, "19.2");
+        unnamed[64..69].copy_from_slice(b"$XXX:");
+        let (_guard2, dir2, image2, before2) =
+            scratch_card("replace-unnamed", &shape(PDS3, unnamed, (19, 2)));
+        let older = driver_file(&dir2, &hunk_driver(62_604, "19.1"));
+        let err = prepare_replace(&image2, None, "PDS3", &older).unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                CoreError::RdbEditRefused(RdbEditRefusal::DifferentDriver { card: None, .. })
+            ),
+            "{err:?}"
+        );
+        assert_refused(
+            &image2,
+            &before2,
+            err,
+            "ART-RDB-EDIT-DIFFERENT-DRIVER",
+            "does not say what it is",
+        );
+    }
+
+    /// A card is a list of disks: the step's MBR slot picks the area.
+    #[test]
+    fn the_mbr_slot_picks_the_area_and_a_slot_that_is_not_one_is_refused() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-rdbedit", "slot");
+        let image = write_card(&dir, &caffeine_like(false));
+        let driver = driver_file(&dir, &hunk_driver(62_604, "19.3"));
+        let ready = prepare_append(&image, Some(2), "PDS3", &driver).unwrap();
+        assert_eq!(ready.area_offset, 8192 * 512);
+        for slot in [Some(1), None] {
+            let err = prepare_append(&image, slot, "PDS3", &driver).unwrap_err();
+            assert_eq!(err.code(), "ART-INPUT-INVALID", "{slot:?}: {err}");
+            assert!(
+                err.to_string().contains("no readable Amiga disk"),
+                "{slot:?}: {err}"
+            );
         }
     }
 }

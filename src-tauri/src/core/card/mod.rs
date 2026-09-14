@@ -133,20 +133,21 @@ pub fn read_card(path: &Path) -> CoreResult<CardImage> {
     let file = std::fs::File::open(path)?;
     let total_bytes = file.metadata()?.len();
 
-    // Cheap: four bytes at offset 0 decide it, and only a dynamic image keeps
-    // a footer copy there.
-    let is_dynamic_vhd = {
-        use std::io::Read as _;
-        let mut cookie = [0u8; 8];
-        let mut peek = std::fs::File::open(path)?;
-        peek.read_exact(&mut cookie).is_ok() && cookie == crate::core::vhd::FOOTER_COOKIE
-    };
-    if is_dynamic_vhd {
+    if is_dynamic_vhd(path)? {
         let vhd = crate::core::vhd::DynamicVhd::open(file)?;
         let disk_bytes = vhd.disk_size();
         return read_card_from(vhd, disk_bytes, path);
     }
     read_card_from(file, total_bytes, path)
+}
+
+/// Whether `path` is a dynamic VHD. Cheap: eight bytes at offset 0 decide it,
+/// and only a dynamic image keeps a footer copy there.
+pub fn is_dynamic_vhd(path: &Path) -> CoreResult<bool> {
+    use std::io::Read as _;
+    let mut cookie = [0u8; 8];
+    let mut peek = std::fs::File::open(path)?;
+    Ok(peek.read_exact(&mut cookie).is_ok() && cookie == crate::core::vhd::FOOTER_COOKIE)
 }
 
 /// The reading itself, over anything that seeks — a file, or a dynamic VHD
