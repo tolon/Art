@@ -6,8 +6,10 @@
 //! Reference: pfs3aio/blocks.h, pfs3aio/struct.h
 //!
 //! Modified by ART on 2026-09-14 (ART-318): the deldir entry's name length byte,
-//! `fsizex` behind a long name, 31 entries per deldir block. `ART-PATCH.md` in
-//! this crate's root says what and why.
+//! `fsizex` behind a long name, 31 entries per deldir block; on 2026-09-14, the
+//! final review (M2): `DelDirEntry::parse` takes the volume's own
+//! `MODE_LARGEFILE` flag and reads `fsizex` as size only on such a volume.
+//! `ART-PATCH.md` in this crate's root says what and why.
 
 mod direntry;
 mod rootblock;
@@ -233,7 +235,16 @@ pub struct DelDirEntry {
 
 impl DelDirEntry {
     /// Parse a deldir entry from 32 bytes. Returns None if slot is empty.
-    pub fn parse(data: &[u8]) -> Option<Self> {
+    ///
+    /// `largefile` is the volume's own `MODE_LARGEFILE` flag
+    /// (`Rootblock::has_largefile`). ART-318/M2 (final review, 2026-09-14):
+    /// `fsizex` holds size bits 32-47 only on a `MODE_LARGEFILE` volume —
+    /// pfs3aio's `GetDDFileSize` ignores it otherwise, whatever the name's
+    /// own length (`directory.c:3688`). Gating on the name length alone (the
+    /// name-length-based guess this replaced) would read a reused slot's
+    /// stale bytes at 0x1E-0x1F as a multi-terabyte size on every ordinary
+    /// volume ART formats.
+    pub fn parse(data: &[u8], largefile: bool) -> Option<Self> {
         if data.len() < 32 {
             return None;
         }
@@ -242,13 +253,11 @@ impl DelDirEntry {
             return None;
         }
         // ART-318: a length byte, then the name (pfs3aio `directory.c:4196-4199`).
-        // A name longer than 15 bytes reaches into `fsizex`, which then holds
-        // name, not size (`directory.c:3688`).
         let name_len = usize::from(data[14]).min(DELENTRYFNSIZE - 1);
-        let fsizex = if name_len > DELENTRYFNSIZE_LARGE_FILE - 1 {
-            0
-        } else {
+        let fsizex = if largefile {
             u16::from_be_bytes(data[30..32].try_into().unwrap())
+        } else {
+            0
         };
         Some(Self {
             anode,

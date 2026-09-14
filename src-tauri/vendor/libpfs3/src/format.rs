@@ -5,7 +5,9 @@
 //!
 //! Modified by ART on 2026-09-13 (ART-310): the super index level and the
 //! reserved anodes 0-4; on 2026-09-14 (ART-313): the root directory's parent,
-//! (ART-314) names — `rext.fnsize` writes 107, not 32, (ART-316) the deldir.
+//! (ART-314) names — `rext.fnsize` writes 107, not 32, (ART-316) the deldir;
+//! on 2026-09-14, the final review (M6): `pfs3_name_limit`, the one name-limit
+//! rule `writer::Writer` and ART's `core::preload::native` both call.
 //! `ART-PATCH.md` in this crate's root says what and why.
 //!
 //! Format sequence:
@@ -44,6 +46,18 @@ impl Default for FormatOptions {
 /// and cuts every name to `fnsize - 1` bytes; hst-imager formats 107, the
 /// longest this crate's directory entries hold.
 pub const FORMAT_FNSIZE: u16 = 107;
+
+/// ART-314/M6 (final review): the longest name a PFS3 volume with this
+/// `fnsize` can store and find again — pfs3aio cuts every name to
+/// `fnsize - 1` bytes, on create and on lookup, before a compare that needs
+/// equal lengths (`directory.c:1489-1490,721-722`, `assroutines.c:163`), and
+/// this crate's own directory entries hold at most 107 whatever `fnsize`
+/// says. The one rule: `writer::Writer::check_name_len` and ART's
+/// `core::preload::native::pfs3_name_limit` both call it, rather than each
+/// repeating `saturating_sub(1).min(107)` on its own.
+pub fn pfs3_name_limit(fnsize: u16) -> usize {
+    usize::from(fnsize).saturating_sub(1).min(107)
+}
 
 /// Result of a successful format operation.
 #[derive(Debug)]

@@ -12,7 +12,10 @@
 //! block's parent; (ART-315) the data bitmap's bounds; (ART-314) names — a name
 //! longer than `fnsize - 1` bytes is refused before anything is allocated;
 //! (ART-311) the anode search range, index blocks on demand, super blocks,
-//! the rootblock extension, the roving anode search; (ART-318) the deldir write path.
+//! the rootblock extension, the roving anode search; (ART-318) the deldir write path;
+//! on 2026-09-14, the final review: `Writer::open` refuses a `reserved_blksize`
+//! other than 1024/2048/4096 (M3); `max_name_bytes` calls the one name-limit
+//! rule now in `format::pfs3_name_limit` (M6).
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -36,7 +39,11 @@ pub struct Writer {
     // Mutable state
     res_bitmap: Vec<u32>,
     data_bm: Vec<(u32, Vec<u32>)>, // (blk_num, longs)
-    /// Pending reserved block writes, flushed atomically before rootblock update.
+    /// Pending reserved block writes, flushed in place before the rootblock
+    /// update — not copy-on-write (M5, final review). Each write lands on
+    /// disk as `flush_pending` runs it; the rootblock, written last, is where
+    /// this became true, not the point every earlier write becomes true at
+    /// once.
     pending_writes: Vec<(u32, Vec<u8>)>,
     /// ART-311: per anode block, whether a search found no free anode in it —
     /// pfs3aio's in-memory `anblkbitmap` (`anodes.c:949-960`), inverted. Never on disk.
@@ -55,6 +62,19 @@ impl Writer {
     pub fn open(vol: Volume) -> Result<Self> {
         let rb = &vol.rootblock;
         let rbs = rb.reserved_blksize as u32;
+        // M3 (final review): the writer indexes fixed offsets that only fit
+        // these three sizes — the rootblock extension's superindex write
+        // reaches 0x80 (`update_rootblock`), and a deldir block's fixed 31
+        // entries (`DELENTRIES_PER_BLOCK`) reach byte 1024 (`move_to_deldir`).
+        // `Volume` itself only requires >= 64 (`validate_rbs`, read paths are
+        // bounds-checked); the writer needs the stronger refusal here, before
+        // any of those writes, rather than an out-of-bounds index under
+        // `panic = "abort"`.
+        if rbs != 1024 && rbs != 2048 && rbs != 4096 {
+            return Err(Error::Corrupt(format!(
+                "reserved_blksize {rbs} is not 1024, 2048 or 4096 — the writer cannot write this volume"
+            )));
+        }
         let rescluster = rbs / vol.block_size();
         let firstreserved = rb.firstreserved;
         let numreserved = (rb.lastreserved - firstreserved + 1) / rescluster;
@@ -95,13 +115,11 @@ impl Writer {
         self.datestamp
     }
 
-    /// ART-314: the longest name this volume can store and find again. pfs3aio
-    /// cuts a new name to `fnsize - 1` bytes (`directory.c:1489-1490,1663-1664`)
-    /// and a searched-for name the same way (`:721-722`) before a compare that
-    /// needs equal lengths (`assroutines.c:163`). 107 is the longest name this
-    /// writer's directory entries hold (`build_dir_entry`).
+    /// ART-314: the longest name this volume can store and find again — M6
+    /// (final review): the one rule now lives in `format::pfs3_name_limit`,
+    /// which ART's `core::preload::native` calls too.
     fn max_name_bytes(&self) -> usize {
-        usize::from(self.vol.fnsize()).saturating_sub(1).min(107)
+        crate::format::pfs3_name_limit(self.vol.fnsize())
     }
 
     /// ART-314: refuse a name the volume would store and never find again,
@@ -305,7 +323,9 @@ impl Writer {
         let blk = deldirblocks[block_idx];
         let data = self.read_reserved_raw(blk)?;
         let off = DELDIR_HEADER_SIZE + slot_idx * DELDIR_ENTRY_SIZE;
-        let entry = DelDirEntry::parse(&data[off..off + DELDIR_ENTRY_SIZE])
+        // M2 (final review): `fsizex` is size only on a MODE_LARGEFILE volume.
+        let largefile = self.vol.rootblock.has_largefile();
+        let entry = DelDirEntry::parse(&data[off..off + DELDIR_ENTRY_SIZE], largefile)
             .ok_or_else(|| Error::NotFound("empty deldir slot".into()))?;
 
         // Check destination doesn't already exist
@@ -1430,7 +1450,13 @@ impl Writer {
         // Flush all pending reserved block writes first
         self.flush_pending()?;
 
-        // Write rootblock cluster (rootblock + reserved bitmap) last — atomic commit
+        // Write rootblock cluster (rootblock + reserved bitmap) last. M5
+        // (final review): this is a commit *point*, not an atomic commit —
+        // every pending write above already reached disk in place, and a new
+        // super block named by the extension write just above can already be
+        // on disk while the reserved bitmap on disk still marks it free.
+        // Nothing here is new to this round: every reserved block ART writes
+        // has worked this way since 0.1.3.
         let bs = self.vol.block_size() as usize;
         let rblkcluster = self.vol.rootblock.rblkcluster as u32;
         let cluster_size = rblkcluster as usize * bs;

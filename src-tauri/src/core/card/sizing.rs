@@ -925,6 +925,42 @@ mod tests {
         assert_eq!(pfs3_anode_cap(MAXSMALLDISK + 1), 65_536 * 84 - 6);
     }
 
+    /// **M9 guard (final review), closing ART-311's Task 5 survivor.**
+    /// `reserved_needed` must count the extra index block content's own anode
+    /// blocks cross into, not just directory and anode blocks — the Task 5
+    /// mutation that dropped this term (`dir_blocks + anode_blocks` only)
+    /// survived every test in the suite because none crossed the boundary.
+    /// At 1024-byte reserved blocks `index_per_block` is 253 (`(1024/4) -
+    /// 3`), `anodes_per_block` is 84 and the format's own first anode block
+    /// already offers `84 - ANODE_USERFIRST` = 78 slots: 21 246 files need
+    /// exactly 252 more anode blocks (253 counting the format's own), still
+    /// inside the one index block the format already makes; 21 247 files need
+    /// 253 more (254 counting the format's own), one past it, so
+    /// `reserved_needed` must count one more index block.
+    #[test]
+    fn reserved_needed_counts_the_extra_index_block_past_index_per_block_anode_blocks() {
+        let total_blocks = 5_000_000; // small mode, 1024-byte reserved blocks
+        assert_eq!(pfs3_reserved_block_bytes(total_blocks), 1024);
+        let at_the_boundary = ContentMeasure {
+            files: 21_246,
+            ..ContentMeasure::default()
+        };
+        let one_past_it = ContentMeasure {
+            files: 21_247,
+            ..ContentMeasure::default()
+        };
+        assert_eq!(
+            reserved_needed(total_blocks, &at_the_boundary),
+            253,
+            "1 root dir block + 252 anode blocks, still inside one index block"
+        );
+        assert_eq!(
+            reserved_needed(total_blocks, &one_past_it),
+            255,
+            "1 root dir block + 253 anode blocks + 1 more index block"
+        );
+    }
+
     #[test]
     fn a_few_large_files_fit_their_estimate() {
         let (dirs, files, m) = profile(2, 10, |_| 4 * 1024 * 1024);

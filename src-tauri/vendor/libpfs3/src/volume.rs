@@ -1,4 +1,8 @@
 //! PFS3 volume: top-level read-only access to a PFS3 partition.
+//!
+//! Modified by ART on 2026-09-14, the final review (M2): `list_deldir` passes
+//! the volume's own `MODE_LARGEFILE` flag into `DelDirEntry::parse`.
+//! `ART-PATCH.md` in this crate's root says what and why.
 
 use std::path::Path;
 
@@ -380,6 +384,8 @@ impl Volume {
         };
         let rbs = self.rootblock.reserved_blksize;
         let entries_per_block = deldir_entries_per_block(rbs);
+        // M2 (final review): `fsizex` is size only on a MODE_LARGEFILE volume.
+        let largefile = self.rootblock.has_largefile();
         let mut result = Vec::new();
         for &blk in &rext.deldirblocks {
             if blk == 0 {
@@ -394,7 +400,8 @@ impl Volume {
             for i in 0..entries_per_block {
                 let off = DELDIR_HEADER_SIZE + i * DELDIR_ENTRY_SIZE;
                 if off + DELDIR_ENTRY_SIZE <= data.len()
-                    && let Some(entry) = DelDirEntry::parse(&data[off..off + DELDIR_ENTRY_SIZE])
+                    && let Some(entry) =
+                        DelDirEntry::parse(&data[off..off + DELDIR_ENTRY_SIZE], largefile)
                 {
                     result.push(entry);
                 }

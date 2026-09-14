@@ -738,10 +738,11 @@ fn non_ascii_refusal(entries: &[CopyEntry]) -> Option<CoreError> {
 }
 
 /// ART-314: the longest name a PFS3 volume with this `fnsize` can store and
-/// find again — pfs3aio cuts every name to `fnsize - 1` bytes
-/// (`directory.c:1489-1490,721-722`), and `libpfs3`'s entries hold 107.
+/// find again — M6 (final review): the one rule lives in
+/// `libpfs3::format::pfs3_name_limit`, which the vendored writer's own
+/// `check_name_len` calls too, so there is one rule instead of two copies.
 fn pfs3_name_limit(fnsize: u16) -> usize {
-    usize::from(fnsize).saturating_sub(1).min(107)
+    libpfs3::format::pfs3_name_limit(fnsize)
 }
 
 /// The ART-314 refusal, or `None`: every entry whose own name is longer than
@@ -2500,6 +2501,88 @@ mod tests {
             [1024u16, 2048, 4096].map(libpfs3::ondisk::deldir_entries_per_block),
             [31, 31, 31]
         );
+    }
+
+    /// **M2 (final review).** `DelDirEntry::parse` must read `fsizex` as the
+    /// size bits 32-47 only on a `MODE_LARGEFILE` volume — pfs3aio's
+    /// `GetDDFileSize` ignores it otherwise (`directory.c:3688`), whatever the
+    /// name's own length. Every volume ART formats is not `MODE_LARGEFILE`.
+    /// The writer never puts bytes at the entry's 0x1E-0x1F on such a volume,
+    /// but a reused slot on a long-used card can carry stale bytes there from
+    /// an earlier, longer name; those bytes must never be read as size.
+    #[test]
+    fn pfs3_deldir_fsizex_is_ignored_off_a_non_largefile_volume() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        {
+            let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("A", b"x").unwrap();
+            w.delete("A").unwrap();
+        }
+        // Slot 0: the first deldir block's first entry, DELDIR_HEADER_SIZE (32)
+        // into the block; the entry's own fsizex is at its relative 0x1E.
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let raw = std::fs::read(&image).unwrap();
+            let off = offset as usize;
+            let root = &raw[off + 2 * 512..off + 2 * 512 + 512];
+            let resblk = usize::from(be16(root, 0x40));
+            let ext_blk = be32(root, 0x58) as usize;
+            let ext = &raw[off + ext_blk * 512..off + ext_blk * 512 + resblk];
+            let dd_blk = be32(ext, 0x90) as usize;
+            let entry_off = off as u64 + dd_blk as u64 * 512 + 32 /* header */ + 0x1E;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&image)
+                .unwrap();
+            file.seek(SeekFrom::Start(entry_off)).unwrap();
+            file.write_all(&[0xFFu8, 0xFF]).unwrap();
+        }
+
+        let mut vol = libpfs3::volume::Volume::open(&image, offset).unwrap();
+        let listed: Vec<(String, u64)> = vol
+            .list_deldir()
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.filename.clone(), e.file_size()))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![("A".to_string(), 1)],
+            "stray bytes past a short name were read as size on a non-LARGEFILE volume"
+        );
+    }
+
+    /// **M3 (final review).** `Writer::open` indexes fixed offsets that only
+    /// fit a 1024/2048/4096-byte reserved block — the rootblock extension's
+    /// superindex write reaches 0x80 (`update_rootblock`), a deldir block's
+    /// entries reach byte 1024 (`move_to_deldir`, `DELENTRIES_PER_BLOCK`
+    /// fixed at 31). A `reserved_blksize` between 64 (`Volume`'s own floor)
+    /// and 1023 must be refused before any of those writes, not panic under
+    /// `panic = "abort"`.
+    #[test]
+    fn pfs3_writer_open_refuses_an_unsupported_reserved_blksize() {
+        let (_guard, image) = formatted_pds3_image();
+        let offset = partition_offset(&image);
+        {
+            use std::io::{Seek, SeekFrom, Write};
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&image)
+                .unwrap();
+            // Rootblock reserved_blksize at 0x40 (u16).
+            file.seek(SeekFrom::Start(offset + 2 * 512 + 0x40)).unwrap();
+            file.write_all(&512u16.to_be_bytes()).unwrap();
+        }
+        let vol = libpfs3::volume::Volume::open_rw(&image, offset).unwrap();
+        match libpfs3::writer::Writer::open(vol) {
+            Ok(_) => panic!("expected a refusal for reserved_blksize 512"),
+            Err(err) => assert!(
+                matches!(err, libpfs3::error::Error::Corrupt(ref m) if m.contains("512")),
+                "expected a typed refusal naming the unsupported reserved_blksize, got: {err}"
+            ),
+        }
     }
 
     // ---- ART-113: a non-ASCII name is refused before anything is written ----
