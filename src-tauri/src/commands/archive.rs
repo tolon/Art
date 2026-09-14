@@ -428,8 +428,8 @@ pub fn archive_copy_to_volume(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    #[rustfmt::skip]
-    let title = JobTitle::new("components.jobBar.title.copyArchiveInto").text("target", &image.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copyArchiveInto").text("target", &image.display());
 
     // Resolved here rather than inside the job: a scratch root that has
     // gone away is the user's to fix, and they should hear it from the

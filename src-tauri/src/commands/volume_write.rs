@@ -1325,8 +1325,8 @@ pub fn volume_copy_in_many(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    #[rustfmt::skip]
-    let title = JobTitle::new("components.jobBar.title.copySelectionInto").text("target", &image.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copySelectionInto").text("target", &image.display());
 
     let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_selection_into_volume(

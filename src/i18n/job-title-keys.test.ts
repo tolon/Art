@@ -86,7 +86,10 @@ function scan(): { sites: Site[]; calls: number; letCalls: number } {
     if (MECHANISM.has(file)) continue;
     const text = readFileSync(path, "utf8");
     calls += text.match(/JobTitle::new\(/g)?.length ?? 0;
-    letCalls += text.match(/let title = JobTitle::new\(/g)?.length ?? 0;
+    // rustfmt may wrap a long site so `let title =` and `JobTitle::new(`
+    // land on separate lines; `\s` already spans the newline, so this reads
+    // the site however rustfmt wraps it, not just the one-line shape.
+    letCalls += text.match(/let\s+title\s*=\s*JobTitle::new\(/g)?.length ?? 0;
     // A site is one statement, so everything up to its `;` is its chain.
     for (const m of text.matchAll(/JobTitle::new\(\s*"([^"]+)"\s*\)([^;]*);/g)) {
       const chain = m[2];

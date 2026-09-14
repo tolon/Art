@@ -297,8 +297,8 @@ pub fn iso_extract(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    #[rustfmt::skip]
-    let title = JobTitle::new("components.jobBar.title.copyOutOf").text("source", &iso_path.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copyOutOf").text("source", &iso_path.display());
 
     let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = copy_out_tree(
@@ -408,8 +408,8 @@ pub fn iso_copy_to_volume(
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
     let emit_app = app.clone();
-    #[rustfmt::skip]
-    let title = JobTitle::new("components.jobBar.title.copyDiscInto").text("target", &image.display());
+    let title =
+        JobTitle::new("components.jobBar.title.copyDiscInto").text("target", &image.display());
 
     let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let outcome = (|| -> CoreResult<_> {
