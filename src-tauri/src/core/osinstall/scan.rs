@@ -78,6 +78,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::clock::AmigaClock;
 use crate::core::error::CoreResult;
 
 use super::scan_cache;
@@ -131,10 +132,13 @@ pub struct FoundMedia {
 /// own probe — a scan can find far more candidates than a single install
 /// touches, and holding every one open (or every one's read window) for the
 /// whole scan would cost memory nothing here needs.
-pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
+pub fn open_media(
+    found: &FoundMedia,
+    clock: &'static dyn AmigaClock,
+) -> CoreResult<Box<dyn MediaSource>> {
     Ok(match found.kind {
         MediaKind::Floppy => Box::new(AdfSource::open(&found.path)?),
-        MediaKind::Disc => Box::new(CdSource::open(&found.path)?),
+        MediaKind::Disc => Box::new(CdSource::open(&found.path, clock)?),
     })
 }
 
@@ -155,15 +159,16 @@ pub fn open_media(found: &FoundMedia) -> CoreResult<Box<dyn MediaSource>> {
 pub fn open_media_cached(
     found: &FoundMedia,
     cache: &scan_cache::ScanCache,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<Box<dyn MediaSource>> {
     if let Some(listing) = cache.lookup(&found.path) {
         let found = found.clone();
         return Ok(Box::new(scan_cache::CachedSource::new(
             listing,
-            move || open_media(&found),
+            move || open_media(&found, clock),
         )));
     }
-    let mut source = open_media(found)?;
+    let mut source = open_media(found, clock)?;
     if cache.is_on() {
         if let Ok(listing) = scan_cache::listing_of(source.as_mut(), found.kind) {
             cache.store(&found.path, &listing);
@@ -1544,7 +1549,7 @@ mod tests {
 
         // The walk really is refused — without this the test would pass for
         // a disc ART was perfectly happy with, and prove nothing.
-        let refusal = CdSource::open(&path).unwrap_err();
+        let refusal = CdSource::open(&path, &crate::core::clock::UtcClock).unwrap_err();
         assert_eq!(refusal.code(), "ART-LIMIT-EXCEEDED", "{refusal}");
 
         // And the identification succeeds anyway, with the name read from
@@ -1581,7 +1586,7 @@ mod tests {
         write_test_iso(&dir, "os39.iso", "AmigaOS3.9");
 
         for m in find_media(&dir).unwrap() {
-            let source = open_media(&m).unwrap();
+            let source = open_media(&m, &crate::core::clock::UtcClock).unwrap();
             assert_eq!(source.volume_name(), m.volume_name);
         }
     }

@@ -148,7 +148,10 @@ fn disc(tag: &str) -> (crate::core::ScratchDir, Box<dyn MediaSource>) {
     let path = scratch.join("wb.iso");
     std::fs::write(&path, bytes).unwrap();
 
-    (_guard, Box::new(CdSource::open(&path).unwrap()))
+    (
+        _guard,
+        Box::new(CdSource::open(&path, &crate::core::clock::UtcClock).unwrap()),
+    )
 }
 
 /// The shared tree as a package archive's entry list — one file under a

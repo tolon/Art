@@ -121,6 +121,7 @@ use super::scan_cache::ScanCache;
 use super::source::MediaSource;
 use super::{Component, Condition, Recipe, RefusalReason, RuleKind};
 use crate::core::archive::compress;
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 
 /// What a planning decision needs to know about the paired Kickstart.
@@ -1526,7 +1527,13 @@ pub fn plan_with_cache(
     recipe: &Recipe,
     cache: &ScanCache,
 ) -> CoreResult<InstallPlan> {
-    plan_with_cache_in(request, recipe, cache, &std::env::temp_dir())
+    plan_with_cache_in(
+        request,
+        recipe,
+        cache,
+        &std::env::temp_dir(),
+        &crate::core::clock::UtcClock,
+    )
 }
 
 /// [`plan_with_cache`], unpacking a nested package payload under
@@ -1540,6 +1547,7 @@ pub fn plan_with_cache_in(
     recipe: &Recipe,
     cache: &ScanCache,
     scratch_root: &Path,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<InstallPlan> {
     plan_over_with_cache(
         request,
@@ -1547,6 +1555,7 @@ pub fn plan_with_cache_in(
         &super::package::packages()?,
         cache,
         scratch_root,
+        clock,
     )
 }
 
@@ -1574,6 +1583,7 @@ pub(super) fn plan_over(
         catalogue,
         &ScanCache::off(),
         &std::env::temp_dir(),
+        &crate::core::clock::UtcClock,
     )
 }
 
@@ -1583,6 +1593,7 @@ fn plan_over_with_cache(
     catalogue: &[Package],
     cache: &ScanCache,
     scratch_root: &Path,
+    clock: &'static dyn AmigaClock,
 ) -> CoreResult<InstallPlan> {
     let mut refusals: Vec<RefusalReason> = Vec::new();
 
@@ -1702,7 +1713,7 @@ fn plan_over_with_cache(
         // `refusals` as it goes, so anything it managed to say before
         // failing is kept; its *items* are dropped, which is right — a
         // component built from half an unreadable disk is not a component.
-        let mut source = match open_media_cached(found_media, cache) {
+        let mut source = match open_media_cached(found_media, cache, clock) {
             Ok(source) => source,
             Err(e) => {
                 refusals.push(RefusalReason::MediaUnreadable {

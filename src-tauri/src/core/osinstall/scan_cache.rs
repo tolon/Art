@@ -124,7 +124,21 @@ use super::source::{starts_with_ignoring_case, MediaEntry, MediaSource};
 /// `md5` joined it beside it (see the module doc's "One entry, two facts").
 /// A schema-1 entry is a miss, not an upgrade — it costs one walk and can
 /// never cost a wrong answer.
-const SCAN_CACHE_SCHEMA: u32 = 2;
+///
+/// `3`: a disc's `MediaEntry::date` is local wall time (ART-317); a schema-2
+/// listing holds UTC and must miss. `sha256` (below) is a further field on
+/// [`CacheFile`] added after schema 2 shipped, but it did **not** bump the
+/// schema itself — it is `#[serde(default)]` and genuinely optional, so a
+/// schema-2 entry written before it existed still parses and still serves
+/// its listing and its MD5 (`an_entry_written_before_sha256_existed_still_serves_its_md5`).
+/// The date is different in kind: every schema-2 entry's `MediaEntry::date`
+/// values were computed as UTC, so an old entry cannot simply be read as
+/// missing one field — its dates are the *wrong* value, silently, which is
+/// exactly the "confident, wrong sentence" CLAUDE.md treats as ART's most
+/// expensive defect. Bumping forces every schema-2 listing to miss and be
+/// walked again, which is the only safe outcome; the owner accepted the cost
+/// of reading every install disc once more after this change.
+const SCAN_CACHE_SCHEMA: u32 = 3;
 
 /// Every file this module writes starts with this, so [`ScanCache::sweep`]
 /// and [`ScanCache::forget_all`] can find them — and only them — inside a
@@ -705,7 +719,7 @@ mod tests {
 
     fn listing_for(path: &Path) -> CachedListing {
         let found = identify(path).expect("the fixture is media");
-        let mut source = open_media(&found).unwrap();
+        let mut source = open_media(&found, &crate::core::clock::UtcClock).unwrap();
         listing_of(source.as_mut(), found.kind).unwrap()
     }
 
@@ -801,6 +815,34 @@ mod tests {
 
         assert_eq!(cache.lookup_md5(&medium).as_deref(), Some("md5value"));
         assert_eq!(cache.lookup_sha256(&medium), None);
+    }
+
+    /// **ART-317, the schema bump's own guard.** `2` here is a **literal**,
+    /// not `SCAN_CACHE_SCHEMA - 1` — this pins the real historical schema
+    /// this ART used to write every `MediaEntry::date` as UTC under, not
+    /// "whatever the previous constant happened to be". A schema-2 listing's
+    /// *shape* still parses today (nothing about the JSON changed), so
+    /// without this a schema-2 entry would be silently served with UTC dates
+    /// read back as if they were local wall time — exactly the "confident,
+    /// wrong sentence" CLAUDE.md names as ART's most expensive defect. Found
+    /// by mutation: reverting `SCAN_CACHE_SCHEMA` to `2` passed every other
+    /// test in this module, because they all write and read through the
+    /// live symbolic constant and so cannot see what its actual value is.
+    #[test]
+    fn a_schema_2_listing_from_before_local_time_is_a_miss() {
+        let (_dir, image, cache) = media_and_cache("schema-2-utc-dates");
+        let listing = listing_for(&image);
+        cache.store(&image, &listing);
+        let file = cache.file_for(&image).unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        value["schema"] = serde_json::json!(2);
+        std::fs::write(&file, serde_json::to_vec(&value).unwrap()).unwrap();
+
+        assert!(
+            cache.lookup(&image).is_none(),
+            "a schema-2 listing holds UTC-computed dates and must miss under schema 3"
+        );
     }
 
     #[test]
@@ -1144,11 +1186,14 @@ mod tests {
     fn a_cached_source_answers_what_the_real_source_answers() {
         let (_dir, image, _cache) = media_and_cache("agrees");
         let found = identify(&image).unwrap();
-        let mut real = open_media(&found).unwrap();
+        let mut real = open_media(&found, &crate::core::clock::UtcClock).unwrap();
         let listing = listing_of(real.as_mut(), found.kind).unwrap();
         let path = image.clone();
         let mut cached = CachedSource::new(listing.clone(), move || {
-            open_media(&identify(&path).expect("still media"))
+            open_media(
+                &identify(&path).expect("still media"),
+                &crate::core::clock::UtcClock,
+            )
         });
 
         let mut paths: Vec<String> = vec![String::new()];
@@ -1186,7 +1231,7 @@ mod tests {
         let (_dir, image, _cache) = media_and_cache("no-open");
         let found = identify(&image).unwrap();
         let listing = {
-            let mut real = open_media(&found).unwrap();
+            let mut real = open_media(&found, &crate::core::clock::UtcClock).unwrap();
             listing_of(real.as_mut(), found.kind).unwrap()
         };
         // The medium is deleted, so opening it is impossible. Every listing
@@ -1259,18 +1304,19 @@ mod tests {
         let found = identify(&image).expect("the fixture is media");
 
         let listing = {
-            let mut first = open_media_cached(&found, &cache).unwrap();
+            let mut first =
+                open_media_cached(&found, &cache, &crate::core::clock::UtcClock).unwrap();
             listing_of(first.as_mut(), found.kind).unwrap()
         };
         assert!(!listing.entries.is_empty());
 
         swap_contents_keeping_identity(&image);
         assert!(
-            open_media(&found).is_err(),
+            open_media(&found, &crate::core::clock::UtcClock).is_err(),
             "the medium itself can no longer answer anything"
         );
 
-        let mut second = open_media_cached(&found, &cache).unwrap();
+        let mut second = open_media_cached(&found, &cache, &crate::core::clock::UtcClock).unwrap();
         assert_eq!(second.walk("").unwrap(), listing.entries);
         assert_eq!(second.volume_name(), listing.volume_name);
     }
@@ -1289,20 +1335,21 @@ mod tests {
         let (_dir, image, cache) = media_and_cache("rescan");
         let found = identify(&image).expect("the fixture is media");
         {
-            let mut first = open_media_cached(&found, &cache).unwrap();
+            let mut first =
+                open_media_cached(&found, &cache, &crate::core::clock::UtcClock).unwrap();
             assert!(!first.walk("").unwrap().is_empty());
         }
 
         swap_contents_keeping_identity(&image);
         assert!(
-            open_media_cached(&found, &cache).is_ok(),
+            open_media_cached(&found, &cache, &crate::core::clock::UtcClock).is_ok(),
             "the cache is serving this — which is exactly the stale answer the rescan exists for"
         );
 
         assert_eq!(cache.forget_all(), 1, "one remembered listing dropped");
 
         assert!(
-            open_media_cached(&found, &cache).is_err(),
+            open_media_cached(&found, &cache, &crate::core::clock::UtcClock).is_err(),
             "after a rescan the answer must come off the medium, whatever the medium now says"
         );
     }
@@ -1314,9 +1361,9 @@ mod tests {
         let (_dir, image, _cache) = media_and_cache("off-reads");
         let off = ScanCache::off();
         let found = identify(&image).expect("the fixture is media");
-        assert!(open_media_cached(&found, &off).is_ok());
+        assert!(open_media_cached(&found, &off, &crate::core::clock::UtcClock).is_ok());
         swap_contents_keeping_identity(&image);
-        assert!(open_media_cached(&found, &off).is_err());
+        assert!(open_media_cached(&found, &off, &crate::core::clock::UtcClock).is_err());
     }
 
     /// **The measurement ART-194 and ART-195 both asked for**, against the

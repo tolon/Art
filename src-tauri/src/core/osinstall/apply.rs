@@ -171,6 +171,7 @@ use super::plan::{InstallPlan, PlanItem};
 use super::source::MediaSource;
 use super::startup::merge_user_startup;
 use crate::core::archive::compress;
+use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::hashing::{sha256_bytes, sha256_file};
 use crate::core::jobs::ProgressSink;
@@ -1224,7 +1225,13 @@ fn switch_on(
 /// to one of these, staging BoingBag payloads on the system drive.
 #[cfg(test)]
 pub fn apply(plan: &InstallPlan, root: &Path, sink: &dyn ProgressSink) -> CoreResult<ApplyOutcome> {
-    apply_staging_in(plan, root, &std::env::temp_dir(), sink)
+    apply_staging_in(
+        plan,
+        root,
+        &std::env::temp_dir(),
+        &crate::core::clock::UtcClock,
+        sink,
+    )
 }
 
 /// [`apply`], unpacking any nested package payload under `scratch_root`.
@@ -1236,6 +1243,7 @@ pub fn apply_staging_in(
     plan: &InstallPlan,
     root: &Path,
     scratch_root: &Path,
+    clock: &'static dyn AmigaClock,
     sink: &dyn ProgressSink,
 ) -> CoreResult<ApplyOutcome> {
     // SAFE_CREATE. Nothing below this line touches `root` or any medium
@@ -1325,7 +1333,7 @@ pub fn apply_staging_in(
             sha256,
             distinguished_by: None,
         });
-        sources.insert(volume.clone(), super::scan::open_media(&identified)?);
+        sources.insert(volume.clone(), super::scan::open_media(&identified, clock)?);
     }
 
     // The package half of the same question. A package archive is not
@@ -5054,7 +5062,8 @@ mod tests {
         let Ok(iso) = std::env::var("ART_OS39_ISO") else {
             return;
         };
-        let mut source = CdSource::open(&PathBuf::from(&iso)).unwrap();
+        let mut source =
+            CdSource::open(&PathBuf::from(&iso), &crate::core::clock::UtcClock).unwrap();
         println!("volume_name={}", source.volume_name());
         let mut root = source.walk("").unwrap();
         root.sort_by(|a, b| a.path.cmp(&b.path));
@@ -5111,7 +5120,8 @@ mod tests {
         let Ok(iso) = std::env::var("ART_OS39_ISO") else {
             return;
         };
-        let mut source = CdSource::open(&PathBuf::from(&iso)).unwrap();
+        let mut source =
+            CdSource::open(&PathBuf::from(&iso), &crate::core::clock::UtcClock).unwrap();
         let all = source.walk("OS-VERSION3.9/WORKBENCH3.5").unwrap();
 
         const RESERVED: &[&str] = &[
@@ -5791,7 +5801,8 @@ mod tests {
         // author who retypes a destination instead of copying it fails here
         // even if the spelling they invented happens to look plausible.
         {
-            let mut disc = CdSource::open(&iso_path).expect("open the disc");
+            let mut disc =
+                CdSource::open(&iso_path, &crate::core::clock::UtcClock).expect("open the disc");
             let listing: std::collections::BTreeSet<String> = disc
                 .walk("OS-VERSION3.9/SPECIAL-LOCALE")
                 .expect("the disc's Special-Locale drawer")
@@ -5886,7 +5897,8 @@ mod tests {
 
         // The euro countries, asked of the disc rather than of a pinned hash:
         // read both source variants and check which one the tree holds.
-        let mut source = CdSource::open(&iso_path).expect("open the disc");
+        let mut source =
+            CdSource::open(&iso_path, &crate::core::clock::UtcClock).expect("open the disc");
         const EURO: [&str; 9] = [
             "\u{d6}STERREICH.COUNTRY",
             "BELGIE.COUNTRY",
@@ -8219,6 +8231,7 @@ mod tests {
         let mut source = crate::core::osinstall::scan::open_media(
             &crate::core::osinstall::scan::identify(&iso_path)
                 .expect("the disc must identify as media"),
+            &crate::core::clock::UtcClock,
         )
         .unwrap();
         let (mut upgrade, mut downgrade, mut same_version, mut unversioned) = (0usize, 0, 0, 0);

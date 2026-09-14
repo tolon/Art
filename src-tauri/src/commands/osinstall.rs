@@ -396,6 +396,7 @@ fn plan_with_root(
             &recipe,
             &cache,
             &scratch_root,
+            &crate::tools::local_time::LOCAL_TIME,
         )?),
     })
 }
@@ -1990,7 +1991,10 @@ fn read_from_media(
                 item.media
             ))
         })?;
-        sources.insert(item.media.clone(), scan::open_media(&identified)?);
+        sources.insert(
+            item.media.clone(),
+            scan::open_media(&identified, &crate::tools::local_time::LOCAL_TIME)?,
+        );
     }
     let source = sources
         .get_mut(&item.media)
@@ -2789,7 +2793,13 @@ pub fn osinstall_apply(
     let scratch_root = crate::scratch::root()?;
 
     let id = spawn_job(&app, registry, title, move |job_id, progress| {
-        let outcome = apply_staging_in(&plan, &root, &scratch_root, progress);
+        let outcome = apply_staging_in(
+            &plan,
+            &root,
+            &scratch_root,
+            &crate::tools::local_time::LOCAL_TIME,
+            progress,
+        );
 
         // Background jobs run on their own thread and cannot carry a Tauri
         // `State` across it, so this logs through `write_to_path` rather
