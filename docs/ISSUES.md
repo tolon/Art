@@ -285,17 +285,6 @@ re-audits them without reason:
 
 ---
 
-**ART-300** 🔵 **The refusal for an older package added over a newer one does not name the
-order** — *found 2026-09-10 fixing ART-298*
-`src-tauri/src/core/osinstall/apply.rs` (`add_package_staging_in`) · The chain row now says it
-([ART-298](#fixed)), so the screen no longer reaches this refusal; `osinstall_add_package` still can,
-and its sentence — *"would write over 32 file(s) it never declared it may replace … a package
-overwrites only what its own `overrides` names"* — reads as an instruction to edit a recipe rather
-than as *the newer package is already here*. The owners of the undeclared files are in
-`distribution.json`; naming a shipped package whose own `overrides` lists this one would make it
-actionable. Not done this round: the add-package tests run on fixture packages, and the name needs
-the shipped catalogue.
-
 **ART-301** 🔵 **The job bar's titles are English sentences composed in Rust** — *found 2026-09-10
 in the owner's screenshot*
 `src/components/JobBar.tsx` (`job.title`) · 33 `let title = format!(…)` sites in 17 command files and 7 fixed
@@ -305,15 +294,87 @@ runs**, not a double render — 21:22:08 and 21:23:04 in `operations.jsonl`. The
 the core's own sentence and English by design (ART-060); the title is not the core's sentence but
 the command layer's, and a job could carry a `Phrase` instead. A round of its own.
 
-**ART-302** 🔵 **The first tab question of a session still reads two same-size discs whole** —
-*found 2026-09-10 measuring ART-297*
-`src-tauri/src/core/osinstall/scan.rs` (`ShaMemo`) · On the owner's folders `AmigaOS3.9` repeats at
-one size — two identical 490 856 448-byte images — and proving them identical takes a full read:
-24.2 s for the first `osinstall_slots` after a start, off the window's thread since ART-297, then
-0.45 s warm. The memo lives in memory only; keeping the hash in the scan cache (`ScanCache` already
-stores md5s keyed by size and modification time) would let the next start pay nothing.
-
 ## Fixed
+
+**ART-302** 🔵 ✅ **The first tab question of a session still read two same-size discs whole, every
+start** — *found 2026-09-10 measuring ART-297; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/src/core/osinstall/scan_cache.rs` · `src-tauri/src/core/osinstall/scan.rs` ·
+`src-tauri/src/commands/osinstall.rs` · On the owner's folders `AmigaOS3.9` repeats at one size —
+two identical 490 856 448-byte images — and proving them identical took a full read: 24.2 s for the
+first `osinstall_slots` after a start, off the window's thread since ART-297, then 0.45 s warm
+(*not measured on the owner's discs this round; the 24.2 s → warm figure is the owner's to
+confirm*). `ShaMemo`, the fix that avoided the repeat read within one process, lived in memory only,
+so a fresh process paid the full read again. `ScanCache` gained `lookup_sha256`/`store_sha256`
+beside its existing md5 pair (`CacheFile.sha256: Option<String>`, `#[serde(default)]`, so an entry
+written before this round still serves its md5 with no `sha256` —
+`an_entry_written_before_sha256_existed_still_serves_its_md5`), and a new
+`dedupe_identical_disks_cached(found, cache)` reads and writes through it while the old
+`dedupe_identical_disks` keeps its signature by delegating to it with `ScanCache::off()`.
+`osinstall_slots` (`commands/osinstall.rs`) now calls the cached form with the `ScanCache` already
+in scope for `mediahash::remembered_media_in`.
+
+Tests: `a_stored_sha256_comes_back_and_a_replaced_medium_has_none`,
+`a_sha256_does_not_evict_the_md5_stored_beside_it`,
+`an_entry_written_before_sha256_existed_still_serves_its_md5`,
+`a_cache_that_is_off_neither_reads_nor_writes_a_sha256` (`scan_cache.rs`);
+`a_new_session_takes_a_discs_hash_from_the_cache_not_the_disc` (`scan.rs`).
+
+Red: `error[E0599]: no method named `store_sha256` found for enum `scan_cache::ScanCache` in the
+current scope` / `error[E0599]: no method named `lookup_sha256` found for enum `scan_cache::ScanCache`
+in the current scope`; then, wiring the dedupe path, `error[E0425]: cannot find function
+`cached_sha256` in this scope (x3)`.
+
+Mutations: `store_sha256`'s body reduced to `let _ = (media_path, sha256);` —
+`a_stored_sha256_comes_back_and_a_replaced_medium_has_none` failed, `(assertion left == right
+failed — expected Some("abc123"))`. The `cache.store_sha256(p, &hash);` line deleted from
+`cached_sha256` — `a_new_session_takes_a_discs_hash_from_the_cache_not_the_disc` failed,
+`(assertion failed — "a fresh process reads the cache, not the disc")`. Both restored from an
+absolute-path backup, both suites green again.
+
+Suite: `cargo test --lib core::osinstall::scan_cache` `test result: ok. 24 passed; 0 failed; 1
+ignored; 0 measured; 3295 filtered out`; `core::osinstall::scan` `test result: ok. 60 passed; 0
+failed; 1 ignored; 0 measured; 3260 filtered out`; `commands::osinstall` `test result: ok. 96
+passed; 0 failed; 9 ignored; 0 measured; 3216 filtered out`. Full `cargo test --lib`, twice: `test
+result: ok. 3266 passed; 0 failed; 58 ignored; 0 measured; 0 filtered out`; fmt and clippy clean.
+The shared test helper both new `scan_cache.rs` tests and the brief call `scratch` is
+`crate::core::osinstall::fixtures::scratch(tag) -> (ScratchDir, PathBuf)`, called as
+`fixtures::scratch(...)`.
+
+**ART-300** 🔵 ✅ **The refusal for an older package added over a newer one did not name the
+order** — *found 2026-09-10 fixing ART-298; fixed 2026-09-14 on `art-debt-0914`*
+`src-tauri/src/core/osinstall/package.rs` · `src-tauri/src/core/osinstall/apply.rs` ·
+`src-tauri/src/core/osinstall/chain.rs` · The chain row already says it ([ART-298](#fixed)), so the
+screen no longer reaches this refusal; `osinstall_add_package` still can, and its sentence —
+*"would write over 32 file(s) it never declared it may replace … a package overwrites only what its
+own `overrides` names"* — read as an instruction to edit a recipe rather than as *the newer package
+is already here*. `package::overriders_of(catalogue, id)` answers, by declaration, which packages
+override a given one, and `chain.rs`'s own inline filter for the same question now calls through it
+instead of repeating it. `apply.rs`'s `undeclared_overwrites` returns a new `Overwrites {
+undeclared, owners, unrecorded }` instead of a two-tuple, and a new `undeclared_refusal(package,
+undeclared, owners, catalogue)` names, when a newer installed package already declares the override
+the current one lacks, which package and that it is newer — an undeclared overwrite with no newer
+package present keeps its old sentence.
+
+Tests: `the_packages_that_override_one_are_found_by_their_declaration` (`package.rs`);
+`an_older_package_over_a_newer_one_is_refused_with_the_order`,
+`an_undeclared_overwrite_with_no_newer_package_keeps_its_sentence` (`apply.rs`).
+
+Red: `error[E0425]: cannot find function `overriders_of` in this scope (x2)`; then `error[E0425]:
+cannot find function `undeclared_refusal` in this scope (x2)`.
+
+Mutation: `undeclared_refusal`'s owner filter (`.filter(|other| owners.iter().any(|owner| owner ==
+&other.id))`) reduced to `.filter(|_| false)` — `an_older_package_over_a_newer_one_is_refused_with_the_order`
+failed, `(assertion failed — "is older than" text missing)`. Restored, green again. `overriders_of`
+(Task 3) has no mutation step in the brief and none was run.
+
+Suite: `core::osinstall::package` `test result: ok. 54 passed; 0 failed; 2 ignored; 0 measured;
+3266 filtered out`; `core::osinstall::chain` `test result: ok. 38 passed; 0 failed; 0 ignored; 0
+measured; 3284 filtered out`; `core::osinstall::apply` `test result: ok. 86 passed; 0 failed; 14
+ignored; 0 measured; 3224 filtered out`. Full `cargo test --lib`, twice: `test result: ok. 3266
+passed; 0 failed; 58 ignored; 0 measured; 0 filtered out`; fmt and clippy clean. **Deviation:** the
+two new `apply.rs` tests' `&[two.id.clone()]` / `&[one.clone()]`, as given, fail this project's
+clippy gate (`cloned_ref_to_slice_refs`, implied by `-D warnings`); rewritten to
+`std::slice::from_ref(&two.id)` / `std::slice::from_ref(&one)` — same values, same outcome.
 
 **ART-118** 🟠 ✅ **The OS Builder's install screen has never been driven in a
 real browser past its headings — jsdom now covers what a browser could not,
@@ -852,7 +913,7 @@ Eliminated on the way, measured: `ArchiveSource::open` (0.55 s over every file i
 folders) and `find_media` (45 ms). Mutations: the size check off fails two tests; the memo lookup
 off, and the memo ignoring a changed file, fail one each; `osinstall_plan` put back to blocking is
 named by the guard; three plan-gate mutations each fail the update-mode test. What is left is
-[ART-302](#open).
+[ART-302](#fixed).
 
 **ART-298** 🟠 ✅ **Locale 3.9's Turkish slice was refused on the owner's tree — and the tick list
 had offered it** — *found 2026-09-10 by the owner; fixed the same night on `art-owner-findings-0910`*
@@ -885,7 +946,7 @@ and now checking the claim in both directions. **Real material**:
 placed; newer first, the row reads `OvertakenBy` and the slice is refused over the 32 catalogs. Both
 arms of the control measured: without the fonts declaration the slice is refused over 50 fonts;
 without the catalogs declaration BB2's catalogs are refused over 32. Mutation: the chain check off
-fails its test. The refusal's own sentence is [ART-300](#open).
+fails its test. The refusal's own sentence is [ART-300](#fixed).
 
 **ART-299** 🟠 ✅ **After a run the Build tab said "no update ticked" and "replaces 0 files" while it
 was still finding out — and offered Build over that** — *found 2026-09-10 in the owner's screenshot;
