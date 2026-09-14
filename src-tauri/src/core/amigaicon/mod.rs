@@ -55,10 +55,10 @@
 //! `FORM` for the third (research note §8) — that is real evidence, not
 //! recalled documentation. What is **not** independently re-verified here:
 //! the `Image` layout, since this module only needs to skip it correctly
-//! (get its length right), never to read its fields; and non-ASCII tool
-//! type text, which is decoded lossily (see [`tooltypes`]) rather than
-//! refused, because a bad character in a display string is not the
-//! memory-safety hazard a bad length is.
+//! (get its length right). Non-ASCII tool type text is decoded as Latin-1
+//! (see [`tooltypes`]; ART-250) rather than refused — a bad *character* in a
+//! display string is not the memory-safety hazard a bad length is, and
+//! Latin-1 decode cannot fail regardless.
 //!
 //! ## What was skipped and is now read (measured across 798 real icons)
 //!
@@ -187,6 +187,47 @@ fn malformed(detail: impl Into<String>) -> CoreError {
     }
 }
 
+// ART-250. AmigaOS ToolTypes text is Latin-1 (ISO-8859-1), not UTF-8 — the
+// platform's own default charset (two secondary sources, an independent
+// third-party icon library `bitplane/amigainfo`, and NewIcon `IM1=`/`IM2=`
+// pixel-encoding text that runs the full 0x20-0xFF in one byte each; see
+// `D:\Projeler\Amiga\scratch-0913\art250-research.md` §2-§4). This is the
+// same identity-cast pair `core/adf/bcpl.rs` already uses for BCPL strings
+// (ART-074) and `core/osinstall/apply.rs::latin1_decode`/`latin1_encode`
+// reimplements independently for `S/User-Startup` text — deliberately kept
+// as a third, private copy here rather than importing `core::adf::bcpl`,
+// the same choice `apply.rs` made even though `osinstall` already depends
+// on `core::adf` for other things: each field's encode behaviour on a
+// character with no Latin-1 byte differs (this one refuses; the other two
+// substitute `?`), so sharing the function would either drag one field's
+// choice into the other or need a parameter neither actually wants.
+
+/// Decode `bytes` as Latin-1 — the identity mapping from bytes 0x00-0xFF to
+/// Unicode code points U+0000-U+00FF. Cannot fail: every byte value has a
+/// Latin-1 character, so this is never the reason a tool type is refused.
+fn latin1_decode(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
+/// Encode `s` as Latin-1, refusing rather than substituting or dropping a
+/// character above `U+00FF` — there is no Latin-1 byte for one, and
+/// `set_tooltypes` has no production caller today (art250-research.md
+/// §1/§5) to lose data silently for. `label` names which tool type this is
+/// (its index and text) so the refusal reads as "tool type 2 ('ş=…') has a
+/// character with no Latin-1 byte", not as an unexplained failure.
+fn latin1_encode(label: impl std::fmt::Display, s: &str) -> CoreResult<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len());
+    for c in s.chars() {
+        if (c as u32) > 0xFF {
+            return Err(CoreError::InvalidInput(format!(
+                "{label} has a character {c:?} with no Latin-1 byte"
+            )));
+        }
+        out.push(c as u8);
+    }
+    Ok(out)
+}
+
 /// Read a big-endian `u32` at `at`, refusing rather than indexing out of
 /// bounds.
 fn be_u32(bytes: &[u8], at: usize) -> CoreResult<u32> {
@@ -241,8 +282,8 @@ fn advance(bytes: &[u8], pos: usize, len: usize) -> CoreResult<usize> {
 }
 
 /// Read one length-prefixed string at `pos` — a `u32` length, then that many
-/// bytes — decoded lossily (see [`tooltypes`]'s doc for why). Returns the
-/// text and the position immediately after it.
+/// bytes — decoded as Latin-1 (ART-250; see [`tooltypes`]'s doc for why).
+/// Returns the text and the position immediately after it.
 ///
 /// This is the **one** bounds-checked implementation both [`skip_string`]
 /// (used while walking `DefaultTool`, `ToolWindow` and each tool type during
@@ -253,10 +294,7 @@ fn read_string(bytes: &[u8], pos: usize) -> CoreResult<(String, usize)> {
     let len = be_u32(bytes, pos)? as usize;
     let after_len = advance(bytes, pos, 4)?;
     let end = advance(bytes, after_len, len)?;
-    Ok((
-        String::from_utf8_lossy(&bytes[after_len..end]).into_owned(),
-        end,
-    ))
+    Ok((latin1_decode(&bytes[after_len..end]), end))
 }
 
 /// Skip a length-prefixed string (`DefaultTool`, `ToolWindow`, and each
@@ -413,12 +451,13 @@ pub fn layout(bytes: &[u8]) -> CoreResult<IconLayout> {
 /// is not the same claim as "this file is not an icon" or "this block is
 /// corrupt".
 ///
-/// Text is decoded with [`String::from_utf8_lossy`] rather than refused on
-/// invalid UTF-8. A bad length is a memory-safety hazard and is refused by
-/// [`layout`] before this function ever runs; a bad *character* in a
-/// tool-type string is neither that nor a reason to refuse the whole icon —
-/// real AmigaDOS text is Latin-1, not UTF-8, so a non-ASCII tool type (a
-/// `PUBSCREEN` name, say) is exactly the case this is for.
+/// Text is decoded as Latin-1 (ART-250) — every byte 0x00-0xFF has a Latin-1
+/// character, so this never substitutes or refuses on the *text*; a bad
+/// *length* is the actual memory-safety hazard, and is refused by
+/// [`layout`] before this function ever runs. Real AmigaDOS text is Latin-1,
+/// not UTF-8 (`D:\Projeler\Amiga\scratch-0913\art250-research.md` §2), so a
+/// non-ASCII tool type (a `PUBSCREEN` name, say, or a NewIcon `IM1=`/`IM2=`
+/// pixel encoding) decodes to exactly the bytes it was written with.
 pub fn tooltypes(bytes: &[u8]) -> CoreResult<Vec<String>> {
     let parsed = layout(bytes)?;
     let Some(range) = parsed.tooltypes else {
@@ -646,21 +685,24 @@ pub fn merge_tooltypes(dest: &[u8], source: &[u8]) -> CoreResult<Vec<u8>> {
 /// walk every other function in this module goes through — never a
 /// best-effort rewrite of a file it could not fully account for.
 ///
-/// **Lossy when fed straight back the output of [`tooltypes`] on an icon
-/// that carries a NewIcon `IM1=`/`IM2=` tool type** (ART-250): that reader's
-/// `String::from_utf8_lossy` substitutes `U+FFFD` for any byte in the
-/// pixel-encoding data that is not valid UTF-8 on its own — real bytes, not
-/// accidental Latin-1 text — and re-encoding that string back to UTF-8 here
-/// does not reproduce the original bytes. Measured: 69 of the owner's 798
-/// real icons trip this; the tool-type *text* still round-trips, the raw
-/// bytes do not. Of the three other writers in this module, none is
-/// affected: [`set_position`], [`set_window`] and [`set_show_all_files`]
-/// all `bytes.to_vec()` and overwrite a fixed, disjoint range — they never
-/// touch the `ToolTypes` block at all, proven byte-for-byte by the icon
-/// oracle across all 798 real icons, the 69 lossy ones included. A caller
-/// that only needs to change the position, window or Show-mode of an icon
-/// that happens to carry NewIcon tool types is unaffected by this; only a
-/// caller of *this* function, fed `tooltypes(bytes)`, can lose bytes.
+/// **Encodes as Latin-1** (ART-250), the same charset [`tooltypes`] decodes
+/// with, so `set_tooltypes(bytes, tooltypes(bytes))` is byte-identical for
+/// every tool type a real icon actually carries — including a NewIcon
+/// `IM1=`/`IM2=` pixel encoding, whose bytes run the full `0x20`-`0xFF`
+/// (measured: 69 of the owner's 798 real icons carry one; see
+/// `D:\Projeler\Amiga\scratch-0913\art250-research.md` §3). Before this fix
+/// the write side encoded UTF-8, so re-encoding [`tooltypes`]'s then-lossy
+/// `U+FFFD` substitutions did not reproduce the original bytes — that defect
+/// is gone on both ends now, not patched on only the read side. **Refuses**
+/// a character above `U+00FF` — there is no Latin-1 byte for it — naming
+/// which tool type and which character; `set_tooltypes` has no production
+/// caller today, so nothing depends on a silent `?` substitution the way
+/// [`core::adf::bcpl::write_bcpl_string`](crate::core::adf::bcpl::write_bcpl_string)
+/// does for volume/file names. Of the three other writers in this module,
+/// none touches tool-type text at all: [`set_position`], [`set_window`] and
+/// [`set_show_all_files`] all `bytes.to_vec()` and overwrite a fixed,
+/// disjoint range, proven byte-for-byte by the icon oracle across all 798
+/// real icons.
 pub fn set_tooltypes(bytes: &[u8], tooltypes: &[String]) -> CoreResult<Vec<u8>> {
     let start = position_before_tooltypes(bytes)?;
     let had_block = be_u32(bytes, OFF_TOOL_TYPES)? != 0;
@@ -679,12 +721,12 @@ pub fn set_tooltypes(bytes: &[u8], tooltypes: &[String]) -> CoreResult<Vec<u8>> 
             .and_then(|n| n.checked_mul(4))
             .ok_or_else(|| malformed("ToolTypes size overflow"))?;
         block.extend_from_slice(&size.to_be_bytes());
-        for tt in tooltypes {
-            let text = tt.as_bytes();
+        for (i, tt) in tooltypes.iter().enumerate() {
+            let text = latin1_encode(format!("tool type {i} ({tt:?})"), tt)?;
             let len = u32::try_from(text.len())
                 .map_err(|_| malformed("a tool type is too long to encode"))?;
             block.extend_from_slice(&len.to_be_bytes());
-            block.extend_from_slice(text);
+            block.extend_from_slice(&text);
         }
     }
 
@@ -1006,6 +1048,29 @@ mod tests {
         buf
     }
 
+    /// A hand-built icon whose tool types are raw bytes, not `&str` —
+    /// [`tests_support::synthetic_icon`] encodes each entry with
+    /// `str::as_bytes` (UTF-8), which cannot produce a single raw byte above
+    /// `0x7F` (a Latin-1 high byte, or a NewIcon `IM1=`/`IM2=` pixel-encoding
+    /// byte) the way real AmigaDOS text and real NewIcon data actually are
+    /// (ART-250; see `D:\Projeler\Amiga\scratch-0913\art250-research.md`).
+    fn synthetic_icon_raw_tooltypes(tooltypes: &[&[u8]], trailing: &[u8]) -> Vec<u8> {
+        let mut buf = vec![0u8; HEADER_LEN];
+        buf[0..2].copy_from_slice(&MAGIC.to_be_bytes());
+        buf[2..4].copy_from_slice(&1u16.to_be_bytes()); // do_Version
+        buf[OFF_TOOL_TYPES..OFF_TOOL_TYPES + 4].copy_from_slice(&1u32.to_be_bytes());
+        buf[OFF_STACK_SIZE..OFF_STACK_SIZE + 4].copy_from_slice(&4096u32.to_be_bytes());
+
+        let size = ((tooltypes.len() + 1) * 4) as u32;
+        buf.extend_from_slice(&size.to_be_bytes());
+        for tt in tooltypes {
+            buf.extend_from_slice(&(tt.len() as u32).to_be_bytes());
+            buf.extend_from_slice(tt);
+        }
+        buf.extend_from_slice(trailing);
+        buf
+    }
+
     #[test]
     fn a_hand_built_icon_parses_to_its_own_length() {
         let icon = synthetic_icon(&["A=1", "B=2"], 4096, b"");
@@ -1086,6 +1151,57 @@ mod tests {
             stack_size(&after).unwrap(),
             4096,
             "the stack size is not ours to change"
+        );
+    }
+
+    /// ART-250. NewIcon `IM1=`/`IM2=` pixel-encoding text runs `0x20`–`0xFF`,
+    /// one byte each — confirmed against a real third-party implementation's
+    /// source (`bitplane/amigainfo`, see art250-research.md §3), not just
+    /// the 69-of-798 measurement against the owner's own icons. Every value
+    /// in that range is a legal Latin-1 byte, so a Latin-1 decode/encode
+    /// round trip is byte-identical; `String::from_utf8_lossy` was not,
+    /// because a lone byte above `0x7F` is never a valid standalone UTF-8
+    /// sequence.
+    #[test]
+    fn a_newicon_tooltype_with_high_bytes_round_trips_byte_identical() {
+        let mut im1 = b"IM1=".to_vec();
+        im1.extend_from_slice(&[0x80, 0x9F, 0xA0, 0xD0, 0xD1, 0xFF]);
+        let before = synthetic_icon_raw_tooltypes(&[b"A=1", &im1], b"");
+
+        let decoded = tooltypes(&before).unwrap();
+        let after = set_tooltypes(&before, &decoded).unwrap();
+        assert_eq!(after, before, "byte-identical round trip");
+    }
+
+    /// ART-250. `0xE9` is Latin-1 `é` — real AmigaDOS text (a `PUBSCREEN`
+    /// name, say), not NewIcon pixel data. `String::from_utf8_lossy` turned
+    /// a lone `0xE9` into `U+FFFD` (art250-research.md §1); Latin-1 decode
+    /// makes it `é`, because Latin-1 is exactly the identity on code points
+    /// `0..=255`.
+    #[test]
+    fn a_latin1_high_byte_decodes_to_its_character() {
+        let before = synthetic_icon_raw_tooltypes(&[b"(PUBSCREEN=caf\xE9)"], b"");
+        assert_eq!(
+            tooltypes(&before).unwrap(),
+            vec!["(PUBSCREEN=café)".to_string()]
+        );
+    }
+
+    /// ART-250. `ş` (U+015F, Turkish) has no Latin-1 byte — Turkish AmigaOS
+    /// text is ISO-8859-9, a different 8-bit codepage, not ISO-8859-1
+    /// (art250-research.md §2). The design approved for this defect refuses
+    /// such a character by name rather than substituting or dropping it, the
+    /// opposite of `core/adf/bcpl.rs::write_bcpl_string`'s `?` — chosen
+    /// because `set_tooltypes` has no production caller today (research
+    /// §1/§5), so there is no live write a refusal could break.
+    #[test]
+    fn set_tooltypes_refuses_a_character_with_no_latin1_byte() {
+        let icon = synthetic_icon_raw_tooltypes(&[b"A=1"], b"");
+        let err = set_tooltypes(&icon, &["ş".to_string()]).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains('ş'),
+            "the refusal must name the character: {msg}"
         );
     }
 
@@ -1630,33 +1746,6 @@ mod tests {
         None
     }
 
-    /// Whether every tool type in `bytes`' `ToolTypes` block (if it has one
-    /// at all) is valid UTF-8 in its raw, on-disk bytes — the exact
-    /// condition under which [`tooltypes`]'s `String::from_utf8_lossy` call
-    /// returns the input unchanged rather than substituting `U+FFFD`.
-    ///
-    /// Walks the block the same way [`skip_tooltypes`] does (duplicated
-    /// rather than shared, deliberately: this asks a different question —
-    /// "is this reversible", not "is this well-formed" — and the two must
-    /// not be allowed to silently drift onto the same code path and answer
-    /// only one of them). Used only by the folder-walk oracle test below.
-    fn tooltypes_round_trip_losslessly(bytes: &[u8]) -> CoreResult<bool> {
-        let Some(range) = layout(bytes)?.tooltypes else {
-            return Ok(true); // no block at all - nothing to lose.
-        };
-        let mut p = advance(bytes, range.start, 4)?; // past the block's own size field.
-        while p < range.end {
-            let len = be_u32(bytes, p)? as usize;
-            let after_len = advance(bytes, p, 4)?;
-            let end = advance(bytes, after_len, len)?;
-            if std::str::from_utf8(&bytes[after_len..end]).is_err() {
-                return Ok(false);
-            }
-            p = end;
-        }
-        Ok(true)
-    }
-
     /// **The icon oracle's Rust half** (Task 11 for reading; Task 7 of the
     /// drawer-icons round added the writer checks below — this module's
     /// first writes, and CLAUDE.md's own rule that a format's writer and
@@ -1696,31 +1785,29 @@ mod tests {
     ///
     /// | Write | What must hold |
     /// |---|---|
-    /// | `set_tooltypes(bytes, tooltypes(bytes))` | byte-identical to the input — for the icons where that is even possible (see the `lossy_tooltypes` paragraph below) — with or without an existing `ToolTypes` block, so it also exercises the "grow a block" / "clear a block" paths `merge_tooltypes` never touches |
+    /// | `set_tooltypes(bytes, tooltypes(bytes))` | byte-identical to the input, for every icon — with or without an existing `ToolTypes` block, so it also exercises the "grow a block" / "clear a block" paths `merge_tooltypes` never touches |
     /// | `set_position(Some((37, 11)))` | reads back as `Some((37, 11))`, and no byte outside 58..66 changed |
     /// | `set_position(None)` | reads back as `None` — both coordinates carry [`NO_POSITION`], never a plain `0` |
     /// | `set_show_all_files(true)` then `(false)` | no byte outside the computed [`drawer_data2_range`] changes, and that word ends at exactly [`DDFLAGS_SHOWDEFAULT`] — asked only of icons that actually carry a `DrawerData2` extension; icons with a `DrawerData` block but no `DrawerData2` are counted in `no_drawer_data2`, and icons with no `DrawerData` block at all in `no_drawer_data` — the same "measured, not assumed" split `no_tooltypes` already uses, neither ever folded into `failed`. See the `no_drawer_data2` paragraph below for why this is *not* "returns to the original bytes" |
     /// | `render::rendered_size(bytes)` | never smaller than the `Gadget` width/height at the fixed offsets, and never zero in either dimension |
     ///
-    /// **`set_tooltypes(bytes, tooltypes(bytes))` is only asked to be
-    /// byte-identical when it *can* be — measured, not assumed, the same
-    /// discipline `no_tooltypes` already applies.** [`tooltypes`]'s own doc
-    /// comment already admits it decodes lossily
-    /// (`String::from_utf8_lossy`) because real AmigaDOS text is Latin-1,
-    /// not UTF-8. Real material shows this is not just a theoretical corner
-    /// case: 69 of 798 icons in the owner's AmigaOS 3.9 tree carry a NewIcon
-    /// `IM1=`/`IM2=` tool type whose pixel-encoding bytes legitimately run
-    /// past 0x7F (they are not accidental Latin-1 text at all, just bytes
-    /// that are not valid UTF-8 on their own) — decoding one to a `String`
-    /// replaces the offending byte(s) with `U+FFFD`, and re-encoding that
-    /// back to UTF-8 does not reproduce the original bytes, growing the
-    /// file. This is a real, present gap in the write path this test
-    /// exists to catch, not a reason to weaken what it checks: an icon
-    /// whose raw `ToolTypes` bytes are not all valid UTF-8 is counted in
-    /// `lossy_tooltypes` rather than `failed`, but is still held to a
-    /// weaker, still-meaningful invariant — the *text* [`tooltypes`] reads
-    /// back from the rewritten file must still equal the text that was
-    /// written, even though the underlying bytes cannot be.
+    /// **`set_tooltypes(bytes, tooltypes(bytes))` is now byte-identical for
+    /// every icon, unconditionally** (ART-250). Both [`tooltypes`] and
+    /// `set_tooltypes` used to disagree with AmigaOS about the charset:
+    /// [`tooltypes`] decoded with `String::from_utf8_lossy`, and a real
+    /// AmigaDOS text byte above 0x7F is essentially never valid standalone
+    /// UTF-8, so it came back as `U+FFFD` and re-encoding that to UTF-8 grew
+    /// the file rather than reproducing it. Real material showed this was
+    /// not a theoretical corner case: 69 of 798 icons in the owner's
+    /// AmigaOS 3.9 tree carry a NewIcon `IM1=`/`IM2=` tool type whose
+    /// pixel-encoding bytes legitimately run the full `0x20`-`0xFF`. Both
+    /// ends now decode and encode as Latin-1 — the platform's own charset
+    /// (`D:\Projeler\Amiga\scratch-0913\art250-research.md` §2-§4) and
+    /// exactly `core/adf/bcpl.rs`'s own precedent for the identical shape of
+    /// defect (ART-074) — so every byte `0x00`-`0xFF` round-trips exactly,
+    /// and the `lossy_tooltypes` bucket this paragraph used to describe no
+    /// longer has anything to count: it has been removed, along with the
+    /// `tooltypes_round_trip_losslessly` helper that measured it.
     ///
     /// **This test's first real run found a genuine offset defect, not a
     /// false alarm, and it is worth recording how here rather than only in a
@@ -1768,8 +1855,7 @@ mod tests {
     /// it is recorded by name in `failed` and the whole test fails once, at
     /// the end, printing every one of them — machine-readable
     /// (`ART_ICON_RESULT checked=… failed=… no_tooltypes=… no_drawer_data=…
-    /// no_drawer_data2=…
-    /// lossy_tooltypes=…`, one `ART_ICON_FAIL <path>: <reason>` per miss, the
+    /// no_drawer_data2=…`, one `ART_ICON_FAIL <path>: <reason>` per miss, the
     /// reason naming a byte offset wherever one is the actual point of
     /// failure) so the driving script can report them without scraping
     /// prose.
@@ -1787,7 +1873,6 @@ mod tests {
         let mut no_tooltypes = 0usize;
         let mut no_drawer_data = 0usize;
         let mut no_drawer_data2 = 0usize;
-        let mut lossy_tooltypes = 0usize;
         let mut failed: Vec<String> = Vec::new();
         for entry in &entries {
             let bytes = match std::fs::read(entry) {
@@ -1834,46 +1919,19 @@ mod tests {
                 }
             }
 
-            // Task 7: replacing an icon's tool types with the ones it
-            // already has must leave the file byte-identical. Asked of
-            // every icon, with or without an existing ToolTypes block — the
-            // sharpest test in the set, per the task brief: it exercises the
-            // whole splice path (including growing/clearing a block) and any
-            // drift shows up immediately.
-            //
-            // Byte-identical is only possible when tooltypes()'s lossy UTF-8
-            // decode is lossless for this icon in the first place — see the
-            // lossy_tooltypes paragraph in this test's own doc comment. When
-            // it is not, this still checks the weaker, still-real invariant
-            // that the *text* survives the round-trip even though the raw
-            // bytes cannot.
-            let lossless = match tooltypes_round_trip_losslessly(&bytes) {
-                Ok(v) => v,
-                Err(err) => {
-                    failed.push(format!(
-                        "{}: tooltypes_round_trip_losslessly failed: {err}",
-                        entry.display()
-                    ));
-                    true
-                }
-            };
+            // Task 7 (drawer-icons round); ART-250 (Latin-1) removed the
+            // lossy exception below it used to need. Replacing an icon's
+            // tool types with the ones it already has must leave the file
+            // byte-identical — the sharpest check in the set: it exercises
+            // the whole splice path (including growing/clearing a block)
+            // and any drift shows up immediately. Unconditional now that
+            // both tooltypes() and set_tooltypes() agree on Latin-1: every
+            // byte 0x00-0xFF round-trips exactly, NewIcon IM1=/IM2= data
+            // included, so there is no longer a weaker "text matches, bytes
+            // do not" case to fall back to.
             match tooltypes(&bytes) {
                 Ok(existing) => match set_tooltypes(&bytes, &existing) {
                     Ok(same) if same == bytes => {}
-                    Ok(different) if !lossless => {
-                        lossy_tooltypes += 1;
-                        match tooltypes(&different) {
-                            Ok(again) if again == existing => {}
-                            Ok(_) => failed.push(format!(
-                                "{}: set_tooltypes(existing) changed the tool-type text itself, not just its lossy re-encoding",
-                                entry.display()
-                            )),
-                            Err(err) => failed.push(format!(
-                                "{}: tooltypes() on the rewritten file failed: {err}",
-                                entry.display()
-                            )),
-                        }
-                    }
                     Ok(different) => failed.push(format!(
                         "{}: set_tooltypes(existing) changed the file (first differing byte at {})",
                         entry.display(),
@@ -2061,7 +2119,7 @@ mod tests {
         }
 
         println!(
-            "ART_ICON_RESULT checked={checked} failed={} no_tooltypes={no_tooltypes} no_drawer_data={no_drawer_data} no_drawer_data2={no_drawer_data2} lossy_tooltypes={lossy_tooltypes}",
+            "ART_ICON_RESULT checked={checked} failed={} no_tooltypes={no_tooltypes} no_drawer_data={no_drawer_data} no_drawer_data2={no_drawer_data2}",
             failed.len()
         );
         for f in &failed {
