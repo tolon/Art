@@ -161,7 +161,7 @@ fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc
 #
 # Pinned exactly, the same way `ureq` above is. Since ART-310 this pin names
 # the crates.io release ART's vendored copy was taken from; the build itself
-# uses that copy, `vendor/libpfs3` (0.1.3+art.6), through `[patch.crates-io]`
+# uses that copy, `vendor/libpfs3` (0.1.3+art.7), through `[patch.crates-io]`
 # below. `core/preload/native.rs`'s `NativeFormatter::probe()` reports the
 # vendored version as which implementation did the work, and a test there
 # checks this line, the patch and the vendored manifest together, so drift

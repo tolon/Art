@@ -16,7 +16,7 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.6`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.7`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
@@ -24,8 +24,10 @@
 //! ceiling (ART-311), a caller-supplied datestamp (ART-317), and the writer
 //! returning to its last commit on error, locking rather than continuing when
 //! a commit itself fails part-way (ART-319), overwriting a file copy-on-write and
-//! renaming over an existing entry in one commit (ART-319's gaps, 2026-09-15); `ART-PATCH.md`
-//! there lists each. The writer's other limits below (ART-113, ART-116) still hold.
+//! renaming over an existing entry in one commit (ART-319's gaps, 2026-09-15), and a
+//! case-only rename no longer deleting the file it renames (ART-322, 2026-09-15);
+//! `ART-PATCH.md` there lists each. The writer's other limits below (ART-113, ART-116)
+//! still hold.
 //!
 //! ## Embedding a driver is not a formatter's job (ART-117)
 //!
@@ -117,7 +119,7 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.6";
+const LIBPFS3_VERSION: &str = "0.1.3+art.7";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -3177,7 +3179,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter::UTC.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.6 (native, no external tool)");
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.7 (native, no external tool)");
     }
 
     /// A DosType neither family claims — ART refuses rather than guessing.
@@ -4525,6 +4527,154 @@ mod tests {
                 .any(|f| f.starts_with("/Dst ") && f.contains("[115, 111, 117")),
             "the renamed file is not at /Dst: {facts:#?}"
         );
+    }
+
+    /// **ART-322.** `rename_in(root, "File", root, "FILE")` changes only a
+    /// name's case in the same directory. PFS3 names compare case-
+    /// insensitively (`name_eq_ci`), so the destination lookup finds the
+    /// source itself as "an existing destination" — the defect deleted it
+    /// (data blocks freed) and reported `Ok`. The fixed writer must recognise
+    /// the destination as the very entry being renamed and rename it in
+    /// place: the file survives under exactly one, case-insensitively
+    /// matching name, with its content, anode, protection and creation date
+    /// unchanged. pfs3aio's own `RenameAndMove` never deletes in this case
+    /// either (`directory.c:2064-2076,2130`, `tonioni/pfs3aio` `211f7f0`):
+    /// `FindObject` on the destination name only refuses `ERROR_OBJECT_EXISTS`
+    /// when the found entry's `direntry` differs from the source's — "%9.1
+    /// the same name IS allowed (rename 'hello' to 'Hello')" — and when it is
+    /// the same entry, falls through to `ChangeDirEntry`, which moves it
+    /// rather than deleting and recreating it.
+    #[test]
+    fn a_pfs3_case_only_rename_keeps_the_file_its_content_and_its_anode_and_lists_it_under_the_new_case(
+    ) {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            // A non-default protection, so "protection survives" is not
+            // trivially true of every freshly created file.
+            w.update_dir_entry_protection(PFS3_ROOT, "File", 0x0d)
+                .unwrap();
+        }
+        let before = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.lookup("File").unwrap().unwrap()
+        };
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.rename_in(PFS3_ROOT, "File", PFS3_ROOT, "FILE").unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let entries = vol.list_dir_by_anode(PFS3_ROOT).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| e.name.eq_ignore_ascii_case("FILE"))
+                .count(),
+            1,
+            "a case-only rename must leave exactly one entry, not the \
+             deleted-and-recreated (or deleted-and-gone) result: {entries:#?}"
+        );
+        assert!(
+            entries.iter().any(|e| e.name == "FILE"),
+            "the entry must list under the new case: {entries:#?}"
+        );
+        let after = vol.lookup("FILE").unwrap().unwrap();
+        assert_eq!(after.name, "FILE");
+        assert_eq!(
+            after.anode, fx.file,
+            "the renamed entry must keep its anode"
+        );
+        assert_eq!(after.protection, before.protection);
+        assert_eq!(
+            (
+                after.creation_day,
+                after.creation_minute,
+                after.creation_tick
+            ),
+            (
+                before.creation_day,
+                before.creation_minute,
+                before.creation_tick
+            ),
+            "a case-only rename must not touch the entry's own creation date"
+        );
+        assert_eq!(after.comment, before.comment);
+        assert_eq!(
+            vol.read_file("FILE").unwrap(),
+            pfs3_bytes(1, 700),
+            "a case-only rename must not touch the file's content"
+        );
+    }
+
+    /// **ART-322.** A rename to the identical name, same case, is a no-op
+    /// success: the destination is once again the source itself, so nothing
+    /// is deleted, and here nothing is written at all — the committed state
+    /// (reserved area, tree, free counts, deldir) is byte-for-byte what it
+    /// was. pfs3aio's own `RenameAndMove` was read (`directory.c:2064-2076`)
+    /// but not traced past `ChangeDirEntry` for this exact sub-case, so this
+    /// is ART's own choice of ending, not a claim about pfs3aio's.
+    #[test]
+    fn a_pfs3_rename_to_the_identical_name_is_a_no_op_success() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        let before_writes = dev.write_count();
+        let (raw_before, facts_before) = pfs3_committed_state(&dev);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.rename_in(PFS3_ROOT, "File", PFS3_ROOT, "File").unwrap();
+        }
+        assert_eq!(
+            dev.write_count(),
+            before_writes,
+            "a rename to the identical name wrote to the device"
+        );
+        let (raw_after, facts_after) = pfs3_committed_state(&dev);
+        assert_eq!(facts_after, facts_before);
+        assert_eq!(raw_after, raw_before);
+    }
+
+    /// **ART-322, the case that must keep replacing.** A same-directory
+    /// rename whose destination name differs only in case from a *different*
+    /// entry (a different anode) is not the same-entry case: the destination
+    /// is still replaced, exactly as before this fix.
+    #[test]
+    fn a_pfs3_rename_over_a_different_entry_whose_name_differs_only_in_case_still_replaces_it() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let dst_anode_before = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.lookup("Dst").unwrap().unwrap().anode
+        };
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            // "dst" differs from the existing "Dst" only in case, but "File"
+            // is a different entry (a different anode): ART-322's
+            // same-entry check must not fire here.
+            w.rename_in(PFS3_ROOT, "File", PFS3_ROOT, "dst").unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let entries = vol.list_dir_by_anode(PFS3_ROOT).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| e.name.eq_ignore_ascii_case("dst"))
+                .count(),
+            1,
+            "{entries:#?}"
+        );
+        let after = vol.lookup("dst").unwrap().unwrap();
+        assert_eq!(after.anode, fx.file, "the renamed File must be at dst");
+        assert_ne!(
+            after.anode, dst_anode_before,
+            "the old Dst's anode must not remain"
+        );
+        assert_eq!(vol.read_file("dst").unwrap(), pfs3_bytes(1, 700));
+        assert!(vol.lookup("File").unwrap().is_none());
     }
 
     #[test]
