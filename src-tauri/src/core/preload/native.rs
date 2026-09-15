@@ -389,8 +389,8 @@ pub(crate) fn pfs3_protection(protection: u32) -> CoreResult<u8> {
 // ---------------------------------------------------------------------------
 
 /// Which Amiga area a `slot` names. `None` is the plain-HDF case: one area at
-/// offset zero, the same convention `core/preload/mod.rs::mbr_slot_of` uses in
-/// the other direction.
+/// offset zero, the same convention `AmigaArea::mbr_slot` (`core/card/mod.rs`)
+/// carries in the other direction (ART-321).
 pub(crate) fn area_for_slot(card: &CardImage, slot: Option<usize>) -> CoreResult<&AmigaArea> {
     match slot {
         None => card.areas.first().ok_or_else(|| CoreError::Malformed {

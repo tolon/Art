@@ -429,8 +429,11 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
         }
 
         // Which MBR slot the disk sits in, so a tool can be pointed at the
-        // RDB *inside* the card rather than at byte zero.
-        chosen.push((wanted, part, mbr_slot_of(&card, wanted.area - 1)));
+        // RDB *inside* the card rather than at byte zero. Carried on the area
+        // itself (ART-321) rather than derived from its position in
+        // `card.areas`, which can be shorter than the card's own MBR when an
+        // earlier area could not be read.
+        chosen.push((wanted, part, area.mbr_slot));
     }
 
     // One RDB edit per run (decision 1): the DosType it is for, once made.
@@ -502,12 +505,13 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
                 continue;
             }
             // The first area carrying the DosType — the record the gate above
-            // read (decision 1).
+            // read (decision 1). Its own carried slot (ART-321), not one
+            // re-derived from where it sits in `card.areas`.
             let target_slot = card
                 .areas
                 .iter()
-                .position(|area| area.rdb.provides_file_system(part.dostype))
-                .and_then(|index| mbr_slot_of(&card, index));
+                .find(|area| area.rdb.provides_file_system(part.dostype))
+                .and_then(|area| area.mbr_slot);
             let card_version = card
                 .file_systems()
                 .iter()
@@ -746,18 +750,6 @@ pub(crate) fn step_label(step: &PreloadStep) -> String {
     }
 }
 
-/// Which MBR slot the `n`th Amiga disk occupies.
-///
-/// `None` for a plain hard-disk image, which has no partition table and whose
-/// RDB is simply at the start.
-fn mbr_slot_of(card: &crate::core::card::CardImage, area_index: usize) -> Option<usize> {
-    card.mbr
-        .as_ref()?
-        .amiga_areas()
-        .get(area_index)
-        .map(|part| part.slot_number())
-}
-
 /// DosTypes Kickstart mounts itself, which need nothing in the RDB.
 fn kickstart_carries(dostype: u32) -> bool {
     dostype & 0xFFFF_FF00 == 0x444F_5300 && (dostype & 0xFF) <= 7
@@ -775,12 +767,105 @@ fn driver_name(driver: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::mbr::SECTOR_BYTES;
     use crate::core::preload::embed::DriverVersion;
-    use crate::core::rdb::{AmigaHardDiskFs, FileSystemSpec, PartitionSpec};
+    use crate::core::rdb::{create_rdb_layout, AmigaHardDiskFs, FileSystemSpec, PartitionSpec};
     use crate::core::rdbedit::fixtures::{hunk_driver, named_driver};
 
     fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
         crate::core::ScratchDir::pair("art-preload", tag)
+    }
+
+    /// A card with two `0x76` MBR areas: the first carries no readable RDB (a
+    /// zeroed area — no `RDSK`), the second is a real, readable `DOS\0`
+    /// partition. `read_card`'s `card.areas` therefore holds exactly **one**
+    /// area — the card's own **second** MBR entry — and this is ART-321's
+    /// shape: an index derived by position into `card.areas` would name that
+    /// area slot 1, when the card's own table says slot 2.
+    fn card_with_unreadable_first_area(dir: &Path) -> PathBuf {
+        let path = dir.join("card.hdf");
+        let second = create_rdb_layout(
+            64 * 1024 * 1024,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        let first_area_len = second.blocks.len();
+
+        let base_a = 1_048_576u64;
+        let base_b = base_a + 4 * 1024 * 1024;
+        let end = base_b + second.blocks.len() as u64;
+
+        let mut image = vec![0u8; end as usize];
+        image[510] = 0x55;
+        image[511] = 0xAA;
+        let write_entry = |image: &mut Vec<u8>, slot: usize, ptype: u8, lba: u32, count: u32| {
+            let at = 446 + slot * 16;
+            image[at + 4] = ptype;
+            image[at + 8..at + 12].copy_from_slice(&lba.to_le_bytes());
+            image[at + 12..at + 16].copy_from_slice(&count.to_le_bytes());
+        };
+        // Slot 1: the FAT32 boot partition.
+        write_entry(&mut image, 0, 0x0C, 2048, 2048);
+        // Slot 2: the first Amiga area — left zeroed, so it has no `RDSK` and
+        // `read_card` skips it.
+        write_entry(
+            &mut image,
+            1,
+            0x76,
+            (base_a / SECTOR_BYTES) as u32,
+            (first_area_len as u64 / SECTOR_BYTES) as u32,
+        );
+        // Slot 3: the second Amiga area — a real, readable RDB.
+        write_entry(
+            &mut image,
+            2,
+            0x76,
+            (base_b / SECTOR_BYTES) as u32,
+            (second.blocks.len() as u64 / SECTOR_BYTES) as u32,
+        );
+        image[base_b as usize..base_b as usize + second.blocks.len()]
+            .copy_from_slice(&second.blocks);
+
+        std::fs::write(&path, &image).unwrap();
+        path
+    }
+
+    /// **ART-321.** The card's first `0x76` area is unreadable, so
+    /// `card.areas` holds only its second one — but that area's own MBR entry
+    /// is slot 3 (the FAT32 boot partition is slot 1, the unreadable Amiga
+    /// area is slot 2), not slot 1. A slot derived by *position* in
+    /// `card.areas` would send the format to the wrong disk; the plan must
+    /// carry the area's own slot instead.
+    #[test]
+    fn a_format_uses_the_readable_areas_own_mbr_slot_when_an_earlier_area_is_unreadable() {
+        let (_guard, dir) = scratch("unreadable-first-area");
+        let image = card_with_unreadable_first_area(&dir);
+
+        let made = plan(&PreloadRequest {
+            image,
+            driver: None,
+            partitions: one(1, "Work", None),
+            rdb_backup: None,
+        })
+        .unwrap();
+
+        assert_eq!(
+            made.steps,
+            vec![PreloadStep::FormatPartition {
+                slot: Some(3),
+                index: 1,
+                drive_name: "DH0".into(),
+                volume_name: "Work".into(),
+            }]
+        );
     }
 
     /// A card with one partition of `fs`, and no filesystem driver in its RDB.

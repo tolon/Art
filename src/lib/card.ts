@@ -44,6 +44,9 @@ export interface AmigaArea {
   /** What the table says it is; 0 for a plain HDF, where the answer is
    *  "the rest of the file". */
   length_bytes: number;
+  /** The slot this area's own `0x76` entry holds in the card's MBR, from
+   *  one. Null for a plain HDF, which has no partition table (ART-321). */
+  mbr_slot: number | null;
   rdb: {
     partitions: ParsedPartition[];
     file_systems: ParsedFileSystem[];
