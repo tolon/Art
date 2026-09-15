@@ -1,7 +1,9 @@
 //! PFS3 volume: top-level read-only access to a PFS3 partition.
 //!
 //! Modified by ART on 2026-09-14, the final review (M2): `list_deldir` passes
-//! the volume's own `MODE_LARGEFILE` flag into `DelDirEntry::parse`; on
+//! the volume's largefile mode into `DelDirEntry::parse` — since the scoped
+//! re-review's follow-up 1 `Rootblock::has_largefile`, `MODE_LARGEFILE` with
+//! `MODE_DIR_EXTENSION`, where it was `MODE_LARGEFILE` alone; on
 //! 2026-09-14 (ART-319): `from_device`'s own parse is shared with `reload`,
 //! which `writer::Writer` uses to discard back to the last successful commit;
 //! on 2026-09-15 (the scoped re-review's follow-ups 1 and 6): `list_dir`,

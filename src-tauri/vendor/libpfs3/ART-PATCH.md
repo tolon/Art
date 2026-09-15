@@ -437,6 +437,9 @@ M3, M5; report `fix-wave-report.md` beside it):
       `entry_in`), not the reader's listing; `rename_in` no longer takes a destination directory it cannot read for
       one without the name. Not changed: a directory block that does not carry the `DB` id is still skipped by both
       walks, and a comment running past its entry still reads as empty.
+    - *Wording only (the third scoped re-review's Minor 3, `src/volume.rs`).* The module doc still said `list_deldir`
+      passes "the volume's own `MODE_LARGEFILE` flag"; it now names `Rootblock::has_largefile`, `MODE_LARGEFILE`
+      with `MODE_DIR_EXTENSION`. No code changed, so the version stays `0.1.3+art.11`.
     - ART's tests and their mutations are in `docs/ISSUES.md` under ART-324 and ART-330.
 
 ## Re-vendoring
@@ -1621,14 +1624,16 @@ index 1b5c15b..c8b92bb 100644
  
  /// Return the current time as an Amiga datestamp (days, minutes, ticks).
 diff --git a/src/volume.rs b/src/volume.rs
-index 757c2f9..2b9ff79 100644
+index 757c2f9..9ea9448 100644
 --- a/src/volume.rs
 +++ b/src/volume.rs
-@@ -1,4 +1,13 @@
+@@ -1,4 +1,15 @@
  //! PFS3 volume: top-level read-only access to a PFS3 partition.
 +//!
 +//! Modified by ART on 2026-09-14, the final review (M2): `list_deldir` passes
-+//! the volume's own `MODE_LARGEFILE` flag into `DelDirEntry::parse`; on
++//! the volume's largefile mode into `DelDirEntry::parse` — since the scoped
++//! re-review's follow-up 1 `Rootblock::has_largefile`, `MODE_LARGEFILE` with
++//! `MODE_DIR_EXTENSION`, where it was `MODE_LARGEFILE` alone; on
 +//! 2026-09-14 (ART-319): `from_device`'s own parse is shared with `reload`,
 +//! which `writer::Writer` uses to discard back to the last successful commit;
 +//! on 2026-09-15 (the scoped re-review's follow-ups 1 and 6): `list_dir`,
@@ -1638,7 +1643,7 @@ index 757c2f9..2b9ff79 100644
  
  use std::path::Path;
  
-@@ -35,6 +44,23 @@ impl Volume {
+@@ -35,6 +46,23 @@ impl Volume {
  
      /// Open a PFS3 volume from an already-opened block device.
      pub fn from_device(dev: Box<dyn BlockDevice>) -> Result<Self> {
@@ -1662,7 +1667,7 @@ index 757c2f9..2b9ff79 100644
          let mut buf = vec![0u8; 512];
          dev.read_block(ROOTBLOCK, &mut buf)?;
          let rb = Rootblock::parse(&buf)?;
-@@ -52,7 +78,7 @@ impl Volume {
+@@ -52,7 +80,7 @@ impl Volume {
          Self::validate_rbs(&rootblock)?;
          let rootblock_ext = if rootblock.has_extension() {
              let rbs = rootblock.reserved_blksize;
@@ -1671,7 +1676,7 @@ index 757c2f9..2b9ff79 100644
              Some(RootblockExt::parse(data)?)
          } else {
              None
-@@ -61,14 +87,25 @@ impl Volume {
+@@ -61,14 +89,25 @@ impl Volume {
          let anodes = AnodeReader::new(&rootblock, rootblock_ext.as_ref());
          let bitmap = BitmapReader::new(&rootblock);
  
@@ -1705,7 +1710,7 @@ index 757c2f9..2b9ff79 100644
      }
  
      /// Open a PFS3 volume from a file.
-@@ -217,15 +254,29 @@ impl Volume {
+@@ -217,15 +256,29 @@ impl Volume {
      // --- Directory operations ---
  
      /// List directory entries at the given path.
@@ -1736,7 +1741,7 @@ index 757c2f9..2b9ff79 100644
      }
  
      /// List directory entries by anode number.
-@@ -236,10 +287,15 @@ impl Volume {
+@@ -236,10 +289,15 @@ impl Volume {
              self.dev.as_ref(),
              &mut self.cache,
              self.rootblock.reserved_blksize,
@@ -1752,7 +1757,7 @@ index 757c2f9..2b9ff79 100644
      pub fn lookup(&mut self, path: &str) -> Result<Option<DirEntry>> {
          dir::resolve_path(
              path,
-@@ -247,6 +303,7 @@ impl Volume {
+@@ -247,6 +305,7 @@ impl Volume {
              self.dev.as_ref(),
              &mut self.cache,
              self.rootblock.reserved_blksize,
@@ -1760,7 +1765,7 @@ index 757c2f9..2b9ff79 100644
          )
      }
  
-@@ -380,6 +437,8 @@ impl Volume {
+@@ -380,6 +439,8 @@ impl Volume {
          };
          let rbs = self.rootblock.reserved_blksize;
          let entries_per_block = deldir_entries_per_block(rbs);
@@ -1769,7 +1774,7 @@ index 757c2f9..2b9ff79 100644
          let mut result = Vec::new();
          for &blk in &rext.deldirblocks {
              if blk == 0 {
-@@ -394,7 +453,8 @@ impl Volume {
+@@ -394,7 +455,8 @@ impl Volume {
              for i in 0..entries_per_block {
                  let off = DELDIR_HEADER_SIZE + i * DELDIR_ENTRY_SIZE;
                  if off + DELDIR_ENTRY_SIZE <= data.len()

@@ -780,6 +780,50 @@ fn long_name_refusal(entries: &[CopyEntry], max_bytes: usize) -> Option<CoreErro
     })
 }
 
+/// The third scoped re-review's Minor 1 (ART-324): every file in `entries`
+/// whose size `writer`'s volume cannot record — asked of
+/// `Writer::check_file_size`, the rule `write_file_in` applies too — named
+/// with its size, bounded the way [`non_ascii_refusal`] bounds its list, or
+/// `None`. The sentence says what to do: ART's own PFS3 format
+/// (`libpfs3::format`) never sets `MODE_LARGEFILE`, so formatting again does
+/// not help; the file has to be left out.
+fn too_large_refusal(
+    writer: &libpfs3::writer::Writer,
+    entries: &[CopyEntry],
+    volume_label: &str,
+    source: &Path,
+) -> Option<CoreError> {
+    let offending: Vec<&CopyEntry> = entries
+        .iter()
+        .filter(|e| !e.is_dir && writer.check_file_size(&e.relative, e.size).is_err())
+        .collect();
+    if offending.is_empty() {
+        return None;
+    }
+    let more = offending.len().saturating_sub(MAX_NAMED_NON_ASCII);
+    let mut named = offending
+        .iter()
+        .take(MAX_NAMED_NON_ASCII)
+        .map(|e| format!("'{}' ({} bytes)", e.relative, e.size))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if more > 0 {
+        named.push_str(&format!(" and {more} more"));
+    }
+    let (each, that) = if offending.len() == 1 {
+        ("", "that file")
+    } else {
+        ("each ", "those files")
+    };
+    Some(CoreError::InvalidInput(format!(
+        "{named} in '{src}' cannot {each}be copied to '{volume_label}': a file on it can be \
+         at most 4294967295 bytes, because this PFS3 partition is not formatted for large files, \
+         and ART's own PFS3 format does not make large-file partitions. Nothing was copied. Leave \
+         {that} out of '{src}' and run the copy again.",
+        src = source.display()
+    )))
+}
+
 /// Flatten `source` into an ordered list: a directory always appears before
 /// anything inside it, which is what lets `copy_in` look its parent's anode
 /// or header block up in a map built as it goes, rather than re-walking the
@@ -921,6 +965,20 @@ fn copy_in_pfs3(
         return Err(refusal);
     }
 
+    // Opening the writer reads the two bitmaps and writes nothing; it is
+    // opened here so the size check below asks the writer's own rule.
+    let mut writer = open_pfs3_writer(vol, clock)?;
+
+    // The third scoped re-review's Minor 1 (ART-324): a file this volume
+    // cannot record the size of is refused by name, from the size
+    // `collect_entries` took from its metadata — before the fit check, which
+    // would otherwise answer with a byte count, and before the loop below
+    // reads any host file whole into memory. `write_file_in` asks the same
+    // `check_file_size`, but only after that read.
+    if let Some(refusal) = too_large_refusal(&writer, entries, volume_label, source) {
+        return Err(refusal);
+    }
+
     // Binding requirement 5: the fit check, before the first byte, with real
     // numbers — and a real bound, not a byte sum that fails open. PFS3 draws
     // file data from `blocksfree` in whole blocks (`write_file_in_no_commit`'s
@@ -932,14 +990,14 @@ fn copy_in_pfs3(
     // checked on their own instead, one reserved block per entry, which is
     // never less than PFS3 actually needs (most entries reuse an
     // already-allocated anode block and consume none).
-    let bs = u64::from(vol.block_size());
+    let bs = u64::from(writer.vol.block_size());
     let data_blocks_needed: u64 = entries
         .iter()
         .filter(|e| !e.is_dir)
         .map(|e| e.size.div_ceil(bs).max(1))
         .sum();
     let data_bytes_needed = data_blocks_needed * bs;
-    let free_bytes = u64::from(vol.free_blocks()) * bs;
+    let free_bytes = u64::from(writer.vol.free_blocks()) * bs;
     if data_bytes_needed > free_bytes {
         return Err(CoreError::InvalidInput(format!(
             "'{}' needs {data_bytes_needed} bytes but '{volume_label}' only has {free_bytes} \
@@ -948,7 +1006,7 @@ fn copy_in_pfs3(
         )));
     }
     let reserved_needed = entries.len() as u64;
-    let reserved_free = u64::from(vol.rootblock.reserved_free);
+    let reserved_free = u64::from(writer.vol.rootblock.reserved_free);
     if reserved_needed > reserved_free {
         return Err(CoreError::InvalidInput(format!(
             "'{}' needs room for {reserved_needed} new file(s) and folder(s), but \
@@ -957,7 +1015,6 @@ fn copy_in_pfs3(
         )));
     }
 
-    let mut writer = open_pfs3_writer(vol, clock)?;
     let mut summary = CopySummary::default();
     let mut anode_of: HashMap<String, u32> = HashMap::new();
     anode_of.insert(String::new(), libpfs3::ondisk::ANODE_ROOTDIR);
@@ -5481,6 +5538,102 @@ mod tests {
                     .to_string()
             )
         );
+    }
+
+    /// **The third scoped re-review's Minor 1 (ART-324), before the read.**
+    /// `copy_in_pfs3` read each host file whole (`std::fs::read`) and only
+    /// then did `write_file_in` ask `check_file_size`, so a file of 4 GiB or
+    /// more was loaded into memory before it was refused, with a sentence that
+    /// did not say what to do. No test can hand the copy 4 GiB: the seam is
+    /// `CopyEntry::size`, the size `collect_entries` takes from the file's
+    /// metadata, and the entry's host file does not exist, so a copy that
+    /// reads before it refuses ends in "not found". Three arms: a small
+    /// volume, where the fit check would otherwise speak first; a 5 100 MiB
+    /// volume, where free space lets the copy reach the read; and the control,
+    /// a byte under the limit on that volume, which must still reach the read —
+    /// the refusal is about the size, not about a missing file.
+    #[test]
+    fn a_pfs3_copy_refuses_a_file_of_4_gib_or_more_by_name_before_reading_it() {
+        let (_guard, small) = formatted_pds3_image();
+        let (_guard, large) = formatted_large_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-too-large");
+        let copy = |image: &Path, sizes: &[u64]| -> String {
+            let planned = plan_copy(image, None, "DH0", &tree).unwrap();
+            let names = ["Huge.hdf", "Bigger.hdf"];
+            let entries: Vec<CopyEntry> = sizes
+                .iter()
+                .zip(names)
+                .map(|(&size, name)| CopyEntry {
+                    relative: name.into(),
+                    host_path: tree.join(name),
+                    is_dir: false,
+                    size,
+                })
+                .collect();
+            let result = copy_in_pfs3(
+                image,
+                planned.offset,
+                planned.length,
+                planned.block_size,
+                "DH0",
+                &tree,
+                &entries,
+                &NoProgress,
+                NativeFormatter::UTC.clock,
+            );
+            let listed = libpfs3::volume::Volume::open(image, partition_offset(image))
+                .unwrap()
+                .list_dir("")
+                .unwrap()
+                .len();
+            match result {
+                Ok(_) => format!("Ok; {listed} listed"),
+                Err(CoreError::Io(io)) => format!("io {:?}; {listed} listed", io.kind()),
+                Err(err) => format!("{}: {err}; {listed} listed", err.code()),
+            }
+        };
+        let four_gib = 1u64 << 32;
+        let got = vec![
+            ("small volume, 4 GiB", copy(&small, &[four_gib])),
+            ("5 100 MiB volume, 4 GiB", copy(&large, &[four_gib])),
+            (
+                "5 100 MiB volume, a byte less",
+                copy(&large, &[four_gib - 1]),
+            ),
+            (
+                "small volume, two files",
+                copy(&small, &[four_gib, four_gib + 1]),
+            ),
+        ];
+        let refusal = format!(
+            "ART-INPUT-INVALID: invalid input: 'Huge.hdf' (4294967296 bytes) in '{src}' cannot be \
+             copied to 'DH0': a file on it can be at most 4294967295 bytes, because this PFS3 \
+             partition is not formatted for large files, and ART's own PFS3 format does not make \
+             large-file partitions. Nothing was copied. Leave that file out of '{src}' and run the \
+             copy again.; 0 listed",
+            src = tree.display()
+        );
+        let expected = vec![
+            ("small volume, 4 GiB", refusal.clone()),
+            ("5 100 MiB volume, 4 GiB", refusal),
+            (
+                "5 100 MiB volume, a byte less",
+                "io NotFound; 0 listed".to_string(),
+            ),
+            (
+                "small volume, two files",
+                format!(
+                    "ART-INPUT-INVALID: invalid input: 'Huge.hdf' (4294967296 bytes), \
+                     'Bigger.hdf' (4294967297 bytes) in '{src}' cannot each be copied to 'DH0': a \
+                     file on it can be at most 4294967295 bytes, because this PFS3 partition is \
+                     not formatted for large files, and ART's own PFS3 format does not make \
+                     large-file partitions. Nothing was copied. Leave those files out of '{src}' \
+                     and run the copy again.; 0 listed",
+                    src = tree.display()
+                ),
+            ),
+        ];
+        assert_eq!(got, expected);
     }
 
     /// **The scoped re-review's follow-up 1, the writer's half.** On a volume
