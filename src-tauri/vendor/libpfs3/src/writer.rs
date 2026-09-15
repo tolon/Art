@@ -20,6 +20,9 @@
 //! on 2026-09-14 (ART-319): every public mutator discards back to the last
 //! successful commit on error, and a commit that fails part-way locks the
 //! writer;
+//! Modified by ART on 2026-09-15 (ART-319's disclosed gaps, third debt round):
+//! `overwrite_file_in` is copy-on-write, and `rename_in` over an existing
+//! destination is one commit;
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -188,7 +191,7 @@ impl Writer {
     /// device may already be half-written), this discards back to the last
     /// successful commit and returns the original error unchanged. Calling
     /// this from within an already-guarded call (a path wrapper calling its
-    /// `_in` twin, `rename_in` calling `delete_in`) is harmless: a reload
+    /// `_in` twin, `write_file_in` calling `overwrite_file_in`) is harmless: a reload
     /// twice reads the identical, still-current state a second time, and an
     /// inner call that already committed (its own `update_rootblock` ran) is
     /// simply what "the last commit" now is for the outer discard to reload.
@@ -573,8 +576,21 @@ impl Writer {
         self.update_rootblock()
     }
 
-    /// Overwrite an existing file's data in-place, reusing its anode.
+    /// Overwrite an existing file's data, reusing its anode.
     /// The anode number stays stable — safe for FUSE inode caching.
+    ///
+    /// ART (2026-09-15, ART-319's first disclosed gap): **copy-on-write.**
+    /// The new content goes only into newly allocated free blocks; the file's
+    /// head anode is rewritten to describe them, the old chain's other
+    /// anodes are cleared and its data blocks freed, and the directory
+    /// entry's size is set — all staged, all made true by the one
+    /// `update_rootblock` commit. Until that commit nothing of the old file
+    /// has been written, so an error anywhere before it is discarded by
+    /// `guarded` and the device still holds the old file. **The cost:** the
+    /// whole new content needs free space of its own. An overwrite that would
+    /// fit only by reusing the file's own blocks is refused with
+    /// `Error::DiskFull`, before any block is written, and the file keeps its
+    /// old content. 0.1.3 wrote the new data over the old blocks first.
     pub fn overwrite_file_in(
         &mut self,
         parent_anode: u32,
@@ -595,111 +611,53 @@ impl Writer {
         let bs = self.vol.block_size() as usize;
         let new_blocks_needed = data.len().div_ceil(bs).max(1) as u32;
 
-        // Get existing chain
+        // The old chain, as the last commit left it.
         let old_chain =
             self.vol
                 .anodes
                 .get_chain(file_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
-        let old_total: u32 = old_chain.iter().map(|a| a.clustersize).sum();
 
-        // Write data to existing blocks (reuse as many as possible)
-        let mut written = 0usize;
-        let mut blocks_used = 0u32;
+        // ART (ART-319's first gap): copy-on-write. The old file's blocks are
+        // still allocated here, so none of them can be handed out; a volume
+        // without room for the whole new content is refused now, before any
+        // block is written.
+        let new_blocks = self.alloc_data_blocks(new_blocks_needed)?;
         let mut sector = vec![0u8; bs];
+        for (i, &blk) in new_blocks.iter().enumerate() {
+            sector.fill(0);
+            let start = i * bs;
+            if start < data.len() {
+                let end = (start + bs).min(data.len());
+                sector[..end - start].copy_from_slice(&data[start..end]);
+            }
+            self.vol.dev.write_block(blk as u64, &sector)?;
+        }
+        self.vol.dev.flush()?; // data durable before metadata
+
+        // The new chain under the same head anode: the extents after the first
+        // get anodes of their own, allocated while the old chain's are still
+        // taken, so none of them can be one this commit is about to clear.
+        let extents = block_extents(&new_blocks);
+        let mut next = ANODE_EOF;
+        for &(start, count) in extents.iter().skip(1).rev() {
+            next = self.alloc_anode(count, start, next)?;
+        }
+        // Only now, after the allocation, are the old blocks freed — freed
+        // first, this very call could have taken them back for the new data.
         for an in &old_chain {
             for i in 0..an.clustersize {
-                if blocks_used >= new_blocks_needed {
-                    break;
-                }
-                sector.fill(0);
-                let start = written;
-                let end = (start + bs).min(data.len());
-                if start < data.len() {
-                    sector[..end - start].copy_from_slice(&data[start..end]);
-                }
-                self.vol
-                    .dev
-                    .write_block(an.blocknr as u64 + i as u64, &sector)?;
-                written += bs;
-                blocks_used += 1;
-            }
-            if blocks_used >= new_blocks_needed {
-                break;
+                self.free_data_block(an.blocknr + i)?;
             }
         }
-        self.vol.dev.flush()?;
-
-        if new_blocks_needed <= old_total {
-            // Shrink: free excess blocks and truncate the anode chain
-            self.truncate_anode_chain(file_anode, new_blocks_needed)?;
-        } else {
-            // Grow: allocate additional blocks and extend the chain
-            let extra = new_blocks_needed - old_total;
-            let new_blocks = self.alloc_data_blocks(extra)?;
-            for &blk in &new_blocks {
-                sector.fill(0);
-                let start = written;
-                let end = (start + bs).min(data.len());
-                if start < data.len() {
-                    sector[..end - start].copy_from_slice(&data[start..end]);
-                }
-                self.vol.dev.write_block(blk as u64, &sector)?;
-                written += bs;
-            }
-            self.vol.dev.flush()?;
-            // Extend the existing chain with new blocks
-            let new_chain_head = self.create_anode_chain(&new_blocks)?;
-            self.append_to_anode_chain(file_anode, new_chain_head)?;
+        for an in old_chain.iter().skip(1) {
+            self.clear_single_anode(an.nr)?;
         }
+        let (start, count) = extents[0];
+        self.write_anode_fields(file_anode, count, start, next)?;
 
         // Update file size in the directory entry
         self.update_dir_entry_size(parent_anode, name, data.len() as u64)?;
         self.update_rootblock()
-    }
-
-    /// Truncate an anode chain to `keep_blocks` total blocks.
-    /// Frees excess data blocks and anode slots.
-    fn truncate_anode_chain(&mut self, head: u32, keep_blocks: u32) -> Result<()> {
-        let chain = self
-            .vol
-            .anodes
-            .get_chain(head, self.vol.dev.as_ref(), &mut self.vol.cache)?;
-        let mut remaining = keep_blocks;
-
-        for (idx, an) in chain.iter().enumerate() {
-            if remaining == 0 {
-                self.free_and_clear_anodes(&chain[idx..])?;
-                return Ok(());
-            } else if remaining < an.clustersize {
-                // Partial: free tail blocks, shrink clustersize, set next=EOF
-                for i in remaining..an.clustersize {
-                    self.free_data_block(an.blocknr + i)?;
-                }
-                self.write_anode_fields(an.nr, remaining, an.blocknr, ANODE_EOF)?;
-                self.free_and_clear_anodes(&chain[idx + 1..])?;
-                return Ok(());
-            } else {
-                remaining -= an.clustersize;
-                if remaining == 0 {
-                    // This anode is the new tail — set next=EOF
-                    self.write_anode_fields(an.nr, an.clustersize, an.blocknr, ANODE_EOF)?;
-                    self.free_and_clear_anodes(&chain[idx + 1..])?;
-                    return Ok(());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Free all data blocks and clear anode slots for a slice of anodes.
-    fn free_and_clear_anodes(&mut self, anodes: &[crate::ondisk::Anode]) -> Result<()> {
-        for an in anodes {
-            for i in 0..an.clustersize {
-                self.free_data_block(an.blocknr + i)?;
-            }
-            self.clear_single_anode(an.nr)?;
-        }
-        Ok(())
     }
 
     /// Append a sub-chain to the tail of an existing anode chain.
@@ -885,6 +843,14 @@ impl Writer {
         self.update_rootblock()
     }
 
+    /// Move and/or rename an entry; an existing destination is deleted first.
+    ///
+    /// ART (2026-09-15, ART-319's second disclosed gap): **one commit.** The
+    /// destination's delete — to the deldir, exactly as `delete_in` sends a
+    /// file there — the new entry and the old entry's removal are staged
+    /// together and made true by one `update_rootblock`, so an error anywhere
+    /// is discarded by `guarded` and the destination is still there. 0.1.3
+    /// deleted the destination with `delete_in`, its own commit, first.
     pub fn rename_in(
         &mut self,
         src_parent: u32,
@@ -916,7 +882,8 @@ impl Writer {
                 .iter()
                 .any(|e| crate::util::name_eq_ci(&e.name, dst_name))
         {
-            self.delete_in(dst_parent, dst_name)?;
+            // ART (ART-319's second gap): staged, not committed on its own.
+            self.delete_in_no_commit(dst_parent, dst_name)?;
         }
 
         // Add entry in new location with new name
@@ -939,6 +906,14 @@ impl Writer {
     }
 
     fn delete_in_impl(&mut self, parent_anode: u32, name: &str) -> Result<()> {
+        self.delete_in_no_commit(parent_anode, name)?;
+        self.update_rootblock()
+    }
+
+    /// Delete without committing — caller must call update_rootblock(). ART
+    /// (ART-319's second gap): shared by `delete_in` and `rename_in`, so a
+    /// rename's destination goes exactly where a delete sends it.
+    fn delete_in_no_commit(&mut self, parent_anode: u32, name: &str) -> Result<()> {
         let entries = self.vol.list_dir_by_anode(parent_anode)?;
         let target = entries
             .iter()
@@ -964,8 +939,7 @@ impl Writer {
                 self.clear_anode_chain(target.anode)?;
             }
         }
-        self.remove_dir_entry(parent_anode, name)?;
-        self.update_rootblock()
+        self.remove_dir_entry(parent_anode, name)
     }
 
     /// ART-318: put a deleted file into the deldir as pfs3aio's `AllocDeldirSlot`
@@ -1470,18 +1444,7 @@ impl Writer {
     }
 
     fn create_anode_chain(&mut self, blocks: &[u32]) -> Result<u32> {
-        let mut clusters = Vec::new();
-        let mut i = 0usize;
-        while i < blocks.len() {
-            let start = blocks[i];
-            let mut count = 1u32;
-            while i + (count as usize) < blocks.len() && blocks[i + count as usize] == start + count
-            {
-                count += 1;
-            }
-            clusters.push((start, count));
-            i += count as usize;
-        }
+        let clusters = block_extents(blocks);
         // Allocate in reverse so we can set next pointers
         let mut next_nr = 0u32;
         for &(start, count) in clusters.iter().rev() {
@@ -1853,4 +1816,22 @@ impl Writer {
         }
         Ok((parent, filename))
     }
+}
+
+/// `blocks` as runs of consecutive block numbers, `(first, count)` each —
+/// one anode per run. Shared by `create_anode_chain` and ART's copy-on-write
+/// `overwrite_file_in` (2026-09-15); the same loop 0.1.3 had inline.
+fn block_extents(blocks: &[u32]) -> Vec<(u32, u32)> {
+    let mut clusters = Vec::new();
+    let mut i = 0usize;
+    while i < blocks.len() {
+        let start = blocks[i];
+        let mut count = 1u32;
+        while i + (count as usize) < blocks.len() && blocks[i + count as usize] == start + count {
+            count += 1;
+        }
+        clusters.push((start, count));
+        i += count as usize;
+    }
+    clusters
 }

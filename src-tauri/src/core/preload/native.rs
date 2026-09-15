@@ -16,14 +16,15 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.5`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.6`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
 //! writes it (ART-316, ART-318), pfs3aio's anode
 //! ceiling (ART-311), a caller-supplied datestamp (ART-317), and the writer
 //! returning to its last commit on error, locking rather than continuing when
-//! a commit itself fails part-way (ART-319); `ART-PATCH.md`
+//! a commit itself fails part-way (ART-319), overwriting a file copy-on-write and
+//! renaming over an existing entry in one commit (ART-319's gaps, 2026-09-15); `ART-PATCH.md`
 //! there lists each. The writer's other limits below (ART-113, ART-116) still hold.
 //!
 //! ## Embedding a driver is not a formatter's job (ART-117)
@@ -116,7 +117,7 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.5";
+const LIBPFS3_VERSION: &str = "0.1.3+art.6";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -3176,7 +3177,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter::UTC.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.5 (native, no external tool)");
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.6 (native, no external tool)");
     }
 
     /// A DosType neither family claims — ART refuses rather than guessing.
@@ -4036,5 +4037,749 @@ mod tests {
         let text = err.to_string().to_lowercase();
         assert!(text.contains("reopen"), "{err}");
         assert!(!text.contains("malformed"), "{err}");
+    }
+
+    // ---- ART-319's disclosed gaps (third debt round, item 3): copy-on-write
+    // ---- overwrite, rename in one commit, the untested mutators
+
+    /// `len` bytes that differ from block to block, starting from `seed`.
+    fn pfs3_bytes(seed: u8, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|i| seed.wrapping_add((i % 251) as u8))
+            .collect()
+    }
+
+    /// Everything a reopened `Volume` says about a PFS3 volume's last
+    /// commit: the reserved area byte for byte — with the rootblock's own
+    /// datestamp zeroed, which every commit bumps — and, as sentences, the
+    /// free counts, every entry reachable from the root with its content,
+    /// and the deldir. Data blocks outside every file are not in it: a
+    /// discarded call may have written its data into blocks that are still
+    /// free, which the last commit never mentions.
+    fn pfs3_committed_state(dev: &MemDevice) -> (Vec<u8>, Vec<String>) {
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let rb = vol.rootblock.clone();
+        let mut raw = dev.read(0, (rb.lastreserved as usize + 1) * 512);
+        let ds = rb.firstreserved as usize * 512 + libpfs3::ondisk::RB_OFF_DATESTAMP;
+        raw[ds..ds + 4].fill(0);
+        let mut facts = vec![format!(
+            "blocksfree {} (bitmap {:?}), reserved_free {} (bitmap {:?})",
+            rb.blocksfree,
+            vol.bitmap_count_free().map_err(|e| e.to_string()),
+            rb.reserved_free,
+            vol.reserved_count_free().map_err(|e| e.to_string()),
+        )];
+        let mut dirs = vec![(String::new(), libpfs3::ondisk::ANODE_ROOTDIR)];
+        while let Some((path, anode)) = dirs.pop() {
+            let entries = match vol.list_dir_by_anode(anode) {
+                Ok(entries) => entries,
+                Err(e) => {
+                    facts.push(format!("{path}/ unreadable: {e}"));
+                    continue;
+                }
+            };
+            for e in entries {
+                let full = format!("{path}/{}", e.name);
+                let content = if e.is_dir() {
+                    dirs.push((full.clone(), e.anode));
+                    Ok(Vec::new())
+                } else {
+                    vol.read_file_data(e.anode, e.file_size())
+                        .map_err(|x| x.to_string())
+                };
+                facts.push(format!(
+                    "{full} type {} anode {} size {} protection {} date {}/{}/{} content {content:?}",
+                    e.entry_type,
+                    e.anode,
+                    e.file_size(),
+                    e.protection,
+                    e.creation_day,
+                    e.creation_minute,
+                    e.creation_tick
+                ));
+            }
+        }
+        facts.push(format!(
+            "deldir {:?}",
+            vol.list_deldir()
+                .map(|d| d
+                    .iter()
+                    .map(|x| format!(
+                        "{} anode {} size {} date {}/{}/{}",
+                        x.filename,
+                        x.anode,
+                        x.file_size(),
+                        x.creation_day,
+                        x.creation_minute,
+                        x.creation_tick
+                    ))
+                    .collect::<Vec<_>>())
+                .map_err(|e| e.to_string())
+        ));
+        (raw, facts)
+    }
+
+    /// Whether data block `blk` is free in the on-disk data bitmap (a set
+    /// bit is free), read raw rather than through `libpfs3`.
+    fn pfs3_data_block_free_on_disk(dev: &MemDevice, blk: u32) -> bool {
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let rb = &vol.rootblock;
+        let rbs = usize::from(rb.reserved_blksize);
+        let bits_per_bitmap_block = (rbs as u32 / 4 - 3) * 32;
+        let rel = blk - (rb.lastreserved + 1);
+        let bmi = dev.read(u64::from(rb.bitmapindex[0]), rbs);
+        let seq = (rel / bits_per_bitmap_block) as usize;
+        let bm = dev.read(u64::from(be32(&bmi, 12 + seq * 4)), rbs);
+        let bit = rel % bits_per_bitmap_block;
+        be32(&bm, 12 + (bit / 32) as usize * 4) & (0x8000_0000 >> (bit % 32)) != 0
+    }
+
+    /// Anode `nr`'s three fields `(clustersize, blocknr, next)` as the
+    /// device holds them, read raw from a small-mode volume's first anode
+    /// block — the reading `a_failed_pfs3_delete_stages_no_deldir_entry` uses.
+    fn pfs3_raw_anode(dev: &MemDevice, nr: u32) -> (u32, u32, u32) {
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        assert!(
+            (nr as usize) < (resblk - 16) / 12,
+            "anode {nr} is past the first anode block"
+        );
+        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), resblk);
+        let ab = dev.read(u64::from(be32(&ib, 12)), resblk);
+        let at = 16 + nr as usize * 12;
+        (be32(&ab, at), be32(&ab, at + 4), be32(&ab, at + 8))
+    }
+
+    /// The anode numbers and the one directory block the mutator tests use.
+    struct Pfs3Fixture {
+        /// "File", two blocks of `pfs3_bytes(1, 700)`.
+        file: u32,
+        /// "Dir", holding "Src".
+        dir: u32,
+        /// The sector "Dir"'s one directory block starts at.
+        dir_block: u64,
+        /// "Broken": a directory whose one block no longer carries the `DB`
+        /// id, so adding an entry to it fails in `add_dir_entry` — *after*
+        /// the caller allocated what the entry needs.
+        broken: u32,
+    }
+
+    const PFS3_FIXTURE_DATE: (u16, u16, u16) = (17_000, 600, 0);
+
+    /// A 48 000-block PFS3 volume holding "File", "Dir/Src", "Dst" and
+    /// "Broken"; with the deldir on, also "Gone", deleted into deldir slot 0.
+    fn pfs3_mutator_fixture(dev: &MemDevice, deldir: bool) -> Pfs3Fixture {
+        const TOTAL: u64 = 48_000;
+        libpfs3::format::format_with_size(
+            dev,
+            TOTAL,
+            &libpfs3::format::FormatOptions {
+                volume_name: "Work".into(),
+                enable_deldir: deldir,
+                datestamp: Some(PFS3_FIXTURE_DATE),
+            },
+        )
+        .unwrap();
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+            w.write_file("File", &pfs3_bytes(1, 700)).unwrap();
+            w.create_dir("Dir").unwrap();
+            w.write_file("Dir/Src", b"source bytes").unwrap();
+            w.write_file("Dst", b"destination bytes").unwrap();
+            w.create_dir("Broken").unwrap();
+            if deldir {
+                w.write_file("Gone", b"deleted bytes").unwrap();
+                w.delete("Gone").unwrap();
+            }
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert_eq!(
+            vol.rootblock.reserved_blksize, 1024,
+            "the fixture's arithmetic"
+        );
+        let mut anode_of = |path: &str| vol.lookup(path).unwrap().unwrap().anode;
+        let (file, dir, broken) = (anode_of("File"), anode_of("Dir"), anode_of("Broken"));
+        let dir_block = u64::from(vol.get_anode_chain(dir).unwrap()[0].blocknr);
+        let broken_block = u64::from(vol.get_anode_chain(broken).unwrap()[0].blocknr);
+        let mut block = dev.read(broken_block, 1024);
+        assert_eq!(be16(&block, 0), libpfs3::ondisk::DBLKID);
+        block[0..2].fill(0);
+        dev.patch(broken_block, &block);
+        Pfs3Fixture {
+            file,
+            dir,
+            dir_block,
+            broken,
+        }
+    }
+
+    /// The discard half of ART-319, for one mutator: `op` fails part-way
+    /// with the failure `expected` names; `on_disk` checks the device right
+    /// then; then the same writer commits once more — which would publish
+    /// whatever in-memory state the failed call left behind — and the
+    /// reopened volume must be exactly the last commit before the call.
+    fn assert_pfs3_failure_leaves_the_last_commit(
+        dev: &MemDevice,
+        op: impl FnOnce(&mut libpfs3::writer::Writer) -> libpfs3::error::Result<()>,
+        expected: impl Fn(&libpfs3::error::Error) -> bool,
+        on_disk: impl FnOnce(&MemDevice),
+    ) {
+        let (raw_before, facts_before) = pfs3_committed_state(dev);
+        let committed_free = libpfs3::volume::Volume::from_device(Box::new(dev.clone()))
+            .unwrap()
+            .rootblock
+            .blocksfree;
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+        let err = op(&mut w).expect_err("the injected failure must fail the call");
+        assert!(expected(&err), "not the injected failure: {err}");
+        on_disk(dev);
+        dev.fail_from_write(u64::MAX); // disarm anything `op` armed
+        w.repair_blocksfree(committed_free)
+            .unwrap_or_else(|e| panic!("the writer must commit again after a discard: {e}"));
+        drop(w);
+        let (raw_after, facts_after) = pfs3_committed_state(dev);
+        assert_eq!(
+            facts_after, facts_before,
+            "the failed call's in-memory state reached the next commit"
+        );
+        if let Some(at) = raw_before.iter().zip(&raw_after).position(|(a, b)| a != b) {
+            panic!(
+                "the failed call's in-memory state reached the next commit: the reserved area \
+                 differs from the last commit, first at sector {}",
+                at / 512
+            );
+        }
+    }
+
+    /// The lock half of ART-319, for one mutator: the device refuses the
+    /// first write after `op`'s own `data_writes` data-block writes — its
+    /// commit's first write — and the next call must refuse with
+    /// `CommitFailed` without reaching the device.
+    fn assert_pfs3_commit_failure_locks(
+        dev: &MemDevice,
+        data_writes: u64,
+        op: impl FnOnce(&mut libpfs3::writer::Writer) -> libpfs3::error::Result<()>,
+    ) {
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+        let before = dev.write_count();
+        dev.fail_from_write(before + data_writes + 1);
+        let err = op(&mut w).expect_err("the refused commit must fail the call");
+        assert!(
+            matches!(err, libpfs3::error::Error::BlockOutOfRange(_)),
+            "expected the commit's own write to be refused, got: {err}"
+        );
+        let after = dev.write_count();
+        assert_eq!(
+            after,
+            before + data_writes + 1,
+            "the call stops at the refused write"
+        );
+        let err2 = w.repair_reserved_free(0).unwrap_err();
+        assert!(
+            matches!(err2, libpfs3::error::Error::CommitFailed),
+            "the next operation must return the lock error, got: {err2}"
+        );
+        assert_eq!(
+            dev.write_count(),
+            after,
+            "the device received a write after the writer should have locked"
+        );
+    }
+
+    fn is_corrupt(e: &libpfs3::error::Error) -> bool {
+        matches!(e, libpfs3::error::Error::Corrupt(_))
+    }
+
+    fn is_not_found(e: &libpfs3::error::Error) -> bool {
+        matches!(e, libpfs3::error::Error::NotFound(_))
+    }
+
+    const PFS3_ROOT: u32 = libpfs3::ondisk::ANODE_ROOTDIR;
+
+    /// **Item 3 (ART-319's first disclosed gap).** An overwrite that fails
+    /// after its new data is written but before its commit — here the
+    /// directory entry it names is not there, which `update_dir_entry_size`
+    /// finds only after the data and the anode chain are done — must leave
+    /// the old content on disk. 0.1.3 wrote the new data over the file's
+    /// own blocks first, so `guarded`'s discard restored the metadata over
+    /// blocks that already held the new bytes.
+    #[test]
+    fn a_failed_pfs3_overwrite_keeps_the_old_content_on_disk() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let d = dev.clone();
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.overwrite_file_in(PFS3_ROOT, "NoSuchName", fx.file, &pfs3_bytes(9, 700)),
+            is_not_found,
+            |_| {
+                let mut vol = libpfs3::volume::Volume::from_device(Box::new(d)).unwrap();
+                assert!(
+                    vol.read_file("File").unwrap() == pfs3_bytes(1, 700),
+                    "a failed overwrite destroyed the old content"
+                );
+            },
+        );
+    }
+
+    /// **Item 3.** A successful overwrite: the new content, under the same
+    /// anode number (the method's contract), in blocks the old file did not
+    /// use; the old blocks free in the on-disk bitmap, and `blocksfree`
+    /// agreeing with it.
+    #[test]
+    fn a_pfs3_overwrite_writes_new_blocks_and_frees_the_old_ones_in_its_commit() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let (old_blocks, free_before) = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let chain = vol.get_anode_chain(fx.file).unwrap();
+            let blocks: Vec<u32> = chain
+                .iter()
+                .flat_map(|a| (0..a.clustersize).map(move |i| a.blocknr + i))
+                .collect();
+            (blocks, vol.rootblock.blocksfree)
+        };
+        assert_eq!(old_blocks.len(), 2);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.overwrite_file_in(PFS3_ROOT, "File", fx.file, &pfs3_bytes(9, 1300))
+                .unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert!(vol.read_file("File").unwrap() == pfs3_bytes(9, 1300));
+        assert_eq!(vol.lookup("File").unwrap().unwrap().anode, fx.file);
+        let new_blocks: Vec<u32> = vol
+            .get_anode_chain(fx.file)
+            .unwrap()
+            .iter()
+            .flat_map(|a| (0..a.clustersize).map(move |i| a.blocknr + i))
+            .collect();
+        assert_eq!(new_blocks.len(), 3);
+        for blk in &old_blocks {
+            assert!(
+                pfs3_data_block_free_on_disk(&dev, *blk),
+                "old block {blk} is not free after the overwrite (new blocks {new_blocks:?})"
+            );
+        }
+        for blk in &new_blocks {
+            assert!(
+                !pfs3_data_block_free_on_disk(&dev, *blk),
+                "new block {blk} is free"
+            );
+        }
+        let bitmap_free = vol.bitmap_count_free().unwrap();
+        assert_eq!(vol.rootblock.blocksfree, bitmap_free);
+        assert_eq!(vol.rootblock.blocksfree, free_before + 2 - 3);
+    }
+
+    /// **Item 3.** The old chain's other anodes are freed in the same
+    /// commit — a file of two extents overwritten by one block keeps only
+    /// its head anode, and the other reads `(0, 0, 0)` on disk.
+    #[test]
+    fn a_pfs3_overwrite_frees_the_old_chains_other_anodes() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::new();
+        formatted_in_memory(&dev, TOTAL);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("A", b"a").unwrap();
+            w.write_file("B", b"b").unwrap();
+            w.delete("A").unwrap();
+            // A's freed block, then two after B's: two extents.
+            w.write_file("File", &pfs3_bytes(3, 1500)).unwrap();
+        }
+        let (file, old_chain) = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let file = vol.lookup("File").unwrap().unwrap().anode;
+            (file, vol.get_anode_chain(file).unwrap())
+        };
+        assert!(
+            old_chain.len() >= 2,
+            "the fixture must make a fragmented file"
+        );
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.overwrite_file_in(PFS3_ROOT, "File", file, b"one block now")
+                .unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert_eq!(vol.read_file("File").unwrap(), b"one block now");
+        let chain = vol.get_anode_chain(file).unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0].nr, file);
+        for an in &old_chain[1..] {
+            assert_eq!(
+                pfs3_raw_anode(&dev, an.nr),
+                (0, 0, 0),
+                "the old chain's anode {} leaked",
+                an.nr
+            );
+        }
+    }
+
+    /// **Item 3.** Copy-on-write needs free space for the whole new
+    /// content: an overwrite that would fit only by reusing the file's own
+    /// block is refused with `DiskFull`, before a single write, and the
+    /// file keeps its old content. 0.1.3 overwrote in place, so it fitted.
+    #[test]
+    fn a_pfs3_overwrite_needs_free_space_for_the_whole_new_content() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::new();
+        formatted_in_memory(&dev, TOTAL);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("File", b"one block").unwrap();
+        }
+        let (file, free) = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            (
+                vol.lookup("File").unwrap().unwrap().anode,
+                vol.rootblock.blocksfree,
+            )
+        };
+        // Every free block plus the file's own one.
+        let new = vec![0x33u8; free as usize * 512 + 1];
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let before = dev.write_count();
+            let err = w
+                .overwrite_file_in(PFS3_ROOT, "File", file, &new)
+                .expect_err("copy-on-write has no room for the whole new content");
+            assert!(
+                matches!(err, libpfs3::error::Error::DiskFull(_)),
+                "expected disk full, got: {err}"
+            );
+            assert_eq!(dev.write_count(), before, "a refused overwrite wrote");
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert_eq!(vol.read_file("File").unwrap(), b"one block");
+        assert_eq!(vol.rootblock.blocksfree, free);
+        assert_eq!(vol.bitmap_count_free().unwrap(), free);
+    }
+
+    /// **Item 3 (ART-319's second disclosed gap).** A rename over an
+    /// existing destination that fails after the destination's delete —
+    /// here an I/O error reading the source's directory block a second
+    /// time, which `remove_dir_entry` does after the delete and the new
+    /// entry — must leave the destination where it was. 0.1.3 deleted it
+    /// with `delete_in`, its own commit, first.
+    #[test]
+    fn a_failed_pfs3_rename_over_an_existing_file_keeps_the_destination() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let (armed, checked) = (dev.clone(), dev.clone());
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| {
+                // Read 1: the source listing. Read 2: `remove_dir_entry`.
+                armed.fail_read_of(fx.dir_block, 2);
+                w.rename_in(fx.dir, "Src", PFS3_ROOT, "Dst")
+            },
+            |e| matches!(e, libpfs3::error::Error::Io(io) if io.to_string().contains("fail_read_of")),
+            |_| {
+                let mut vol = libpfs3::volume::Volume::from_device(Box::new(checked)).unwrap();
+                assert_eq!(
+                    vol.read_file("Dst").ok().as_deref(),
+                    Some(&b"destination bytes"[..]),
+                    "a failed rename deleted its destination"
+                );
+                assert_eq!(vol.read_file("Dir/Src").unwrap(), b"source bytes");
+            },
+        );
+    }
+
+    /// **Item 3.** In one commit, a rename over an existing file still
+    /// sends that file to the deldir exactly as `delete_in` does: the same
+    /// volume, renamed over "Dst" on one device and "Dst" deleted then
+    /// renamed onto on another, reads the same — tree, free counts, deldir.
+    #[test]
+    fn a_pfs3_rename_over_an_existing_file_sends_it_to_the_deldir_as_delete_does() {
+        let (over, apart) = (MemDevice::new(), MemDevice::new());
+        let fx = pfs3_mutator_fixture(&over, true);
+        pfs3_mutator_fixture(&apart, true);
+        for (dev, delete_first) in [(&over, false), (&apart, true)] {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+            if delete_first {
+                w.delete_in(PFS3_ROOT, "Dst").unwrap();
+            }
+            w.rename_in(fx.dir, "Src", PFS3_ROOT, "Dst").unwrap();
+        }
+        let (_, facts) = pfs3_committed_state(&over);
+        assert_eq!(facts, pfs3_committed_state(&apart).1);
+        let deldir = facts.last().unwrap();
+        assert!(deldir.contains("Dst anode"), "{deldir}");
+        assert!(
+            facts
+                .iter()
+                .any(|f| f.starts_with("/Dst ") && f.contains("[115, 111, 117")),
+            "the renamed file is not at /Dst: {facts:#?}"
+        );
+    }
+
+    #[test]
+    fn a_pfs3_overwrite_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 3, |w| {
+            w.overwrite_file_in(PFS3_ROOT, "File", fx.file, &pfs3_bytes(9, 1300))
+        });
+    }
+
+    #[test]
+    fn a_pfs3_rename_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 0, |w| w.rename_in(fx.dir, "Src", PFS3_ROOT, "Dst"));
+    }
+
+    // The mutators ART-319 wrapped in `guarded` without a test of their own.
+    // Each failure below happens after the call allocated or staged
+    // something, except where the mutator has no such point (said there).
+
+    /// `create_dir`: the new directory's reserved block and anode are taken
+    /// and its block staged before `add_dir_entry` finds "Broken" has no
+    /// directory block.
+    #[test]
+    fn a_failed_pfs3_create_dir_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.create_dir("Broken/Sub"),
+            is_corrupt,
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_create_dir_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 0, |w| w.create_dir("NewDir"));
+    }
+
+    #[test]
+    fn a_failed_pfs3_create_dir_in_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.create_dir_in(fx.broken, "Sub"),
+            is_corrupt,
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_create_dir_in_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 0, |w| w.create_dir_in(PFS3_ROOT, "NewDir"));
+    }
+
+    /// `create_softlink`: the target's data block is allocated and written,
+    /// and its anode taken, before `add_dir_entry` fails in "Broken".
+    #[test]
+    fn a_failed_pfs3_create_softlink_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.create_softlink("Broken/Link", "File"),
+            is_corrupt,
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_create_softlink_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 1, |w| w.create_softlink("Link", "File"));
+    }
+
+    #[test]
+    fn a_failed_pfs3_create_softlink_in_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.create_softlink_in(fx.broken, "Link", "File"),
+            is_corrupt,
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_create_softlink_in_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 1, |w| {
+            w.create_softlink_in(PFS3_ROOT, "Link", "File")
+        });
+    }
+
+    /// `create_hardlink` stages nothing before `add_dir_entry`, and inside
+    /// it only a directory with no room left gets as far as allocating. So:
+    /// "Full", whose one block seven 106-byte names fill (`20 + 7 × 128 +
+    /// 128 ≥ 1024`), a reserved bitmap with exactly one free block left, and
+    /// an anode block with no free slot. The eighth link takes that last
+    /// reserved block for Full's new directory block and stages it; the
+    /// anode for it then needs a new anode block, and there is no reserved
+    /// block left for one.
+    #[test]
+    fn a_failed_pfs3_create_hardlink_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let long = |i: usize| format!("Full/{i}{}", "x".repeat(105));
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.create_dir("Full").unwrap();
+            for i in 0..7 {
+                w.create_hardlink(&long(i), fx.file).unwrap();
+            }
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let full = vol.lookup("Full").unwrap().unwrap().anode;
+        assert_eq!(
+            vol.get_anode_chain(full).unwrap().len(),
+            1,
+            "Full is one block"
+        );
+        let rb = vol.rootblock.clone();
+        // One free reserved block: the first, and reserved_free saying so.
+        let first = u64::from(rb.firstreserved);
+        let mut cluster = dev.read(first, usize::from(rb.rblkcluster) * 512);
+        let mut kept = false;
+        for at in (512 + 12..cluster.len() - 3).step_by(4) {
+            let word = be32(&cluster, at);
+            let keep = if !kept && word != 0 {
+                kept = true;
+                0x8000_0000u32 >> word.leading_zeros()
+            } else {
+                0
+            };
+            cluster[at..at + 4].copy_from_slice(&keep.to_be_bytes());
+        }
+        assert!(kept, "the fixture has a free reserved block");
+        let rf = libpfs3::ondisk::RB_OFF_RESERVED_FREE;
+        cluster[rf..rf + 4].copy_from_slice(&1u32.to_be_bytes());
+        dev.patch(first, &cluster);
+        // No free anode in the (only) anode block.
+        let root = dev.read(2, 512);
+        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), 1024);
+        let ab_blk = u64::from(be32(&ib, 12));
+        assert_eq!(be32(&ib, 16), 0, "one anode block");
+        let mut ab = dev.read(ab_blk, 1024);
+        for at in (16..1024 - 11).step_by(12) {
+            if be32(&ab, at) == 0 && be32(&ab, at + 4) == 0 {
+                ab[at + 4..at + 8].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
+            }
+        }
+        dev.patch(ab_blk, &ab);
+
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.create_hardlink(&long(7), fx.file),
+            |e| matches!(e, libpfs3::error::Error::DiskFull(m) if m.contains("reserved")),
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_create_hardlink_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 0, |w| w.create_hardlink("Hard", fx.file));
+    }
+
+    /// `undelete`: the deleted file's data is read, a new block allocated
+    /// and written and its anode taken, before `add_dir_entry` fails in
+    /// "Broken".
+    #[test]
+    fn a_failed_pfs3_undelete_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, true);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.undelete(0, "Broken/Back"),
+            is_corrupt,
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_undelete_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, true);
+        assert_pfs3_commit_failure_locks(&dev, 1, |w| w.undelete(0, "Back"));
+    }
+
+    /// `force_remove_entry` has no point between staging and its commit: its
+    /// one staged write is its last step, so the only failure before the
+    /// commit is the refusal before it. What this pins is that a refused
+    /// call leaves the last commit and a writer that still commits.
+    #[test]
+    fn a_refused_pfs3_force_remove_entry_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.force_remove_entry(PFS3_ROOT, "NoSuchName"),
+            is_not_found,
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_force_remove_entry_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 0, |w| w.force_remove_entry(PFS3_ROOT, "Dst"));
+    }
+
+    /// `update_dir_entry_protection`: the same shape as `force_remove_entry`
+    /// — one staged write, its last step before the commit.
+    #[test]
+    fn a_refused_pfs3_update_dir_entry_protection_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.update_dir_entry_protection(PFS3_ROOT, "NoSuchName", 0x0F),
+            is_not_found,
+            |_| {},
+        );
+    }
+
+    #[test]
+    fn a_pfs3_update_dir_entry_protection_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 0, |w| {
+            w.update_dir_entry_protection(PFS3_ROOT, "File", 0x0F)
+        });
+    }
+
+    /// `repair_reserved_free` sets one in-memory field and commits; its only
+    /// failure is the commit's. Until now it was exercised only as the second,
+    /// already-locked call.
+    #[test]
+    fn a_pfs3_repair_reserved_free_commit_failure_locks_the_writer() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        assert_pfs3_commit_failure_locks(&dev, 0, |w| w.repair_reserved_free(7));
     }
 }
