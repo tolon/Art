@@ -545,6 +545,15 @@ fn verify_pfs3_one(vol: &mut libpfs3::volume::Volume, record: &FileRecord) -> Fi
     let entry = match vol.lookup(&record.path) {
         Ok(Some(entry)) => entry,
         Ok(None) => return fail(&record.path, "not found on the volume"),
+        // The scoped re-review's follow-up 6 (ART-330): a directory on the way
+        // stops at a malformed entry before the name — the file may lie behind
+        // it, so this is a damaged card, not a missing file.
+        Err(err @ libpfs3::error::Error::DamagedDirectory { .. }) => {
+            return fail(
+                &record.path,
+                format!("ART could not tell whether this file is on the volume, because {err}"),
+            );
+        }
         Err(err) => {
             return fail(&record.path, format!("its path could not be read: {err}"));
         }
@@ -1271,6 +1280,78 @@ mod tests {
             report.files
         );
         assert_eq!(report.files[0].state, CheckState::Fail);
+    }
+
+    /// Damages, raw on the image, the entry just before `name` in the PFS3
+    /// directory `dir` of the image's one partition: its size byte becomes
+    /// 12, smaller than an entry's own header. Returns the directory block and
+    /// the damaged entry's offset in it.
+    fn damage_the_pfs3_entry_before(image: &Path, dir: &str, name: &str) -> (u32, usize) {
+        let card = read_card(image).unwrap();
+        let area = &card.areas[0];
+        let (offset, _, _) = partition_region(area, &area.rdb.partitions[0]).unwrap();
+        let blk = {
+            let mut vol = libpfs3::volume::Volume::open(image, offset).unwrap();
+            let anode = vol.lookup(dir).unwrap().unwrap().anode;
+            vol.get_anode_chain(anode).unwrap()[0].blocknr
+        };
+        let at = offset + u64::from(blk) * 512;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(image)
+            .unwrap();
+        let mut block = vec![0u8; 1024];
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(at)).unwrap();
+        std::io::Read::read_exact(&mut file, &mut block).unwrap();
+        let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+        let mut before = None;
+        loop {
+            let size = usize::from(block[pos]);
+            assert_ne!(size, 0, "'{name}' is not in the first block of '{dir}'");
+            let nlen = usize::from(block[pos + 17]);
+            if &block[pos + 18..pos + 18 + nlen] == name.as_bytes() {
+                break;
+            }
+            before = Some(pos);
+            pos += size;
+        }
+        let damaged = before.unwrap_or_else(|| panic!("no entry lies before '{name}' in '{dir}'"));
+        block[damaged] = 12;
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(at)).unwrap();
+        std::io::Write::write_all(&mut file, &block).unwrap();
+        (blk, damaged)
+    }
+
+    /// **The scoped re-review's follow-up 6 (ART-330), at the install check.**
+    /// libpfs3's reader stopped at a malformed directory entry and answered
+    /// "not there" for every name behind it, so this check said a file was
+    /// "not found on the volume" when the directory holding it was damaged —
+    /// a missing file and a damaged card are different next steps. A file
+    /// behind a malformed entry must fail naming the damage.
+    #[test]
+    fn a_pfs3_file_behind_a_damaged_directory_entry_fails_naming_the_damage_not_a_missing_file() {
+        let (_guard, dir) = scratch("pfs3-damaged-directory");
+        let content = b"cmd";
+        let image = formatted_pfs3_image(&dir);
+        let tree = tree_with_load_module(&dir, content, 0x20);
+        std::fs::write(tree.join("C/Assign"), b"assign").unwrap();
+        NativeFormatter::UTC
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        let (blk, pos) = damage_the_pfs3_entry_before(&image, "C", "LoadModule");
+        let manifest = manifest_for_load_module(content);
+
+        let report = verify_volume(&image, None, 1, &manifest, &tree).unwrap();
+
+        let verdict = &report.files[0];
+        let expected = format!(
+            "ART could not tell whether this file is on the volume, because the directory 'C' is \
+             damaged: its block {blk} holds a malformed entry at offset {pos} (size 12), so the \
+             entries after it cannot be read — check this volume with a PFS3 repair tool"
+        );
+        assert_eq!(verdict.detail.as_deref(), Some(expected.as_str()));
+        assert_eq!(verdict.state, CheckState::Fail);
     }
 
     /// Fix round 1, item 3: the module doc claims PFS3 reaches `Fail` on a

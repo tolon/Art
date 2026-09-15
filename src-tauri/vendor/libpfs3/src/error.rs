@@ -10,7 +10,11 @@
 //! around hard links.
 //! Modified by ART on 2026-09-15 (ART-325/326/327): the `EntryNotDeleted`
 //! and `EntryNotMoved` variants, a delete or a move refused with what stopped
-//! it and what the user can do. `ART-PATCH.md` in this crate's root says what
+//! it and what the user can do.
+//! Modified by ART on 2026-09-15 (the scoped re-review's follow-ups 1 and 6,
+//! ART-324 and ART-330): the `FileTooLarge` variant, a file the volume cannot
+//! record the size of, and the `DamagedDirectory` variant, a directory walk
+//! stopped by a malformed entry. `ART-PATCH.md` in this crate's root says what
 //! and why.
 
 /// Result type alias using the PFS3 [`Error`].
@@ -103,6 +107,36 @@ pub enum Error {
          PFS3 repair tool and try again"
     )]
     EntryNotMoved { name: String, reason: String },
+
+    /// ART (2026-09-15, the scoped re-review's follow-up 1, ART-324): a file
+    /// this volume cannot record the size of. pfs3aio refuses to write past
+    /// `MAXFILESIZE32` (0xffffffff, `blocks.h:627`) unless the volume is
+    /// largefile (`WriteToFile`, `disk.c:797`, `ERROR_DISK_FULL`; `SetEOF`,
+    /// `disk.c:1130`; `tonioni/pfs3aio` `211f7f0`). `why` says which limit.
+    #[error("'{name}' was not written: it is {size} bytes, and {why}")]
+    FileTooLarge {
+        name: String,
+        size: u64,
+        why: &'static str,
+    },
+
+    /// ART (2026-09-15, the scoped re-review's follow-up 6, ART-330): a
+    /// directory whose walk stopped at a malformed entry, so a name behind it
+    /// can be neither found nor ruled out, and a listing of it would be short.
+    /// `dir` names the directory ("the root directory", "the directory 'S'"),
+    /// `block` and `offset` where the entry is. 0.1.3's reader ended the walk
+    /// there silently and said "not found".
+    #[error(
+        "{dir} is damaged: its block {block} holds a malformed entry at offset {offset} (size \
+         {size}), so the entries after it cannot be read — check this volume with a PFS3 repair \
+         tool"
+    )]
+    DamagedDirectory {
+        dir: String,
+        block: u64,
+        offset: usize,
+        size: u8,
+    },
 
     /// ART-319: the writer has locked itself, and every later mutating call
     /// refuses immediately with this, before touching anything. Two causes

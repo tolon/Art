@@ -5,7 +5,12 @@
 //! per 16-bit word of `struct extrafields`, the words before it — through
 //! `ExtraFields::word_offsets`, `ExtraFields::read` and
 //! `ExtraFields::encode`, which `DirEntry::parse` and the writer share.
-//! 0.1.3 read the flags word first, one bit per field. `ART-PATCH.md` in this
+//! 0.1.3 read the flags word first, one bit per field.
+//! Modified by ART on 2026-09-15 (the scoped re-review's follow-ups 1 and 6,
+//! ART-324 and ART-330): `entry_bounds` is the one rule for walking a
+//! directory block, shared with the writer; `DirEntry::parse` refuses a
+//! malformed entry rather than ending the walk there, and reads `fsizex` as
+//! part of the size only on a largefile volume. `ART-PATCH.md` in this
 //! crate's root says what and why.
 
 use super::*;
@@ -201,26 +206,72 @@ impl ExtraFields {
     }
 }
 
+/// ART (2026-09-15, the scoped re-review's follow-up 6, ART-330): an entry a
+/// directory-block walk cannot step over — smaller than its own header,
+/// running past its block, or with a name running past the entry. `offset` is
+/// where it starts in the block, `size` its size byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MalformedDirEntry {
+    pub offset: usize,
+    pub size: u8,
+}
+
+/// ART (2026-09-15, the scoped re-review's follow-up 6): the one rule for
+/// walking a directory block, shared by the reader (`DirEntry::parse`) and the
+/// writer (`Writer::dir_entry_at`). `Ok(None)` at the end of the block's
+/// entries — a size byte of 0, as pfs3aio's `while (entry->next)` ends
+/// (`directory.c:734`), or the end of the block. `Ok(Some((size, nlen)))` for
+/// an entry whose header and name lie inside it and inside the block.
+/// Anything else is `MalformedDirEntry`.
+pub fn entry_bounds(
+    data: &[u8],
+    offset: usize,
+) -> std::result::Result<Option<(usize, usize)>, MalformedDirEntry> {
+    let Some(&size) = data.get(offset) else {
+        return Ok(None);
+    };
+    if size == 0 {
+        return Ok(None);
+    }
+    let malformed = MalformedDirEntry { offset, size };
+    let len = usize::from(size);
+    if len < 18 || offset + len > data.len() {
+        return Err(malformed);
+    }
+    let nlen = usize::from(*data.get(offset + 17).ok_or(malformed)?);
+    if 18 + nlen > len {
+        return Err(malformed);
+    }
+    Ok(Some((len, nlen)))
+}
+
 impl DirEntry {
     /// Parse one direntry from `data` at `offset`.
-    /// Returns `(entry, next_offset)` or `None` if end/invalid.
+    ///
+    /// ART (2026-09-15, the scoped re-review's follow-ups 1 and 6):
+    /// `Ok(Some((entry, next_offset)))`, or `Ok(None)` at the end of the
+    /// block's entries, as `entry_bounds` says; a malformed entry is
+    /// `Err(MalformedDirEntry)`, where 0.1.3 returned `None` — the end — so a
+    /// name behind it read as not there and a listing ended short.
+    /// `largefile` is the volume's `Rootblock::has_largefile`: without it
+    /// `extra.fsizex` reads 0 and `file_size()` has no bits above 31, as
+    /// pfs3aio's `GetDEFileSize` (`directory.c:3641-3652`) and this crate's
+    /// deldir reader (`DelDirEntry::parse`) read it.
     ///
     /// ART (ART-325): `extra` is read by `ExtraFields::read`, pfs3aio's
     /// layout. An entry whose extra fields do not fit it is still listed, with
     /// no extra fields but its own protection byte in `prot`.
-    pub fn parse(data: &[u8], offset: usize) -> Option<(Self, usize)> {
-        if offset >= data.len() {
-            return None;
-        }
-        let entry_size = data[offset];
-        if entry_size == 0 {
-            return None;
-        }
-        let end = offset + entry_size as usize;
-        if end > data.len() || (entry_size as usize) < 18 {
-            return None;
-        }
+    pub fn parse(
+        data: &[u8],
+        offset: usize,
+        largefile: bool,
+    ) -> std::result::Result<Option<(Self, usize)>, MalformedDirEntry> {
+        let Some((size, nlength)) = entry_bounds(data, offset)? else {
+            return Ok(None);
+        };
+        let end = offset + size;
         let raw = &data[offset..end];
+        let entry_size = raw[0];
 
         let entry_type = raw[1] as i8;
         let anode = u32::from_be_bytes(raw[2..6].try_into().unwrap());
@@ -229,10 +280,9 @@ impl DirEntry {
         let creation_minute = u16::from_be_bytes(raw[12..14].try_into().unwrap());
         let creation_tick = u16::from_be_bytes(raw[14..16].try_into().unwrap());
         let protection = raw[16];
-        let nlength = raw[17] as usize;
 
-        let name_end = (18 + nlength).min(raw.len());
-        let name = crate::util::latin1_to_string(&raw[18..name_end]);
+        // `entry_bounds` holds the name inside the entry.
+        let name = crate::util::latin1_to_string(&raw[18..18 + nlength]);
 
         let mut comment = String::new();
         let comment_off = 18 + nlength;
@@ -244,12 +294,15 @@ impl DirEntry {
             }
         }
 
-        let extra = ExtraFields::read(raw).unwrap_or_else(|_| ExtraFields {
+        let mut extra = ExtraFields::read(raw).unwrap_or_else(|_| ExtraFields {
             prot: u32::from(protection),
             ..ExtraFields::default()
         });
+        if !largefile {
+            extra.fsizex = 0;
+        }
 
-        Some((
+        Ok(Some((
             Self {
                 entry_size,
                 entry_type,
@@ -264,7 +317,7 @@ impl DirEntry {
                 extra,
             },
             end,
-        ))
+        )))
     }
 
     pub fn is_file(&self) -> bool {
@@ -285,10 +338,10 @@ impl DirEntry {
 
     /// Full file size including extended bits 32-47.
     ///
-    /// ART (ART-325): `fsizex` as pfs3aio's layout places it. pfs3aio adds it
-    /// only on a `MODE_LARGEFILE` volume (`GetDEFileSize`,
-    /// `directory.c:3641-3652`); this does not look at the volume's mode, and
-    /// no entry pfs3aio writes elsewhere carries the field.
+    /// ART (ART-325): `fsizex` as pfs3aio's layout places it. ART (2026-09-15,
+    /// the scoped re-review's follow-up 1): part of the size only on a
+    /// largefile volume, as pfs3aio's `GetDEFileSize` adds it
+    /// (`directory.c:3641-3652`) — `DirEntry::parse` reads it as 0 elsewhere.
     pub fn file_size(&self) -> u64 {
         self.fsize as u64 | ((self.extra.fsizex as u64) << 32)
     }

@@ -1109,13 +1109,21 @@ fn production_after() -> u32 {
     /// `strip_string_literals`, which keeps every newline where it was, so
     /// neither holds a call nor binds a name.
     ///
+    /// Follow-up 4 (2026-09-15): a `use` tree whose root is a brace group —
+    /// `use {libpfs3::writer::Writer};`, nested groups, and through an
+    /// `extern crate` alias — is resolved leaf by leaf (pinned in the
+    /// fixture).
+    ///
     /// **What it does not see:** a `Writer` reached through a re-export in
     /// another module (`pub use libpfs3::writer::Writer;` in one file, then
     /// `crate::that::Writer::open(` in another), or through an `extern crate`
     /// alias made in another file; a call built by a macro; a call split
-    /// across lines inside `Writer::open(`; and a trait-qualified
+    /// across lines inside `Writer::open(`; a trait-qualified
     /// `<libpfs3::writer::Writer as T>::open(`, which only a trait of ART's
-    /// own with an `open` method could make compile.
+    /// own with an `open` method could make compile; and a `use` that does
+    /// not start its line (`let x = 1; use libpfs3::writer::Writer;`) or whose
+    /// keyword stands on a line of its own — both seen unflagged by a
+    /// temporary fixture on 2026-09-15 (follow-up 4, E4).
     fn libpfs3_writer_open_sites(label: &str, text: &str) -> Vec<(usize, String)> {
         let lines: Vec<&str> = text.lines().collect();
         let regions = test_regions(label, &lines);
@@ -1159,33 +1167,43 @@ fn production_after() -> u32 {
                 continue;
             }
             let head = compact_rust(code[start]);
-            let Some(at) = head.find("use ") else {
+            // Follow-up 4 (2026-09-15): `compact_rust` keeps no space before a
+            // `{` or a `::`, so `use {libpfs3::…}` reads `use{libpfs3::…}` and
+            // `use ::{…}` reads `use::{…}`; all three spellings start a `use`.
+            let Some(at) = ["use ", "use{", "use::"]
+                .iter()
+                .filter_map(|keyword| head.find(keyword))
+                .min()
+            else {
                 continue;
             };
             let before = &head[..at];
             if !(before.is_empty() || before.starts_with("pub")) {
                 continue;
             }
-            let mut stmt = head[at + 4..].to_string();
+            let mut stmt = head[at + 3..].trim_start().to_string();
             while !stmt.contains(';') && n < code.len() {
                 stmt.push_str(&compact_rust(code[n]));
                 n += 1;
             }
             let stmt = stmt.trim_start_matches("::");
             let stmt = stmt.split(';').next().unwrap_or("");
-            // Rooted at the crate or at an `extern crate` alias of it, and
-            // spelled from the crate's own name either way.
-            let Some(stmt) = roots.iter().find_map(|r| {
-                let rest = stmt.strip_prefix(r.as_str())?;
-                (rest.is_empty() || rest.starts_with("::") || rest.starts_with(" as "))
-                    .then(|| format!("{root}{rest}"))
-            }) else {
-                continue;
-            };
-            let stmt = stmt.as_str();
             let mut leaves = Vec::new();
             use_tree_leaves("", stmt, &mut leaves);
             for (path, name) in leaves {
+                // Each leaf rooted at the crate or at an `extern crate` alias
+                // of it, and spelled from the crate's own name either way.
+                // Follow-up 4 (2026-09-15): per leaf, not per statement, so a
+                // tree whose root is a brace group — `use {libpfs3::…};`,
+                // nested or not — is resolved too. It used to require the
+                // statement itself to start with the crate's name.
+                let path = path.trim_start_matches("::");
+                let Some(path) = roots.iter().find_map(|r| {
+                    let rest = path.strip_prefix(r.as_str())?;
+                    (rest.is_empty() || rest.starts_with("::")).then(|| format!("{root}{rest}"))
+                }) else {
+                    continue;
+                };
                 if name == "_" {
                     continue;
                 }
@@ -1312,7 +1330,40 @@ fn production_after() -> u32 {
         // Scoped re-review item 2: the glob forms, the qualified-path form,
         // an `extern crate` alias, and a call that only looks like one because
         // it sits in a block comment or a string. Each case is its own source.
-        let cases: [(&str, &str, &[&str]); 10] = [
+        let cases: [(&str, &str, &[&str]); 13] = [
+            // Follow-up 4 (2026-09-15): a `use` tree whose root is a brace
+            // group, plain, nested, and through an `extern crate` alias.
+            (
+                "a brace-rooted use",
+                "\
+    use {libpfs3::writer::Writer};
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &["let _ = Writer::open(v);"],
+            ),
+            (
+                "a nested brace-rooted use",
+                "\
+    use {{libpfs3::{writer::{Writer as W}}}, std::io};
+    fn f(v: V) {
+        let _ = W::open(v);
+    }
+",
+                &["let _ = W::open(v);"],
+            ),
+            (
+                "a brace-rooted use through an extern crate alias",
+                "\
+    extern crate libpfs3 as x;
+    pub use ::{x::{writer}};
+    fn f(v: V) {
+        let _ = writer::Writer::open(v);
+    }
+",
+                &["let _ = writer::Writer::open(v);"],
+            ),
             (
                 "a glob of libpfs3::writer",
                 "\

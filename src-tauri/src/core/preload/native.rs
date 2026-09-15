@@ -16,7 +16,7 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.10`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.11`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
@@ -119,7 +119,7 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.10";
+const LIBPFS3_VERSION: &str = "0.1.3+art.11";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -384,6 +384,11 @@ pub(crate) fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
             max_bytes: max,
         },
         libpfs3::error::Error::CommitFailed => CoreError::Pfs3WriterLocked,
+        // The scoped re-review's follow-up 1 (ART-324): a file this volume
+        // cannot record the size of says so; the volume is not damaged.
+        err @ libpfs3::error::Error::FileTooLarge { .. } => {
+            CoreError::InvalidInput(err.to_string())
+        }
         other => CoreError::Malformed {
             format: "pfs3".into(),
             detail: other.to_string(),
@@ -3181,7 +3186,7 @@ mod tests {
         let probed = NativeFormatter::UTC.probe().unwrap();
         assert_eq!(
             probed.raw,
-            "libpfs3 0.1.3+art.10 (native, no external tool)"
+            "libpfs3 0.1.3+art.11 (native, no external tool)"
         );
     }
 
@@ -4485,13 +4490,15 @@ mod tests {
         assert_pfs3_failure_leaves_the_last_commit(
             &dev,
             |w| {
-                // Reads of "Dir"'s block: 1 the source listing, 2 the source
-                // entry's own bytes (ART-327), 3 the destination delete's
-                // hard-link check (ART-323), 4 `remove_dir_entry` — after the
-                // destination's delete and the new entry are staged. (Before
-                // ART-327 the count was 2, which ART-323's check had already
-                // moved to the check itself.)
-                armed.fail_read_of(fx.dir_block, 4);
+                // Reads of "Dir"'s block: 1 the source entry, looked up through
+                // the writer's own walk, 2 the destination delete's hard-link
+                // check (ART-323), 3 `remove_dir_entry` — after the
+                // destination's delete and the new entry are staged. (The
+                // scoped re-review's follow-up 6 dropped the source listing
+                // through the reader, which was read 1 of 4; before ART-327
+                // the count was 2, which ART-323's check had already moved to
+                // the check itself.)
+                armed.fail_read_of(fx.dir_block, 3);
                 w.rename_in(fx.dir, "Src", PFS3_ROOT, "Dst")
             },
             |e| matches!(e, libpfs3::error::Error::Io(io) if io.to_string().contains("fail_read_of")),
@@ -5278,6 +5285,9 @@ mod tests {
         }
         let dev = MemDevice::new();
         let fx = pfs3_mutator_fixture(&dev, false);
+        // Follow-up 1 (2026-09-15): `fsizex` is part of a size only on a
+        // largefile volume, so "Linked"'s is read on one.
+        pfs3_set_options(&dev, libpfs3::ondisk::MODE_LARGEFILE, 0);
         let mut linked = [0u16; 11];
         linked[XF_LINK_LO] = 13;
         linked[XF_FSIZEX] = 1;
@@ -5328,6 +5338,386 @@ mod tests {
             ],
             "(size, comment, link, uid, gid, prot, virtualsize, rollpointer, fsizex)"
         );
+    }
+
+    /// Sets `set` and clears `clear` in the rootblock's `options` word
+    /// (`RB_OFF_OPTIONS` of sector 2), raw on the device — a volume mode no
+    /// writer call makes.
+    fn pfs3_set_options(dev: &MemDevice, set: u32, clear: u32) {
+        let sector = libpfs3::ondisk::ROOTBLOCK;
+        let at = libpfs3::ondisk::RB_OFF_OPTIONS;
+        let mut rb = dev.read(sector, 512);
+        let options = (be32(&rb, at) | set) & !clear;
+        rb[at..at + 4].copy_from_slice(&options.to_be_bytes());
+        dev.patch(sector, &rb);
+    }
+
+    /// **The scoped re-review's follow-up 1 (ART-324).** pfs3aio adds
+    /// `fsizex` to a file's size only when `g->largefile` is set
+    /// (`GetDEFileSize`, `directory.c:3641-3652`), which it sets at mount from
+    /// `MODE_LARGEFILE` **and** `MODE_DIR_EXTENSION` (`init.c:648`,
+    /// `tonioni/pfs3aio` `211f7f0`). libpfs3's `file_size()` added it on any
+    /// volume, so a stray `fsizex` word read as 4 GiB more than the file holds.
+    /// One raw entry, `fsize` 700 and `fsizex` 1, read under each mode.
+    #[test]
+    fn a_pfs3_entrys_fsizex_is_part_of_its_size_only_on_a_largefile_volume() {
+        use libpfs3::ondisk::{MODE_DIR_EXTENSION, MODE_LARGEFILE};
+        let modes: [(&str, u32, u32); 3] = [
+            ("LARGEFILE and DIR_EXTENSION", MODE_LARGEFILE, 0),
+            ("DIR_EXTENSION only, as ART formats", 0, 0),
+            (
+                "LARGEFILE without DIR_EXTENSION",
+                MODE_LARGEFILE,
+                MODE_DIR_EXTENSION,
+            ),
+        ];
+        let mut got = Vec::new();
+        for (what, set, clear) in modes {
+            let dev = MemDevice::new();
+            let fx = pfs3_mutator_fixture(&dev, false);
+            let mut words = [0u16; 11];
+            words[XF_FSIZEX] = 1;
+            pfs3_append_raw_entries(
+                &dev,
+                PFS3_ROOT,
+                &[RawEntry {
+                    words,
+                    ..RawEntry::file(b"Big", fx.file, 700)
+                }
+                .bytes()],
+            );
+            pfs3_set_options(&dev, set, clear);
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let looked_up = vol.lookup("Big").unwrap().unwrap().file_size();
+            let listed = vol
+                .list_dir("")
+                .unwrap()
+                .iter()
+                .find(|e| e.name == "Big")
+                .map(|e| e.file_size());
+            got.push((what, looked_up, listed));
+        }
+        let expected: [(&str, u64, Option<u64>); 3] = [
+            (
+                "LARGEFILE and DIR_EXTENSION",
+                700 + (1 << 32),
+                Some(700 + (1 << 32)),
+            ),
+            ("DIR_EXTENSION only, as ART formats", 700, Some(700)),
+            ("LARGEFILE without DIR_EXTENSION", 700, Some(700)),
+        ];
+        assert_eq!(got, expected, "(mode, lookup's size, list_dir's size)");
+    }
+
+    /// **The scoped re-review's follow-up 1, the size limit (ART-324).**
+    /// pfs3aio refuses to write a file past `MAXFILESIZE32` (0xffffffff,
+    /// `blocks.h:627`) on a volume that is not largefile (`WriteToFile`,
+    /// `disk.c:797`; `SetEOF`, `disk.c:1130`; `tonioni/pfs3aio` `211f7f0`).
+    /// libpfs3 wrote such a file's low 32 bits and a `fsizex` pfs3aio does not
+    /// read there. No test can hand the writer 4 GiB, so the limit is asked of
+    /// `Writer::check_file_size`, which every call that writes data asks
+    /// before it allocates.
+    #[test]
+    fn a_pfs3_file_of_4_gib_or_more_is_refused_by_name_on_a_volume_that_is_not_largefile() {
+        let four_gib = 1u64 << 32;
+        let said = |r: libpfs3::error::Result<()>| match r {
+            Ok(()) => "Ok(())".to_string(),
+            Err(e) => e.to_string(),
+        };
+        let open = |dev: &MemDevice| {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            libpfs3::writer::Writer::open(vol).unwrap()
+        };
+        let small = MemDevice::new();
+        pfs3_mutator_fixture(&small, false);
+        let large = MemDevice::new();
+        pfs3_mutator_fixture(&large, false);
+        pfs3_set_options(&large, libpfs3::ondisk::MODE_LARGEFILE, 0);
+        let (in_arts_mode, in_largefile) = (open(&small), open(&large));
+        let got = vec![
+            (
+                "ART's mode, 4 GiB",
+                said(in_arts_mode.check_file_size("Huge", four_gib)),
+            ),
+            (
+                "ART's mode, a byte less",
+                said(in_arts_mode.check_file_size("Huge", four_gib - 1)),
+            ),
+            (
+                "largefile, 4 GiB",
+                said(in_largefile.check_file_size("Huge", four_gib)),
+            ),
+        ];
+        let expected = vec![
+            (
+                "ART's mode, 4 GiB",
+                "'Huge' was not written: it is 4294967296 bytes, and this PFS3 volume holds files \
+                 of at most 4294967295 bytes: it is not formatted for large files (MODE_LARGEFILE \
+                 with MODE_DIR_EXTENSION)"
+                    .to_string(),
+            ),
+            ("ART's mode, a byte less", "Ok(())".to_string()),
+            ("largefile, 4 GiB", "Ok(())".to_string()),
+        ];
+        assert_eq!(got, expected);
+    }
+
+    /// **The scoped re-review's follow-up 1, at ART's copy.** A file the
+    /// volume cannot record the size of reaches the user as the sentence it
+    /// is, not as "malformed pfs3", which says the volume is damaged.
+    #[test]
+    fn a_pfs3_file_too_large_reaches_the_user_as_invalid_input_not_a_malformed_volume() {
+        let err = from_pfs3(libpfs3::error::Error::FileTooLarge {
+            name: "Huge".into(),
+            size: 1 << 32,
+            why: "this volume is not formatted for large files",
+        });
+        assert_eq!(
+            (err.code(), err.to_string()),
+            (
+                "ART-INPUT-INVALID",
+                "invalid input: 'Huge' was not written: it is 4294967296 bytes, and this volume \
+                 is not formatted for large files"
+                    .to_string()
+            )
+        );
+    }
+
+    /// **The scoped re-review's follow-up 1, the writer's half.** On a volume
+    /// that is not largefile, pfs3aio's `SetDEFileSize` sets `fsize` and
+    /// nothing else (`directory.c:3668-3671`): it never writes `fsizex` there.
+    /// libpfs3's `update_dir_entry_size` patched the `fsizex` word of any entry
+    /// that carried one. An overwrite of an entry with a stray `fsizex` word,
+    /// in ART's own mode, must leave the word as it was.
+    #[test]
+    fn a_pfs3_overwrite_writes_no_fsizex_on_a_volume_that_is_not_largefile() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+            w.write_file("Big", b"big").unwrap();
+        }
+        let (big, root_block) = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            (
+                vol.lookup("Big").unwrap().unwrap().anode,
+                u64::from(vol.get_anode_chain(PFS3_ROOT).unwrap()[0].blocknr),
+            )
+        };
+        let mut words = [0u16; 11];
+        words[XF_FSIZEX] = 1;
+        let stray = |fsize: u32| {
+            RawEntry {
+                words,
+                ..RawEntry::file(b"Big", big, fsize)
+            }
+            .bytes()
+        };
+        let mut block = dev.read(root_block, 1024);
+        let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+        while !(block[pos + 17] == 3 && &block[pos + 18..pos + 21] == b"Big") {
+            assert_ne!(block[pos], 0, "the root holds 'Big'");
+            pos += usize::from(block[pos]);
+        }
+        let old = usize::from(block[pos]);
+        assert_eq!(
+            block[pos + old],
+            0,
+            "the fixture's arithmetic: 'Big' must be the root's last entry"
+        );
+        let raw = stray(3);
+        block[pos..pos + raw.len()].copy_from_slice(&raw);
+        block[pos + raw.len()] = 0;
+        dev.patch(root_block, &block);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+            w.write_file_in(PFS3_ROOT, "Big", b"ten bytes!").unwrap();
+        }
+        assert_eq!(
+            pfs3_raw_entry_named(&dev, PFS3_ROOT, b"Big"),
+            Some(stray(10)),
+            "the overwrite's entry: `fsize` 10, the stray `fsizex` word untouched"
+        );
+    }
+
+    /// **The scoped re-review's follow-up 2.** An entry whose flags word names
+    /// more extra-field words than lie in it — pfs3aio would read the missing
+    /// words out of its name or comment (`GetExtraFields`,
+    /// `directory.c:3719-3731`) — is listed with no extra fields but its own
+    /// protection byte, and the entries after it are still listed
+    /// (`DirEntry::parse`). The re-review ruled this not a defect; this pins
+    /// it. Written after the behaviour existed, so its red is a mutation's.
+    #[test]
+    fn a_pfs3_entry_whose_extra_fields_do_not_fit_is_listed_with_none() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let mut crammed = RawEntry {
+            protection: 0x05,
+            ..RawEntry::file(b"Crammed", fx.file, 700)
+        }
+        .bytes();
+        let end = crammed.len();
+        crammed[end - 2..].copy_from_slice(&0x07FFu16.to_be_bytes());
+        pfs3_append_raw_entries(
+            &dev,
+            PFS3_ROOT,
+            &[crammed, RawEntry::file(b"After", fx.file, 9).bytes()],
+        );
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let entry = vol.lookup("Crammed").unwrap().unwrap();
+        assert_eq!(
+            (entry.file_size(), entry.extra.clone()),
+            (
+                700,
+                libpfs3::ondisk::ExtraFields {
+                    prot: 0x05,
+                    ..Default::default()
+                }
+            ),
+            "(size, extra fields)"
+        );
+        let names: Vec<String> = vol
+            .list_dir("")
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, ["File", "Dir", "Dst", "Broken", "Crammed", "After"]);
+    }
+
+    /// **The scoped re-review's follow-up 3.** `util::name_eq_ci` folds as
+    /// pfs3aio's `intltoupper` does — 0x61-0x7a, 0xe0-0xf6 and 0xf8-0xfe
+    /// (`assroutines.c:113-140`, `tonioni/pfs3aio` `211f7f0`) — and no
+    /// further: ÷ (0xF7) is not the lower case of × (0xD7), nor ÿ (0xFF) of
+    /// ß (0xDF). Written after the fold existed, so its red is a mutation's.
+    #[test]
+    fn pfs3_names_fold_latin1_letters_as_pfs3aio_does_and_no_further() {
+        let pairs: [(char, char); 8] = [
+            ('\u{e0}', '\u{c0}'), // à À
+            ('\u{f6}', '\u{d6}'), // ö Ö
+            ('\u{f7}', '\u{d7}'), // ÷ ×
+            ('\u{f8}', '\u{d8}'), // ø Ø
+            ('\u{fe}', '\u{de}'), // þ Þ
+            ('\u{ff}', '\u{df}'), // ÿ ß
+            ('z', 'Z'),
+            ('{', '['),
+        ];
+        let got: Vec<(char, char, bool)> = pairs
+            .iter()
+            .map(|&(a, b)| {
+                (
+                    a,
+                    b,
+                    libpfs3::util::name_eq_ci(&a.to_string(), &b.to_string()),
+                )
+            })
+            .collect();
+        let expected: [(char, char, bool); 8] = [
+            ('\u{e0}', '\u{c0}', true),
+            ('\u{f6}', '\u{d6}', true),
+            ('\u{f7}', '\u{d7}', false),
+            ('\u{f8}', '\u{d8}', true),
+            ('\u{fe}', '\u{de}', true),
+            ('\u{ff}', '\u{df}', false),
+            ('z', 'Z', true),
+            ('{', '[', false),
+        ];
+        assert_eq!(got, expected);
+    }
+
+    /// **The scoped re-review's follow-up 6 (ART-330).** libpfs3's reader
+    /// stopped at a malformed directory entry and answered "not there" for
+    /// every name behind it, and a listing ended there, silently. A lookup
+    /// that meets a malformed entry before the name must say the directory is
+    /// damaged, naming the block and the offset; a name before it is still
+    /// found, as pfs3aio's `SearchInDir` stops at a match
+    /// (`directory.c:729-740`, `tonioni/pfs3aio` `211f7f0`); a listing is
+    /// refused. `rename_in` and `delete_in` looked their name up through that
+    /// reader and said "not found"; they refuse through the writer's own walk.
+    #[test]
+    fn a_pfs3_name_behind_a_malformed_directory_entry_is_corrupt_not_not_found() {
+        fn said<T: std::fmt::Debug>(r: libpfs3::error::Result<T>) -> String {
+            match r {
+                Ok(v) => format!("Ok({v:?})"),
+                Err(e) => e.to_string(),
+            }
+        }
+        let clean = MemDevice::new();
+        pfs3_mutator_fixture(&clean, false);
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        let root_block = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.get_anode_chain(PFS3_ROOT).unwrap()[0].blocknr
+        };
+        let mut block = dev.read(u64::from(root_block), 1024);
+        let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+        while !(block[pos + 17] == 3 && &block[pos + 18..pos + 21] == b"Dir") {
+            assert_ne!(block[pos], 0, "the fixture's root holds 'Dir'");
+            pos += usize::from(block[pos]);
+        }
+        // "File" lies before "Dir", "Dst" after it.
+        block[pos] = 12;
+        dev.patch(u64::from(root_block), &block);
+        let damaged = format!(
+            "the root directory is damaged: its block {root_block} holds a malformed entry at \
+             offset {pos} (size 12), so the entries after it cannot be read — check this volume \
+             with a PFS3 repair tool"
+        );
+        let mut clean_vol = libpfs3::volume::Volume::from_device(Box::new(clean.clone())).unwrap();
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let name_of = |r: libpfs3::error::Result<Option<libpfs3::ondisk::DirEntry>>| {
+            said(r.map(|e| e.map(|e| e.name)))
+        };
+        let got = vec![
+            (
+                "a clean volume, a name not there",
+                name_of(clean_vol.lookup("NoSuch")),
+            ),
+            (
+                "a name before the malformed entry",
+                name_of(vol.lookup("File")),
+            ),
+            ("a name behind it", name_of(vol.lookup("Dst"))),
+            ("a name not there", name_of(vol.lookup("NoSuch"))),
+            ("a path through it", name_of(vol.lookup("Dst/Inner"))),
+            ("the listing", said(vol.list_dir("").map(|l| l.len()))),
+        ];
+        let expected = vec![
+            ("a clean volume, a name not there", "Ok(None)".to_string()),
+            (
+                "a name before the malformed entry",
+                "Ok(Some(\"File\"))".to_string(),
+            ),
+            ("a name behind it", damaged.clone()),
+            ("a name not there", damaged.clone()),
+            ("a path through it", damaged.clone()),
+            ("the listing", damaged.clone()),
+        ];
+        assert_eq!(got, expected);
+
+        type Op = fn(&mut libpfs3::writer::Writer) -> libpfs3::error::Result<()>;
+        let ops: [(&str, Op); 2] = [
+            ("rename", |w| {
+                w.rename_in(PFS3_ROOT, "Dst", PFS3_ROOT, "Moved")
+            }),
+            ("delete", |w| w.delete_in(PFS3_ROOT, "Dst")),
+        ];
+        let refusal = format!(
+            "corrupt filesystem: directory block {root_block} holds a malformed entry at offset \
+             {pos} (size 12) — check this volume with a PFS3 repair tool before writing to it"
+        );
+        let mut wrong = Vec::new();
+        for (what, op) in ops {
+            if let Some(problem) = pfs3_refusal_problem(&dev, op, &refusal) {
+                wrong.push(format!("{what}: {problem}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// **ART-325, the writer's half.** `build_dir_entry` writes `fsizex`
