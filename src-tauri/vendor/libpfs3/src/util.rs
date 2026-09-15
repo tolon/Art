@@ -1,4 +1,8 @@
 //! Utility functions: datestamp conversion, protection bits, charset.
+//!
+//! Modified by ART on 2026-09-15 (ART-326): `name_eq_ci` compares names as
+//! pfs3aio does, folding Latin-1 letters as well as ASCII. `ART-PATCH.md` in
+//! this crate's root says what and why.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -155,8 +159,24 @@ pub fn latin1_to_string(data: &[u8]) -> String {
 }
 
 /// Case-insensitive comparison for Amiga filenames (Latin-1).
+///
+/// ART (2026-09-15, ART-326): pfs3aio's own comparison. `intltoupper`
+/// upper-cases a byte in 0x61-0x7a, 0xe0-0xf6 or 0xf8-0xfe by subtracting 0x20
+/// (`assroutines.c:113-140`), and `intlcmp` matches names of one length whose
+/// bytes are equal or differ by exactly that (`assroutines.c:160-193`);
+/// `SearchInDir` looks a name up that way (`directory.c:724,736`,
+/// `tonioni/pfs3aio` `211f7f0`). 0.1.3 folded ASCII only, so "Äa" and "äa"
+/// were two names here and one to pfs3aio. A character above U+00FF, which
+/// no name read from a volume holds, matches only itself.
 pub fn name_eq_ci(a: &str, b: &str) -> bool {
-    a.eq_ignore_ascii_case(b)
+    fn upper(c: char) -> char {
+        match u32::from(c) {
+            n @ (0x61..=0x7a | 0xe0..=0xf6 | 0xf8..=0xfe) => char::from_u32(n - 0x20).unwrap_or(c),
+            _ => c,
+        }
+    }
+    a.chars().count() == b.chars().count()
+        && a.chars().zip(b.chars()).all(|(x, y)| upper(x) == upper(y))
 }
 
 /// Return the current time as an Amiga datestamp (days, minutes, ticks).

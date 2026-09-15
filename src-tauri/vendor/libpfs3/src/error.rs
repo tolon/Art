@@ -7,7 +7,11 @@
 //! not only a failed commit.
 //! Modified by ART on 2026-09-15 (ART-323): the `HardLinkNotWritten`,
 //! `Pfs3aioLinkNotDeleted` and `HasHardLinks` variants, the writer's refusals
-//! around hard links. `ART-PATCH.md` in this crate's root says what and why.
+//! around hard links.
+//! Modified by ART on 2026-09-15 (ART-325/326/327): the `EntryNotDeleted`
+//! and `EntryNotMoved` variants, a delete or a move refused with what stopped
+//! it and what the user can do. `ART-PATCH.md` in this crate's root says what
+//! and why.
 
 /// Result type alias using the PFS3 [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
@@ -78,6 +82,27 @@ pub enum Error {
          pfs3aio does, so it did not delete it — delete the links first"
     )]
     HasHardLinks { name: String, links: String },
+
+    /// ART (2026-09-15, the scoped re-review's item 4): a delete refused
+    /// because something it must check first could not be checked — its own
+    /// entry's extra fields, or the hard-link check, stopped by a directory
+    /// it could not read, an entry it could not walk or a link whose extra
+    /// fields do not fit. `reason` names what stopped it and where.
+    #[error(
+        "'{name}' was not deleted: {reason} — delete it on the Amiga, or check this volume with \
+         a PFS3 repair tool and try again"
+    )]
+    EntryNotDeleted { name: String, reason: String },
+
+    /// ART (2026-09-15, ART-327): a move to another directory refused because
+    /// the chain of hard links pfs3aio's `MoveLink` updates
+    /// (`directory.c:3993-4028`) could not be read to its end. `reason` names
+    /// the anode.
+    #[error(
+        "'{name}' was not moved: {reason} — move it on the Amiga, or check this volume with a \
+         PFS3 repair tool and try again"
+    )]
+    EntryNotMoved { name: String, reason: String },
 
     /// ART-319: the writer has locked itself, and every later mutating call
     /// refuses immediately with this, before touching anything. Two causes

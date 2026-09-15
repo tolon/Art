@@ -1100,29 +1100,65 @@ fn production_after() -> u32 {
     /// inside a test region binds nothing here, since a call there is
     /// skipped anyway. Returned as `(0-based line, trimmed line)`.
     ///
+    /// Scoped re-review item 2: also a glob of either (pinned in the fixture
+    /// now, not only resolved); the qualified-path form
+    /// `<libpfs3::writer::Writer>::open(` and `<Alias>::open(`; and an
+    /// `extern crate libpfs3 as x;` alias, used as a path or as the root of a
+    /// `use`. It reads code only: a block comment (nested or not), a string,
+    /// a raw string or a char literal is blanked first by
+    /// `strip_string_literals`, which keeps every newline where it was, so
+    /// neither holds a call nor binds a name.
+    ///
     /// **What it does not see:** a `Writer` reached through a re-export in
     /// another module (`pub use libpfs3::writer::Writer;` in one file, then
-    /// `crate::that::Writer::open(` in another), a call built by a macro, and
-    /// a call split across lines inside `Writer::open(`.
+    /// `crate::that::Writer::open(` in another), or through an `extern crate`
+    /// alias made in another file; a call built by a macro; a call split
+    /// across lines inside `Writer::open(`; and a trait-qualified
+    /// `<libpfs3::writer::Writer as T>::open(`, which only a trait of ART's
+    /// own with an `open` method could make compile.
     fn libpfs3_writer_open_sites(label: &str, text: &str) -> Vec<(usize, String)> {
         let lines: Vec<&str> = text.lines().collect();
         let regions = test_regions(label, &lines);
-        let live =
-            |n: usize| !is_test_line(&regions, n) && !lines[n].trim_start().starts_with("//");
+        let stripped = strip_string_literals(text);
+        let code: Vec<&str> = stripped.lines().collect();
+        assert_eq!(
+            code.len(),
+            lines.len(),
+            "{label}: stripping comments and strings moved a line"
+        );
+        let live = |n: usize| !is_test_line(&regions, n);
         let root = concat!("lib", "pfs3");
         let writer_mod = format!("{root}::writer");
         let writer_type = format!("{writer_mod}::Writer");
         let mut needles = vec![format!("{writer_type}::open(")];
         // Paths that name the `Writer` type itself, for `type` aliases.
         let mut type_names = vec![writer_type.clone()];
+        // `extern crate libpfs3 as x;` makes `x` another name for the crate.
+        let mut roots = vec![root.to_string()];
+        let extern_alias = format!("extern crate {root} as ");
+        for (n, line) in code.iter().enumerate() {
+            if !live(n) {
+                continue;
+            }
+            let compact = compact_rust(line);
+            let unpub = compact.strip_prefix("pub ").unwrap_or(&compact);
+            if let Some(alias) = unpub.strip_prefix(extern_alias.as_str()) {
+                let alias = alias.trim_end_matches(';');
+                if !alias.is_empty() && alias != "_" {
+                    needles.push(format!("{alias}::writer::Writer::open("));
+                    type_names.push(format!("{alias}::writer::Writer"));
+                    roots.push(alias.to_string());
+                }
+            }
+        }
         let mut n = 0;
-        while n < lines.len() {
+        while n < code.len() {
             let start = n;
             n += 1;
             if !live(start) {
                 continue;
             }
-            let head = compact_rust(lines[start]);
+            let head = compact_rust(code[start]);
             let Some(at) = head.find("use ") else {
                 continue;
             };
@@ -1131,18 +1167,22 @@ fn production_after() -> u32 {
                 continue;
             }
             let mut stmt = head[at + 4..].to_string();
-            while !stmt.contains(';') && n < lines.len() {
-                stmt.push_str(&compact_rust(lines[n]));
+            while !stmt.contains(';') && n < code.len() {
+                stmt.push_str(&compact_rust(code[n]));
                 n += 1;
             }
             let stmt = stmt.trim_start_matches("::");
             let stmt = stmt.split(';').next().unwrap_or("");
-            let rooted = stmt == root
-                || stmt.starts_with(&format!("{root}::"))
-                || stmt.starts_with(&format!("{root} as "));
-            if !rooted {
+            // Rooted at the crate or at an `extern crate` alias of it, and
+            // spelled from the crate's own name either way.
+            let Some(stmt) = roots.iter().find_map(|r| {
+                let rest = stmt.strip_prefix(r.as_str())?;
+                (rest.is_empty() || rest.starts_with("::") || rest.starts_with(" as "))
+                    .then(|| format!("{root}{rest}"))
+            }) else {
                 continue;
-            }
+            };
+            let stmt = stmt.as_str();
             let mut leaves = Vec::new();
             use_tree_leaves("", stmt, &mut leaves);
             for (path, name) in leaves {
@@ -1167,7 +1207,8 @@ fn production_after() -> u32 {
                 }
             }
         }
-        for (n, line) in lines.iter().enumerate() {
+        let mut aliases = Vec::new();
+        for (n, line) in code.iter().enumerate() {
             if !live(n) {
                 continue;
             }
@@ -1179,24 +1220,29 @@ fn production_after() -> u32 {
             if let Some((alias, rhs)) = rest.split_once('=') {
                 let rhs = rhs.trim_end_matches(';').trim_start_matches("::");
                 if type_names.iter().any(|t| rhs == t) {
-                    needles.push(format!("{alias}::open("));
+                    aliases.push(alias.to_string());
                 }
             }
         }
+        // `<T>::open(` names the type as `T::open(` does.
+        for t in type_names.iter().chain(&aliases) {
+            needles.push(format!("<{t}>::open("));
+        }
+        needles.extend(aliases.iter().map(|alias| format!("{alias}::open(")));
         let ident = |c: char| c.is_alphanumeric() || c == '_';
         let mut sites = Vec::new();
-        for (n, line) in lines.iter().enumerate() {
+        for (n, line) in code.iter().enumerate() {
             if !live(n) {
                 continue;
             }
-            let compact = compact_rust(line);
+            let compact = compact_rust(line).replace("<::", "<");
             let hit = needles.iter().any(|needle| {
                 compact
                     .match_indices(needle.as_str())
                     .any(|(at, _)| !compact[..at].chars().last().is_some_and(ident))
             });
             if hit {
-                sites.push((n, line.trim().to_string()));
+                sites.push((n, lines[n].trim().to_string()));
             }
         }
         sites
@@ -1262,6 +1308,130 @@ fn production_after() -> u32 {
     }
 ";
         assert!(libpfs3_writer_open_sites("unrelated fixture", unrelated).is_empty());
+
+        // Scoped re-review item 2: the glob forms, the qualified-path form,
+        // an `extern crate` alias, and a call that only looks like one because
+        // it sits in a block comment or a string. Each case is its own source.
+        let cases: [(&str, &str, &[&str]); 10] = [
+            (
+                "a glob of libpfs3::writer",
+                "\
+    use libpfs3::writer::*;
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &["let _ = Writer::open(v);"],
+            ),
+            (
+                "a glob of libpfs3",
+                "\
+    use libpfs3::*;
+    fn f(v: V) {
+        let _ = writer::Writer::open(v);
+    }
+",
+                &["let _ = writer::Writer::open(v);"],
+            ),
+            (
+                "a qualified path",
+                "\
+    fn f(v: V) {
+        let _ = <libpfs3::writer::Writer>::open(v);
+    }
+",
+                &["let _ = <libpfs3::writer::Writer>::open(v);"],
+            ),
+            (
+                "a qualified path through a use alias",
+                "\
+    use libpfs3::writer::Writer as W;
+    fn f(v: V) {
+        let _ = <W>::open(v);
+    }
+",
+                &["let _ = <W>::open(v);"],
+            ),
+            (
+                "an extern crate alias",
+                "\
+    extern crate libpfs3 as x;
+    fn f(v: V) {
+        let _ = x::writer::Writer::open(v);
+    }
+",
+                &["let _ = x::writer::Writer::open(v);"],
+            ),
+            (
+                "a use through an extern crate alias",
+                "\
+    extern crate libpfs3 as x;
+    use x::writer::Writer;
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &["let _ = Writer::open(v);"],
+            ),
+            (
+                "block comments",
+                "\
+    use libpfs3::writer::Writer;
+    fn f(v: V) {
+        /* let _ = Writer::open(v); */
+        /*
+         let _ = Writer::open(v);
+         /* nested */ let _ = Writer::open(v);
+        */
+    }
+",
+                &[],
+            ),
+            (
+                "string literals",
+                "\
+    use libpfs3::writer::Writer;
+    fn f(v: V) {
+        let _ = \"Writer::open(v)\";
+        let _ = r#\"Writer::open(v)\"#;
+    }
+",
+                &[],
+            ),
+            (
+                "a call after a string holding a comment opener",
+                "\
+    use libpfs3::writer::Writer;
+    fn f(v: V) {
+        let s = \"/*\"; let _ = Writer::open(v);
+    }
+",
+                &["let s = \"/*\"; let _ = Writer::open(v);"],
+            ),
+            (
+                "a use inside a block comment",
+                "\
+    /* use libpfs3::writer::Writer; */
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &[],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (what, src, expected) in cases {
+            let flagged: Vec<String> = libpfs3_writer_open_sites(what, src)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect();
+            if flagged != expected {
+                wrong.push(format!(
+                    "{what}: flagged {flagged:?}, expected {expected:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     /// `(first, last)` 0-based lines of the top-level item whose opening line

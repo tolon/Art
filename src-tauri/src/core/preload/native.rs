@@ -16,7 +16,7 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.9`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.10`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
@@ -119,7 +119,7 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.9";
+const LIBPFS3_VERSION: &str = "0.1.3+art.10";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -3179,7 +3179,10 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter::UTC.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.9 (native, no external tool)");
+        assert_eq!(
+            probed.raw,
+            "libpfs3 0.1.3+art.10 (native, no external tool)"
+        );
     }
 
     /// A DosType neither family claims — ART refuses rather than guessing.
@@ -4482,8 +4485,13 @@ mod tests {
         assert_pfs3_failure_leaves_the_last_commit(
             &dev,
             |w| {
-                // Read 1: the source listing. Read 2: `remove_dir_entry`.
-                armed.fail_read_of(fx.dir_block, 2);
+                // Reads of "Dir"'s block: 1 the source listing, 2 the source
+                // entry's own bytes (ART-327), 3 the destination delete's
+                // hard-link check (ART-323), 4 `remove_dir_entry` — after the
+                // destination's delete and the new entry are staged. (Before
+                // ART-327 the count was 2, which ART-323's check had already
+                // moved to the check itself.)
+                armed.fail_read_of(fx.dir_block, 4);
                 w.rename_in(fx.dir, "Src", PFS3_ROOT, "Dst")
             },
             |e| matches!(e, libpfs3::error::Error::Io(io) if io.to_string().contains("fail_read_of")),
@@ -4820,32 +4828,170 @@ mod tests {
     /// `6b45584`). With `link` 0 this is byte for byte what 0.1.3's
     /// `create_hardlink` wrote for a link (its `build_dir_entry`: flags 0).
     fn pfs3_raw_entry(entry_type: i8, anode: u32, fsize: u32, name: &str, link: u32) -> Vec<u8> {
-        let mut e = vec![0u8; 18];
-        e[1] = entry_type as u8;
-        e[2..6].copy_from_slice(&anode.to_be_bytes());
-        e[6..10].copy_from_slice(&fsize.to_be_bytes());
-        e[10..12].copy_from_slice(&PFS3_FIXTURE_DATE.0.to_be_bytes());
-        e[12..14].copy_from_slice(&PFS3_FIXTURE_DATE.1.to_be_bytes());
-        e[14..16].copy_from_slice(&PFS3_FIXTURE_DATE.2.to_be_bytes());
-        e[17] = name.len() as u8;
-        e.extend_from_slice(name.as_bytes());
-        e.push(0); // comment length
-        if e.len() % 2 == 1 {
-            e.push(0);
+        let mut words = [0u16; 11];
+        words[XF_LINK_HI] = (link >> 16) as u16;
+        words[XF_LINK_LO] = link as u16;
+        RawEntry {
+            entry_type,
+            words,
+            ..RawEntry::file(name.as_bytes(), anode, fsize)
         }
-        let (hi, lo) = ((link >> 16) as u16, link as u16);
-        let mut flags = 0u16;
-        if lo != 0 {
-            e.extend_from_slice(&lo.to_be_bytes());
-            flags |= 2;
+        .bytes()
+    }
+
+    /// pfs3aio's `struct extrafields` as its eleven 16-bit words, in order
+    /// (`blocks.h:342-353`, `tonioni/pfs3aio` `211f7f0`): `link`, `uid`,
+    /// `gid`, `prot`, `virtualsize`, `rollpointer` — each `ULONG` two words,
+    /// high first — and `fsizex`.
+    const XF_LINK_HI: usize = 0;
+    const XF_LINK_LO: usize = 1;
+    const XF_UID: usize = 2;
+    const XF_GID: usize = 3;
+    const XF_PROT_LO: usize = 5;
+    const XF_VSIZE_HI: usize = 6;
+    const XF_VSIZE_LO: usize = 7;
+    const XF_ROLL_HI: usize = 8;
+    const XF_ROLL_LO: usize = 9;
+    const XF_FSIZEX: usize = 10;
+    const ROLLOVER: i8 = libpfs3::ondisk::ST_ROLLOVERFILE;
+
+    /// One PFS3 directory entry, raw, built here from pfs3aio's source and
+    /// not through libpfs3, so that it can be the oracle for libpfs3's reader.
+    /// `struct direntry` is 20 bytes with its name and comment following
+    /// (`blocks.h:327-340`). `AddExtraFields` (`directory.c:3764-3800`,
+    /// `tonioni/pfs3aio` `211f7f0`) starts the fields at `(20 + nlength +
+    /// comment length) & 0xfffe`, writes the non-zero words of
+    /// `struct extrafields` highest first, then the flags word (bit `i` for
+    /// word `i`), and sets `next` to the end. With every word 0 the entry is
+    /// byte for byte what 0.1.3's `build_dir_entry` writes.
+    struct RawEntry<'a> {
+        entry_type: i8,
+        anode: u32,
+        fsize: u32,
+        date: (u16, u16, u16),
+        protection: u8,
+        name: &'a [u8],
+        comment: &'a [u8],
+        words: [u16; 11],
+    }
+
+    impl<'a> RawEntry<'a> {
+        fn file(name: &'a [u8], anode: u32, fsize: u32) -> Self {
+            RawEntry {
+                entry_type: FILE,
+                anode,
+                fsize,
+                date: PFS3_FIXTURE_DATE,
+                protection: 0,
+                name,
+                comment: b"",
+                words: [0; 11],
+            }
         }
-        if hi != 0 {
-            e.extend_from_slice(&hi.to_be_bytes());
-            flags |= 1;
+
+        fn bytes(&self) -> Vec<u8> {
+            let mut e = vec![0u8; 18];
+            e[1] = self.entry_type as u8;
+            e[2..6].copy_from_slice(&self.anode.to_be_bytes());
+            e[6..10].copy_from_slice(&self.fsize.to_be_bytes());
+            e[10..12].copy_from_slice(&self.date.0.to_be_bytes());
+            e[12..14].copy_from_slice(&self.date.1.to_be_bytes());
+            e[14..16].copy_from_slice(&self.date.2.to_be_bytes());
+            e[16] = self.protection;
+            e[17] = self.name.len() as u8;
+            e.extend_from_slice(self.name);
+            e.push(self.comment.len() as u8);
+            e.extend_from_slice(self.comment);
+            e.resize((20 + self.name.len() + self.comment.len()) & !1, 0);
+            let mut flags = 0u16;
+            for (i, word) in self.words.iter().enumerate().rev() {
+                if *word != 0 {
+                    e.extend_from_slice(&word.to_be_bytes());
+                    flags |= 1 << i;
+                }
+            }
+            e.extend_from_slice(&flags.to_be_bytes());
+            e[0] = e.len() as u8;
+            e
         }
-        e.extend_from_slice(&flags.to_be_bytes());
-        e[0] = e.len() as u8;
-        e
+    }
+
+    /// The raw bytes of the entry named `name` (exact bytes) in `dir`'s first
+    /// directory block, read from the device.
+    fn pfs3_raw_entry_named(dev: &MemDevice, dir: u32, name: &[u8]) -> Option<Vec<u8>> {
+        let blk = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            u64::from(vol.get_anode_chain(dir).unwrap()[0].blocknr)
+        };
+        let block = dev.read(blk, 1024);
+        let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+        while pos + 18 <= block.len() && block[pos] != 0 {
+            let size = usize::from(block[pos]);
+            let nlen = usize::from(block[pos + 17]);
+            if block.get(pos + 18..pos + 18 + nlen) == Some(name) {
+                return block.get(pos..pos + size).map(<[u8]>::to_vec);
+            }
+            pos += size;
+        }
+        None
+    }
+
+    /// Writes anode `nr`'s three fields raw, in a small-mode volume's first
+    /// anode block — `pfs3_raw_anode`'s reading, written back.
+    fn pfs3_patch_raw_anode(dev: &MemDevice, nr: u32, fields: (u32, u32, u32)) {
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), resblk);
+        let ab_blk = u64::from(be32(&ib, 12));
+        let mut ab = dev.read(ab_blk, resblk);
+        let at = 16 + nr as usize * 12;
+        ab[at..at + 4].copy_from_slice(&fields.0.to_be_bytes());
+        ab[at + 4..at + 8].copy_from_slice(&fields.1.to_be_bytes());
+        ab[at + 8..at + 12].copy_from_slice(&fields.2.to_be_bytes());
+        dev.patch(ab_blk, &ab);
+    }
+
+    /// `op`, on a writer freshly opened on `dev`, must fail with exactly the
+    /// sentence `expected`, write nothing, and — once the same writer commits
+    /// again — leave the volume its last commit. `None` when all of that
+    /// holds, otherwise what did not, so a test can report every arm at once.
+    fn pfs3_refusal_problem(
+        dev: &MemDevice,
+        op: impl FnOnce(&mut libpfs3::writer::Writer) -> libpfs3::error::Result<()>,
+        expected: &str,
+    ) -> Option<String> {
+        let (raw_before, facts_before) = pfs3_committed_state(dev);
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let committed_free = vol.rootblock.blocksfree;
+        let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+        let writes = dev.write_count();
+        let got = match op(&mut w) {
+            Ok(()) => "Ok(())".to_string(),
+            Err(e) => e.to_string(),
+        };
+        if got != expected {
+            return Some(format!("got {got:?}\n  expected {expected:?}"));
+        }
+        if dev.write_count() != writes {
+            return Some(format!(
+                "the refused call wrote {} times",
+                dev.write_count() - writes
+            ));
+        }
+        if let Err(e) = w.repair_blocksfree(committed_free) {
+            return Some(format!("the writer did not commit after the refusal: {e}"));
+        }
+        drop(w);
+        let (raw_after, facts_after) = pfs3_committed_state(dev);
+        if facts_after != facts_before {
+            return Some(format!(
+                "the volume is not its last commit: {facts_after:#?}"
+            ));
+        }
+        if raw_after != raw_before {
+            return Some("the reserved area is not its last commit".to_string());
+        }
+        None
     }
 
     /// Appends raw entries after the last entry of `dir`'s first directory
@@ -5097,6 +5243,550 @@ mod tests {
                 "head {head}, link entry {link_entry}"
             );
         }
+    }
+
+    /// **ART-325.** pfs3aio reads an entry's extra fields from its end: the
+    /// flags word is the entry's last two bytes, one bit per 16-bit word of
+    /// `struct extrafields`, each word whose bit is set lying before the one
+    /// read after it (`GetExtraFields`, `directory.c:3719-3731`; written by
+    /// `AddExtraFields`, `:3764-3800`; `tonioni/pfs3aio` `211f7f0`), and the
+    /// lower protection byte is OR-ed into `prot` (`:3729-3730`). libpfs3's
+    /// parser read the flags word first, one bit per field, so an entry with
+    /// two or more words read back a wrong `link`, wrong rollover values, no
+    /// upper protection bits — and a wrong size: ART's first-boot report
+    /// (`core/firstboot/cardread.rs`) and install verification
+    /// (`core/osinstall/verify.rs`) read `file_size()` off cards a real Amiga
+    /// wrote. Three entries laid out as pfs3aio writes them, each read back
+    /// through `Volume::lookup`.
+    #[test]
+    fn a_pfs3aio_entrys_extra_fields_read_back_as_pfs3aio_writes_them() {
+        type Facts = (u64, String, u32, u16, u16, u32, u32, u32, u16);
+        fn facts(vol: &mut libpfs3::volume::Volume, name: &str) -> Facts {
+            let e = vol.lookup(name).unwrap().unwrap();
+            let x = &e.extra;
+            (
+                e.file_size(),
+                e.comment.clone(),
+                x.link,
+                x.uid,
+                x.gid,
+                x.prot,
+                x.virtualsize,
+                x.rollpointer,
+                x.fsizex,
+            )
+        }
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let mut linked = [0u16; 11];
+        linked[XF_LINK_LO] = 13;
+        linked[XF_FSIZEX] = 1;
+        let mut rolled = [0u16; 11];
+        rolled[XF_VSIZE_HI] = 0x0002;
+        rolled[XF_VSIZE_LO] = 0x1000;
+        rolled[XF_ROLL_HI] = 0x0001;
+        rolled[XF_ROLL_LO] = 0x0041;
+        let mut owned = [0u16; 11];
+        owned[XF_UID] = 0x0041;
+        owned[XF_GID] = 0x0040;
+        owned[XF_PROT_LO] = 0x0500;
+        pfs3_append_raw_entries(
+            &dev,
+            PFS3_ROOT,
+            &[
+                RawEntry {
+                    words: linked,
+                    ..RawEntry::file(b"Linked", fx.file, 700)
+                }
+                .bytes(),
+                RawEntry {
+                    entry_type: ROLLOVER,
+                    words: rolled,
+                    ..RawEntry::file(b"Rolled", fx.file, 4096)
+                }
+                .bytes(),
+                RawEntry {
+                    protection: 0x05,
+                    comment: b"a note",
+                    words: owned,
+                    ..RawEntry::file(b"Owned", fx.file, 700)
+                }
+                .bytes(),
+            ],
+        );
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert_eq!(
+            [
+                facts(&mut vol, "Linked"),
+                facts(&mut vol, "Rolled"),
+                facts(&mut vol, "Owned"),
+            ],
+            [
+                (700 + (1 << 32), String::new(), 13, 0, 0, 0, 0, 0, 1),
+                (4096, String::new(), 0, 0, 0, 0, 0x0002_1000, 0x0001_0041, 0),
+                (700, "a note".to_string(), 0, 0x41, 0x40, 0x0505, 0, 0, 0),
+            ],
+            "(size, comment, link, uid, gid, prot, virtualsize, rollpointer, fsizex)"
+        );
+    }
+
+    /// **ART-325, the writer's half.** `build_dir_entry` writes `fsizex`
+    /// through `ExtraFields::encode`, and no writer call reaches that below
+    /// 4 GiB. `encode` must lay the fields out as pfs3aio's `AddExtraFields`
+    /// does (`directory.c:3764-3800`) — `RawEntry`, built from pfs3aio's
+    /// source, is the oracle — and `ExtraFields::read` must read that back.
+    /// Written after `encode` existed, so its red is a mutation's.
+    #[test]
+    fn extra_fields_encode_lays_out_what_pfs3aio_writes_and_read_reads_it_back() {
+        let fields = libpfs3::ondisk::ExtraFields {
+            link: 0x0001_000D,
+            uid: 0x41,
+            gid: 0,
+            prot: 0x0000_0500,
+            virtualsize: 0,
+            rollpointer: 0x0002_0000,
+            fsizex: 3,
+        };
+        let mut words = [0u16; 11];
+        words[XF_LINK_HI] = 1;
+        words[XF_LINK_LO] = 0x0D;
+        words[XF_UID] = 0x41;
+        words[XF_PROT_LO] = 0x0500;
+        words[XF_ROLL_HI] = 2;
+        words[XF_FSIZEX] = 3;
+        let raw = RawEntry {
+            words,
+            ..RawEntry::file(b"Name", 7, 9)
+        }
+        .bytes();
+        let at = libpfs3::ondisk::extra_fields_offset(4, 0);
+        assert_eq!(fields.encode(), raw[at..].to_vec());
+        assert_eq!(libpfs3::ondisk::ExtraFields::read(&raw), Ok(fields));
+    }
+
+    /// **ART-326.** pfs3aio refuses to create an object under a name its
+    /// directory already holds — `SearchInDir` then `ERROR_OBJECT_EXISTS` in
+    /// `NewDir` (`directory.c:1666-1671`), `CreateSoftLink`
+    /// (`:2552-2557`), `CreateLink` (`:2665-2670`) — comparing names as
+    /// `intltoupper`/`intlcmp` do, which fold Latin-1 letters as well as
+    /// ASCII (`assroutines.c:113-140,160-193`; `directory.c:724,736`). libpfs3
+    /// looked no name up in `create_dir_in` or `create_softlink_in`, and
+    /// `write_file_in` over anything but a file added a second entry. Each
+    /// arm is refused `AlreadyExists` naming the name given, writes nothing,
+    /// and leaves the last commit.
+    #[test]
+    fn creating_a_pfs3_entry_under_a_name_that_exists_is_refused_before_anything_is_written() {
+        type Op = fn(&mut libpfs3::writer::Writer) -> libpfs3::error::Result<()>;
+        let cases: [(&str, &str, Op); 8] = [
+            ("a directory over a file", "file", |w| {
+                w.create_dir_in(PFS3_ROOT, "file")
+            }),
+            ("a directory over a directory", "DIR", |w| {
+                w.create_dir_in(PFS3_ROOT, "DIR")
+            }),
+            ("a directory by path", "dir", |w| w.create_dir("dir")),
+            ("a soft link over a file", "dst", |w| {
+                w.create_softlink_in(PFS3_ROOT, "dst", "File")
+            }),
+            ("a file over a directory", "Dir", |w| {
+                w.write_file_in(PFS3_ROOT, "Dir", b"x")
+            }),
+            ("a file over a soft link", "SOFT", |w| {
+                w.write_file_in(PFS3_ROOT, "SOFT", b"x")
+            }),
+            ("a file over a hard link", "link", |w| {
+                w.write_file_in(PFS3_ROOT, "link", b"x")
+            }),
+            (
+                "a directory over a Latin-1 name in the other case",
+                "\u{e4}a",
+                |w| w.create_dir_in(PFS3_ROOT, "\u{e4}a"),
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (what, name, op) in cases {
+            let dev = MemDevice::new();
+            let fx = pfs3_mutator_fixture(&dev, false);
+            {
+                let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+                let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+                w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+                w.create_softlink("Soft", "File").unwrap();
+            }
+            let dst = {
+                let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+                vol.lookup("Dst").unwrap().unwrap().anode
+            };
+            pfs3_append_raw_entries(
+                &dev,
+                PFS3_ROOT,
+                &[
+                    pfs3_raw_entry(LINKFILE, dst, 0, "Link", 0),
+                    // "Äa" as an Amiga stores it, Latin-1 `C4 61`.
+                    RawEntry::file(&[0xC4, b'a'], fx.file, 700).bytes(),
+                ],
+            );
+            if let Some(problem) =
+                pfs3_refusal_problem(&dev, op, &format!("already exists: {name}"))
+            {
+                wrong.push(format!("{what}: {problem}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+        // The overwrite of a file stays.
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file_in(PFS3_ROOT, "FILE", b"replaced").unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let entries = vol.list_dir_by_anode(PFS3_ROOT).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|e| e.name.eq_ignore_ascii_case("file"))
+                .count(),
+            1,
+            "{entries:#?}"
+        );
+        assert_eq!(vol.read_file("File").unwrap(), b"replaced");
+    }
+
+    /// **Scoped re-review item 5.** `find_dir_entry` read an entry's name
+    /// length at `pos + 17` and its name up to `pos + 18 + nlen` without a
+    /// bound, and its siblings trusted what it found: a directory block whose
+    /// entry claims a name past the block's end indexed past the buffer — a
+    /// panic, and under `panic = "abort"` the end of the process — and an
+    /// entry smaller than its own header was stepped over as if it were
+    /// well-formed. Each writer call that walks the block refuses, naming the
+    /// block and the offset, writes nothing and leaves the last commit.
+    #[test]
+    fn a_malformed_pfs3_directory_entry_is_refused_by_the_writer_not_read_past() {
+        type Op = fn(&mut libpfs3::writer::Writer) -> libpfs3::error::Result<()>;
+        let ops: [(&str, Op); 4] = [
+            ("protect", |w| {
+                w.update_dir_entry_protection(PFS3_ROOT, "NoSuch", 5)
+            }),
+            ("write", |w| w.write_file_in(PFS3_ROOT, "New", b"new")),
+            ("mkdir", |w| w.create_dir_in(PFS3_ROOT, "New")),
+            ("rename", |w| {
+                w.rename_in(PFS3_ROOT, "File", PFS3_ROOT, "Renamed")
+            }),
+        ];
+        let mut wrong = Vec::new();
+        // The third shape was added after the red run: on 0.1.3's walk an
+        // entry running past the block ended the walk as "not found", and its
+        // red is the block-bound mutation's.
+        for shape in ["name runs past", "size below the header", "entry runs past"] {
+            for (what, op) in ops {
+                let dev = MemDevice::new();
+                let fx = pfs3_mutator_fixture(&dev, false);
+                if shape != "size below the header" {
+                    // Well-formed entries first, so the bad one sits where a
+                    // 255-byte name, or a 250-byte entry, crosses the block's end.
+                    let names: Vec<String> = (0..8)
+                        .map(|i| format!("Filler{i}{}", "x".repeat(54)))
+                        .collect();
+                    let filler: Vec<Vec<u8>> = names
+                        .iter()
+                        .map(|n| RawEntry::file(n.as_bytes(), fx.file, 0).bytes())
+                        .collect();
+                    pfs3_append_raw_entries(&dev, PFS3_ROOT, &filler);
+                }
+                let root_block = {
+                    let mut vol =
+                        libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+                    vol.get_anode_chain(PFS3_ROOT).unwrap()[0].blocknr
+                };
+                let mut block = dev.read(u64::from(root_block), 1024);
+                let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+                while block[pos] != 0 {
+                    pos += usize::from(block[pos]);
+                }
+                let size: u8 = match shape {
+                    "name runs past" => 200,
+                    "entry runs past" => 250,
+                    _ => 12,
+                };
+                block[pos] = size;
+                if shape == "name runs past" {
+                    block[pos + 17] = 255;
+                    assert!(
+                        pos + usize::from(size) <= 1024 && pos + 18 + 255 > 1024,
+                        "the fixture's arithmetic: the entry at {pos} must fit the block and its \
+                         name must not"
+                    );
+                }
+                if shape == "entry runs past" {
+                    block[pos + 17] = 3;
+                    assert!(
+                        pos + usize::from(size) > 1024 && pos + 18 + 3 <= 1024,
+                        "the fixture's arithmetic: the entry at {pos} must run past the block \
+                         and its name must not"
+                    );
+                }
+                dev.patch(u64::from(root_block), &block);
+                let expected = format!(
+                    "corrupt filesystem: directory block {root_block} holds a malformed entry at \
+                     offset {pos} (size {size}) — check this volume with a PFS3 repair tool \
+                     before writing to it"
+                );
+                if let Some(problem) = pfs3_refusal_problem(&dev, op, &expected) {
+                    wrong.push(format!("{what}, {shape}: {problem}"));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// **Scoped re-review item 4.** ART-323's delete reads every directory to
+    /// find a hard link naming what it deletes. When that check cannot finish
+    /// — a directory it cannot read, an entry it cannot walk, a link whose
+    /// extra fields do not fit its entry — the refusal names the object, what
+    /// stopped the check and where, and what the user can do. It used to be
+    /// the bare I/O error, or `corrupt filesystem: the directory entry at
+    /// offset N …`, or no refusal at all (a malformed entry ended the scan of
+    /// its block and the delete went ahead).
+    #[test]
+    fn a_pfs3_delete_whose_link_check_cannot_finish_is_refused_naming_what_stopped_it() {
+        const TAIL: &str =
+            " — delete it on the Amiga, or check this volume with a PFS3 repair tool and try again";
+        type RefusalOp =
+            Box<dyn FnOnce(&mut libpfs3::writer::Writer) -> libpfs3::error::Result<()>>;
+        let mut wrong = Vec::new();
+        let mut check = |what: &str, dev: &MemDevice, op: RefusalOp, expected: String| {
+            if let Some(problem) = pfs3_refusal_problem(dev, op, &expected) {
+                wrong.push(format!("{what}: {problem}"));
+            }
+        };
+
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let armed = dev.clone();
+        check(
+            "an unreadable directory",
+            &dev,
+            Box::new(move |w| {
+                armed.fail_read_of(fx.dir_block, 1);
+                w.delete_in(PFS3_ROOT, "Dst")
+            }),
+            format!(
+                "'Dst' was not deleted: ART could not check that no hard link names it, because \
+                 the directory 'Dir' could not be read (I/O error: sector unreadable once \
+                 (MemDevice::fail_read_of, test)){TAIL}"
+            ),
+        );
+
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let mut block = dev.read(fx.dir_block, 1024);
+        let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+        while block[pos] != 0 {
+            pos += usize::from(block[pos]);
+        }
+        block[pos] = 12;
+        dev.patch(fx.dir_block, &block);
+        check(
+            "a malformed entry",
+            &dev,
+            Box::new(|w| w.delete_in(PFS3_ROOT, "Dst")),
+            format!(
+                "'Dst' was not deleted: ART could not check that no hard link names it, because \
+                 the directory 'Dir' holds a malformed entry at offset {pos} of block {} (size \
+                 12){TAIL}",
+                fx.dir_block
+            ),
+        );
+
+        // A link whose flags word claims both words of `link` (0x0003) and
+        // whose entry holds one.
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let src = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.lookup("Dir/Src").unwrap().unwrap().anode
+        };
+        let mut bad = pfs3_raw_entry(LINKFILE, src, 0, "BadLink", 13);
+        let end = bad.len();
+        bad[end - 2..].copy_from_slice(&3u16.to_be_bytes());
+        pfs3_append_raw_entries(&dev, fx.dir, &[bad]);
+        check(
+            "a malformed link in the scan",
+            &dev,
+            Box::new(|w| w.delete_in(PFS3_ROOT, "Dst")),
+            format!(
+                "'Dst' was not deleted: ART could not check that no hard link names it, because \
+                 the hard link 'Dir/BadLink' has extra fields that do not fit its entry (flags \
+                 0x0003){TAIL}"
+            ),
+        );
+        check(
+            "the malformed link itself",
+            &dev,
+            Box::new(move |w| w.delete_in(fx.dir, "BadLink")),
+            format!(
+                "'BadLink' was not deleted: its directory entry has extra fields that do not fit \
+                 it (flags 0x0003){TAIL}"
+            ),
+        );
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// **ART-327.** pfs3aio's `RenameAndMove` builds the moved entry from the
+    /// source's own bytes — the header through `protection` copied, the new
+    /// name, the comment copied, the extra fields copied to the new field
+    /// offset (`directory.c:2097-2124`) — and hands it to `ChangeDirEntry`
+    /// (`:2130`); across directories `MoveLink` then points a link's own node
+    /// at its new directory (`blocknr`), or each node of an object's chain at
+    /// the object's (`clustersize`) (`:2136-2142,3993-4028`; `tonioni/pfs3aio`
+    /// `211f7f0`). libpfs3 rebuilt the entry with no comment, "now" as its
+    /// date and no extra fields. Four renames — across directories and
+    /// within one, a name of another length, a pfs3aio link and its object —
+    /// must each leave exactly the entry pfs3aio's would, byte for byte, and
+    /// the link node must name the new directories.
+    #[test]
+    fn a_pfs3_rename_keeps_the_entrys_comment_date_and_extra_fields_and_moves_its_links() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let lx = pfs3aio_linked_file(&dev, true, true);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+            w.write_file("Dir/Noted", b"noted bytes").unwrap();
+            w.write_file("Dir/Big", b"big bytes").unwrap();
+        }
+        let (src, noted, big, obj) = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut anode = |p: &str| vol.lookup(p).unwrap().unwrap().anode;
+            (
+                anode("Dir/Src"),
+                anode("Dir/Noted"),
+                anode("Dir/Big"),
+                anode("Links/Obj"),
+            )
+        };
+        let mut owned = [0u16; 11];
+        owned[XF_UID] = 0x0041;
+        owned[XF_GID] = 0x0040;
+        owned[XF_PROT_LO] = 0x0500;
+        owned[XF_FSIZEX] = 1;
+        let noted_entry = |name: &[u8]| {
+            RawEntry {
+                date: (12_345, 67, 8),
+                protection: 0x05,
+                comment: b"a note",
+                words: owned,
+                ..RawEntry::file(name, noted, 11)
+            }
+            .bytes()
+        };
+        let mut sized = [0u16; 11];
+        sized[XF_FSIZEX] = 2;
+        let big_entry = |name: &[u8]| {
+            RawEntry {
+                date: (12_346, 1, 2),
+                comment: b"x",
+                words: sized,
+                ..RawEntry::file(name, big, 9)
+            }
+            .bytes()
+        };
+        let mut block = dev.read(fx.dir_block, 1024);
+        block[libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE..].fill(0);
+        dev.patch(fx.dir_block, &block);
+        pfs3_append_raw_entries(
+            &dev,
+            fx.dir,
+            &[
+                RawEntry::file(b"Src", src, 12).bytes(),
+                noted_entry(b"Noted"),
+                big_entry(b"Big"),
+            ],
+        );
+
+        let mut wrong = Vec::new();
+        for (src_dir, from, dst_dir, to) in [
+            (fx.dir, "Noted", PFS3_ROOT, "Moved"),
+            (fx.dir, "Big", fx.dir, "Bigger"),
+            (lx.dir, "Obj", PFS3_ROOT, "Object"),
+            (lx.dir, "Lnk", PFS3_ROOT, "Link2"),
+        ] {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            if let Err(e) = w.rename_in(src_dir, from, dst_dir, to) {
+                wrong.push(format!("renaming {from} to {to}: {e}"));
+            }
+        }
+        for (dir, name, expected) in [
+            (PFS3_ROOT, "Moved", noted_entry(b"Moved")),
+            (fx.dir, "Bigger", big_entry(b"Bigger")),
+            (
+                PFS3_ROOT,
+                "Object",
+                pfs3_raw_entry(FILE, obj, 12, "Object", lx.node),
+            ),
+            (
+                PFS3_ROOT,
+                "Link2",
+                pfs3_raw_entry(LINKFILE, lx.node, 12, "Link2", obj),
+            ),
+        ] {
+            let got = pfs3_raw_entry_named(&dev, dir, name.as_bytes());
+            if got.as_deref() != Some(&expected[..]) {
+                wrong.push(format!("{name}: {got:02x?}\n  expected {expected:02x?}"));
+            }
+        }
+        for (dir, name) in [
+            (fx.dir, "Noted"),
+            (fx.dir, "Big"),
+            (lx.dir, "Obj"),
+            (lx.dir, "Lnk"),
+        ] {
+            if pfs3_raw_entry_named(&dev, dir, name.as_bytes()).is_some() {
+                wrong.push(format!("{name} is still in its old directory"));
+            }
+        }
+        let node = pfs3_raw_anode(&dev, lx.node);
+        if node != (PFS3_ROOT, PFS3_ROOT, 0) {
+            wrong.push(format!(
+                "the link node (clustersize = the object's directory, blocknr = the link's): \
+                 {node:?}, expected {:?}",
+                (PFS3_ROOT, PFS3_ROOT, 0)
+            ));
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        match vol.read_file("Object") {
+            Ok(bytes) if bytes == b"linked bytes" => {}
+            other => wrong.push(format!("Object's content: {other:?}")),
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// **ART-327, refused by name.** Moving a linked object across
+    /// directories walks its chain of link nodes (`MoveLink`,
+    /// `directory.c:4019-4026`). A chain that loops back on itself cannot be
+    /// walked to its end, so the move is refused naming the object and the
+    /// node, before anything is staged.
+    #[test]
+    fn a_pfs3_move_of_an_object_whose_link_chain_loops_is_refused_by_name() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        let lx = pfs3aio_linked_file(&dev, true, true);
+        pfs3_patch_raw_anode(&dev, lx.node, (lx.dir, lx.dir, lx.node));
+        let expected = format!(
+            "'Obj' was not moved: its chain of hard links loops back to anode {} — move it on the \
+             Amiga, or check this volume with a PFS3 repair tool and try again",
+            lx.node
+        );
+        let problem = pfs3_refusal_problem(
+            &dev,
+            |w| w.rename_in(lx.dir, "Obj", PFS3_ROOT, "Obj"),
+            &expected,
+        );
+        assert!(problem.is_none(), "{}", problem.unwrap_or_default());
     }
 
     /// **Final review fix wave, M1.** An Amiga stores a name's bytes as

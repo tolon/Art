@@ -1,4 +1,12 @@
 //! Directory block headers and directory entry parsing.
+//!
+//! Modified by ART on 2026-09-15 (ART-325): a directory entry's extra fields
+//! are read and written in pfs3aio's layout — the flags word last, one bit
+//! per 16-bit word of `struct extrafields`, the words before it — through
+//! `ExtraFields::word_offsets`, `ExtraFields::read` and
+//! `ExtraFields::encode`, which `DirEntry::parse` and the writer share.
+//! 0.1.3 read the flags word first, one bit per field. `ART-PATCH.md` in this
+//! crate's root says what and why.
 
 use super::*;
 use crate::error::{Error, Result};
@@ -51,8 +59,13 @@ pub struct DirEntry {
     pub extra: ExtraFields,
 }
 
-/// Extra fields appended after name+comment in a directory entry.
-#[derive(Debug, Clone, Default)]
+/// Extra fields appended after name+comment in a directory entry — pfs3aio's
+/// `struct extrafields` (`blocks.h:342-353`, `tonioni/pfs3aio` `211f7f0`).
+///
+/// ART (ART-325): `prot` holds the entry's protection bits 8-31 with its
+/// lower byte, the entry's own `protection`, OR-ed in, as `GetExtraFields`
+/// returns it (`directory.c:3729-3730`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExtraFields {
     pub link: u32,
     pub uid: u16,
@@ -63,9 +76,138 @@ pub struct ExtraFields {
     pub fsizex: u16,
 }
 
+/// ART (ART-325): the number of 16-bit words in pfs3aio's
+/// `struct extrafields`, and so the number of flag bits `GetExtraFields`
+/// reads (`directory.c:3726`).
+pub const EXTRA_FIELD_WORDS: usize = 11;
+
+/// ART (ART-325): the word of `struct extrafields` that is `fsizex`, and its
+/// flag bit.
+pub const EXTRA_FSIZEX_WORD: usize = 10;
+
+/// ART (ART-325): an entry whose flags word names more extra-field words
+/// than lie between the start of its fields and the flags word itself.
+/// pfs3aio would read the missing words out of the entry's comment or name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MalformedExtraFields {
+    pub flags: u16,
+}
+
+/// ART (ART-325): where an entry's extra fields start, for a name of `nlen`
+/// bytes and a comment of `clen`: `(sizeof(struct direntry) + nlength +
+/// comment length) & 0xfffe`, `struct direntry` being 20 bytes
+/// (`blocks.h:327-340`) — `AddExtraFields` (`directory.c:3773`) and
+/// `RenameAndMove` (`:2114-2115`).
+pub fn extra_fields_offset(nlen: usize, clen: usize) -> usize {
+    (20 + nlen + clen) & !1
+}
+
+impl ExtraFields {
+    /// ART (ART-325): the offset, inside `entry`, of each word of
+    /// `struct extrafields` the entry carries, as pfs3aio's `GetExtraFields`
+    /// finds them (`directory.c:3719-3731`): the flags word is the entry's
+    /// last two bytes, bit `i` says word `i` is there, and each word that is
+    /// there lies before the one found after it. `AddExtraFields` writes them
+    /// that way (`:3764-3800`); hst-amiga reads them the same way
+    /// (`DirEntryReader.ReadExtraFields`, `henrikstengaard/hst-amiga`
+    /// `6b45584`).
+    ///
+    /// `entry` is one whole entry, its size byte long. An entry that ends
+    /// before its fields' start plus a flags word has none — what pfs3aio
+    /// writes without `MODE_DIR_EXTENSION` (`directory.c:3522-3524,2123-2124`).
+    pub fn word_offsets(
+        entry: &[u8],
+    ) -> std::result::Result<[Option<usize>; EXTRA_FIELD_WORDS], MalformedExtraFields> {
+        let mut at = [None; EXTRA_FIELD_WORDS];
+        let Some(&nlen) = entry.get(17) else {
+            return Ok(at);
+        };
+        let Some(&clen) = entry.get(18 + usize::from(nlen)) else {
+            return Ok(at);
+        };
+        let fields = extra_fields_offset(usize::from(nlen), usize::from(clen));
+        let end = entry.len();
+        let Some(flags) = end
+            .checked_sub(2)
+            .filter(|&f| f >= fields)
+            .and_then(|f| entry.get(f..end))
+            .map(|b| u16::from_be_bytes([b[0], b[1]]))
+        else {
+            return Ok(at);
+        };
+        let mut next = end - 2;
+        for (i, slot) in at.iter_mut().enumerate() {
+            if flags & (1 << i) != 0 {
+                if next < fields + 2 {
+                    return Err(MalformedExtraFields { flags });
+                }
+                next -= 2;
+                *slot = Some(next);
+            }
+        }
+        Ok(at)
+    }
+
+    /// ART (ART-325): `entry`'s extra fields as `GetExtraFields` reads them
+    /// (`directory.c:3719-3731`), a word not there reading 0.
+    pub fn read(entry: &[u8]) -> std::result::Result<Self, MalformedExtraFields> {
+        let at = Self::word_offsets(entry)?;
+        let word = |i: usize| {
+            at[i]
+                .and_then(|o| entry.get(o..o + 2))
+                .map_or(0, |b| u16::from_be_bytes([b[0], b[1]]))
+        };
+        let long = |i: usize| (u32::from(word(i)) << 16) | u32::from(word(i + 1));
+        Ok(Self {
+            link: long(0),
+            uid: word(2),
+            gid: word(3),
+            prot: long(4) | u32::from(entry.get(16).copied().unwrap_or(0)),
+            virtualsize: long(6),
+            rollpointer: long(8),
+            fsizex: word(EXTRA_FSIZEX_WORD),
+        })
+    }
+
+    /// ART (ART-325): what `AddExtraFields` puts at `extra_fields_offset`
+    /// (`directory.c:3764-3800`): each non-zero word of `struct extrafields`,
+    /// the highest first, then the flags word. `prot`'s lower byte is not
+    /// stored — it is the entry's `protection` (`:3771-3772`).
+    pub fn encode(&self) -> Vec<u8> {
+        let prot = self.prot & 0xffff_ff00;
+        let words: [u16; EXTRA_FIELD_WORDS] = [
+            (self.link >> 16) as u16,
+            self.link as u16,
+            self.uid,
+            self.gid,
+            (prot >> 16) as u16,
+            prot as u16,
+            (self.virtualsize >> 16) as u16,
+            self.virtualsize as u16,
+            (self.rollpointer >> 16) as u16,
+            self.rollpointer as u16,
+            self.fsizex,
+        ];
+        let mut out = Vec::with_capacity(2 * EXTRA_FIELD_WORDS + 2);
+        let mut flags = 0u16;
+        for (i, word) in words.iter().enumerate().rev() {
+            if *word != 0 {
+                out.extend_from_slice(&word.to_be_bytes());
+                flags |= 1 << i;
+            }
+        }
+        out.extend_from_slice(&flags.to_be_bytes());
+        out
+    }
+}
+
 impl DirEntry {
     /// Parse one direntry from `data` at `offset`.
     /// Returns `(entry, next_offset)` or `None` if end/invalid.
+    ///
+    /// ART (ART-325): `extra` is read by `ExtraFields::read`, pfs3aio's
+    /// layout. An entry whose extra fields do not fit it is still listed, with
+    /// no extra fields but its own protection byte in `prot`.
     pub fn parse(data: &[u8], offset: usize) -> Option<(Self, usize)> {
         if offset >= data.len() {
             return None;
@@ -102,7 +244,10 @@ impl DirEntry {
             }
         }
 
-        let extra = Self::parse_extrafields(raw, nlength);
+        let extra = ExtraFields::read(raw).unwrap_or_else(|_| ExtraFields {
+            prot: u32::from(protection),
+            ..ExtraFields::default()
+        });
 
         Some((
             Self {
@@ -122,54 +267,6 @@ impl DirEntry {
         ))
     }
 
-    fn parse_extrafields(raw: &[u8], nlength: usize) -> ExtraFields {
-        let mut ef = ExtraFields::default();
-        let name_end = 18 + nlength;
-        if name_end >= raw.len() {
-            return ef;
-        }
-        let clen = raw[name_end] as usize;
-        let mut field_start = name_end + 1 + clen;
-        if field_start & 1 != 0 {
-            field_start += 1;
-        }
-        if field_start + 2 > raw.len() {
-            return ef;
-        }
-
-        let flags = u16::from_be_bytes(raw[field_start..field_start + 2].try_into().unwrap());
-        let mut pos = field_start + 2;
-
-        if flags & 0x0001 != 0 && pos + 4 <= raw.len() {
-            ef.link = u32::from_be_bytes(raw[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-        }
-        if flags & 0x0002 != 0 && pos + 2 <= raw.len() {
-            ef.uid = u16::from_be_bytes(raw[pos..pos + 2].try_into().unwrap());
-            pos += 2;
-        }
-        if flags & 0x0004 != 0 && pos + 2 <= raw.len() {
-            ef.gid = u16::from_be_bytes(raw[pos..pos + 2].try_into().unwrap());
-            pos += 2;
-        }
-        if flags & 0x0008 != 0 && pos + 4 <= raw.len() {
-            ef.prot = u32::from_be_bytes(raw[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-        }
-        if flags & 0x0010 != 0 && pos + 4 <= raw.len() {
-            ef.virtualsize = u32::from_be_bytes(raw[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-        }
-        if flags & 0x0020 != 0 && pos + 4 <= raw.len() {
-            ef.rollpointer = u32::from_be_bytes(raw[pos..pos + 4].try_into().unwrap());
-            pos += 4;
-        }
-        if flags & 0x0040 != 0 && pos + 2 <= raw.len() {
-            ef.fsizex = u16::from_be_bytes(raw[pos..pos + 2].try_into().unwrap());
-        }
-        ef
-    }
-
     pub fn is_file(&self) -> bool {
         self.entry_type < 0 && self.entry_type != ST_ROLLOVERFILE
     }
@@ -187,6 +284,11 @@ impl DirEntry {
     }
 
     /// Full file size including extended bits 32-47.
+    ///
+    /// ART (ART-325): `fsizex` as pfs3aio's layout places it. pfs3aio adds it
+    /// only on a `MODE_LARGEFILE` volume (`GetDEFileSize`,
+    /// `directory.c:3641-3652`); this does not look at the volume's mode, and
+    /// no entry pfs3aio writes elsewhere carries the field.
     pub fn file_size(&self) -> u64 {
         self.fsize as u64 | ((self.extra.fsizex as u64) << 32)
     }
