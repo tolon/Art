@@ -16,7 +16,7 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.7`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.8`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
@@ -112,14 +112,14 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version of the `libpfs3` ART builds: the vendored copy in
 /// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patches,
-/// `+art.4`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// `+art.8`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
 /// version, so this is kept in sync by hand, the same trade-off ART already
 /// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
 /// constant as which implementation did the work, and
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.7";
+const LIBPFS3_VERSION: &str = "0.1.3+art.8";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -3179,7 +3179,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter::UTC.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.7 (native, no external tool)");
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.8 (native, no external tool)");
     }
 
     /// A DosType neither family claims — ART refuses rather than guessing.
@@ -4675,6 +4675,237 @@ mod tests {
         );
         assert_eq!(vol.read_file("dst").unwrap(), pfs3_bytes(1, 700));
         assert!(vol.lookup("File").unwrap().is_none());
+    }
+
+    /// Sets data block `blk`'s bit — free — in the on-disk bitmap, and
+    /// nothing else: `blocksfree` is left as it was, so the volume is
+    /// deliberately inconsistent. The raw reading
+    /// `pfs3_data_block_free_on_disk` uses, written back.
+    fn pfs3_mark_data_block_free_on_disk(dev: &MemDevice, blk: u32) {
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let rb = &vol.rootblock;
+        let rbs = usize::from(rb.reserved_blksize);
+        let bits_per_bitmap_block = (rbs as u32 / 4 - 3) * 32;
+        let rel = blk - (rb.lastreserved + 1);
+        let bmi = dev.read(u64::from(rb.bitmapindex[0]), rbs);
+        let seq = (rel / bits_per_bitmap_block) as usize;
+        let bm_sector = u64::from(be32(&bmi, 12 + seq * 4));
+        let mut bm = dev.read(bm_sector, rbs);
+        let bit = rel % bits_per_bitmap_block;
+        let at = 12 + (bit / 32) as usize * 4;
+        let word = be32(&bm, at) | (0x8000_0000 >> (bit % 32));
+        bm[at..at + 4].copy_from_slice(&word.to_be_bytes());
+        dev.patch(bm_sector, &bm);
+    }
+
+    /// **Final review fix wave, I1.** A hard link stores its target's anode
+    /// in its own entry (`create_hardlink`), so ART-322's same-entry check —
+    /// same parent, same anode, and nothing about the name — took "Link" for
+    /// "File" itself: `rename_in(root, "File", root, "Link")` rewrote "File"
+    /// to "Link" in place and returned `Ok` with two entries named "Link".
+    /// Neither direction may be treated as the source renaming onto itself,
+    /// and neither may replace the destination either: this writer's delete
+    /// of a hard link frees the file it names (ART-323), and the link and the
+    /// file are one file. pfs3aio's own `RenameAndMove` refuses any found
+    /// destination that is not the source's own direntry with
+    /// `ERROR_OBJECT_EXISTS` (`directory.c:2064-2076`, `tonioni/pfs3aio`
+    /// `211f7f0`) — and a link's direntry is its own. Refused, nothing written.
+    #[test]
+    fn a_pfs3_rename_onto_a_hard_link_to_the_same_file_is_refused_and_writes_nothing() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+            w.create_hardlink("Link", fx.file).unwrap();
+        }
+        let before_writes = dev.write_count();
+        let (raw_before, facts_before) = pfs3_committed_state(&dev);
+        for (src, dst) in [("File", "Link"), ("Link", "File")] {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let result = w.rename_in(PFS3_ROOT, src, PFS3_ROOT, dst);
+            assert!(
+                matches!(result, Err(libpfs3::error::Error::AlreadyExists(_))),
+                "renaming {src} onto {dst}, a hard link to the same file, must be refused as \
+                 already existing, got: {result:?}; root now: {:#?}",
+                pfs3_committed_state(&dev).1
+            );
+        }
+        assert_eq!(
+            dev.write_count(),
+            before_writes,
+            "a refused rename wrote to the device"
+        );
+        let (raw_after, facts_after) = pfs3_committed_state(&dev);
+        assert_eq!(facts_after, facts_before);
+        assert!(raw_after == raw_before, "the reserved area changed");
+    }
+
+    /// **Final review fix wave, I1, a different-length link name.** The same
+    /// misfire with a name of another length reached
+    /// `rename_dir_entry_in_place`'s length check and called a healthy volume
+    /// "corrupt filesystem". It is the same refusal as the same-length case.
+    #[test]
+    fn a_pfs3_rename_onto_a_longer_named_hard_link_to_the_same_file_is_refused_not_called_corrupt()
+    {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.create_hardlink("LongerLink", fx.file).unwrap();
+        }
+        let (_, facts_before) = pfs3_committed_state(&dev);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let result = w.rename_in(PFS3_ROOT, "File", PFS3_ROOT, "LongerLink");
+            assert!(
+                matches!(result, Err(libpfs3::error::Error::AlreadyExists(_))),
+                "expected already-exists, got: {result:?}"
+            );
+        }
+        assert_eq!(pfs3_committed_state(&dev).1, facts_before);
+    }
+
+    /// **Final review fix wave, I1, a link to another file.** Once the
+    /// same-entry check compares names, a hard link to a *different* file is
+    /// an ordinary found destination — and deleting it through
+    /// `delete_in_no_commit` frees the data and anodes of the file it names
+    /// (ART-323), while that file's own entry still points at them. Refused
+    /// too, and "Dst" keeps its content.
+    #[test]
+    fn a_pfs3_rename_onto_a_hard_link_to_another_file_is_refused_and_that_file_keeps_its_content() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        let dst = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.lookup("Dst").unwrap().unwrap().anode
+        };
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.create_hardlink("DstLink", dst).unwrap();
+        }
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let result = w.rename_in(PFS3_ROOT, "File", PFS3_ROOT, "DstLink");
+            assert!(
+                matches!(result, Err(libpfs3::error::Error::AlreadyExists(_))),
+                "expected already-exists, got: {result:?}"
+            );
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert_eq!(
+            vol.read_file("Dst").ok().as_deref(),
+            Some(&b"destination bytes"[..]),
+            "renaming onto a link to Dst destroyed Dst"
+        );
+        assert_eq!(vol.read_file("File").unwrap(), pfs3_bytes(1, 700));
+    }
+
+    /// **Final review fix wave, M1.** An Amiga stores a name's bytes as
+    /// Latin-1, one byte a character, and libpfs3 reads them that way: "Äa"
+    /// is `C4 61`. A case-only rename to "ÄA" measured and wrote the new
+    /// name's UTF-8 bytes (`C3 84 41`), three against two, and refused a
+    /// healthy volume as "corrupt filesystem". It must rename in place, to
+    /// `C4 41`, keeping the entry's anode and content.
+    #[test]
+    fn a_pfs3_case_only_rename_of_a_latin1_name_rewrites_its_latin1_bytes_in_place() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.write_file("Xa", b"latin-1 bytes").unwrap();
+        }
+        let root_block = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            u64::from(vol.get_anode_chain(PFS3_ROOT).unwrap()[0].blocknr)
+        };
+        // The name as an Amiga would have written it: `C4 61`, not `58 61`.
+        let mut block = dev.read(root_block, 1024);
+        let at = block
+            .windows(3)
+            .position(|w| w == [2, b'X', b'a'])
+            .expect("the entry's name length byte and name");
+        block[at + 1] = 0xC4;
+        dev.patch(root_block, &block);
+        let anode = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.lookup("\u{c4}a").unwrap().unwrap().anode
+        };
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.rename_in(PFS3_ROOT, "\u{c4}a", PFS3_ROOT, "\u{c4}A")
+                .unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        let entries = vol.list_dir_by_anode(PFS3_ROOT).unwrap();
+        let renamed: Vec<_> = entries
+            .iter()
+            .filter(|e| e.name.eq_ignore_ascii_case("\u{c4}A"))
+            .collect();
+        assert_eq!(renamed.len(), 1, "{entries:#?}");
+        assert_eq!(renamed[0].name, "\u{c4}A");
+        assert_eq!(
+            renamed[0].anode, anode,
+            "the renamed entry must keep its anode"
+        );
+        assert!(
+            dev.read(root_block, 1024)
+                .windows(3)
+                .any(|w| w == [2, 0xC4, b'A']),
+            "the new name must be stored as Latin-1 `C4 41`"
+        );
+        assert_eq!(
+            vol.read_file_data(anode, renamed[0].file_size()).unwrap(),
+            b"latin-1 bytes"
+        );
+    }
+
+    /// **Final review fix wave, M2.** Copy-on-write takes its new blocks from
+    /// the committed bitmap, which must not offer the old file's own blocks.
+    /// A corrupt bitmap that marks one of them free let `alloc_data_blocks`
+    /// hand it out: the new content went over the old file on the device
+    /// before any commit, and the commit then freed a block the new chain
+    /// uses. Refused as corruption, before a single write, and the old
+    /// content stays.
+    #[test]
+    fn a_pfs3_overwrite_refuses_a_bitmap_that_offers_the_old_files_own_block() {
+        let dev = MemDevice::new();
+        let fx = pfs3_mutator_fixture(&dev, false);
+        let old_blocks: Vec<u32> = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            vol.get_anode_chain(fx.file)
+                .unwrap()
+                .iter()
+                .flat_map(|a| (0..a.clustersize).map(move |i| a.blocknr + i))
+                .collect()
+        };
+        pfs3_mark_data_block_free_on_disk(&dev, old_blocks[0]);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            let before = dev.write_count();
+            let result = w.overwrite_file_in(PFS3_ROOT, "File", fx.file, &pfs3_bytes(9, 700));
+            assert!(
+                matches!(result, Err(libpfs3::error::Error::Corrupt(_))),
+                "a bitmap offering the old file's own block {} must be refused as corruption, \
+                 got: {result:?}",
+                old_blocks[0]
+            );
+            assert_eq!(dev.write_count(), before, "a refused overwrite wrote");
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert!(
+            vol.read_file("File").unwrap() == pfs3_bytes(1, 700),
+            "the old content was overwritten on the device"
+        );
     }
 
     #[test]

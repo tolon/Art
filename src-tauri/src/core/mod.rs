@@ -1030,6 +1030,251 @@ fn production_after() -> u32 {
         );
     }
 
+    /// `line` with every run of whitespace dropped, except one space kept
+    /// between two identifier characters — `libpfs3 :: writer :: { Writer as
+    /// W }` becomes `libpfs3::writer::{Writer as W}` — so a `use` tree and a
+    /// call read the same however they are spaced.
+    fn compact_rust(line: &str) -> String {
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        let mut out = String::new();
+        let mut pending_space = false;
+        for c in line.chars() {
+            if c.is_whitespace() {
+                pending_space = true;
+                continue;
+            }
+            if pending_space && out.chars().last().is_some_and(ident) && ident(c) {
+                out.push(' ');
+            }
+            pending_space = false;
+            out.push(c);
+        }
+        out
+    }
+
+    /// Every leaf of a compacted `use` tree as `(full path, the name it
+    /// binds)`: `libpfs3::{writer::{self as w, Writer}}` gives
+    /// `("libpfs3::writer", "w")` and `("libpfs3::writer::Writer", "Writer")`;
+    /// a glob binds `*`.
+    fn use_tree_leaves(prefix: &str, tree: &str, out: &mut Vec<(String, String)>) {
+        if let Some(open) = tree.find('{') {
+            let base = format!("{prefix}{}", &tree[..open]);
+            let close = tree.rfind('}').unwrap_or(tree.len()).max(open + 1);
+            let inner = &tree[open + 1..close];
+            let (mut depth, mut start) = (0usize, 0usize);
+            for (i, c) in inner.char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth = depth.saturating_sub(1),
+                    ',' if depth == 0 => {
+                        use_tree_leaves(&base, &inner[start..i], out);
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            use_tree_leaves(&base, &inner[start..], out);
+            return;
+        }
+        if tree.is_empty() {
+            return;
+        }
+        let (path, alias) = match tree.split_once(" as ") {
+            Some((path, alias)) => (path, Some(alias)),
+            None => (tree, None),
+        };
+        let mut full = format!("{prefix}{path}");
+        if let Some(parent) = full.strip_suffix("::self") {
+            full = parent.to_string();
+        }
+        let last = full.rsplit("::").next().unwrap_or(&full).to_string();
+        out.push((full, alias.map(str::to_string).unwrap_or(last)));
+    }
+
+    /// Final review fix wave, I2. The lines of `text` outside a test and a
+    /// comment that call libpfs3's `Writer::open`, **however `Writer` is
+    /// named there**: the full path; a `use` of `libpfs3`, of
+    /// `libpfs3::writer` or of `libpfs3::writer::Writer` itself — plain,
+    /// `as`-aliased, grouped in braces or a glob, `pub` or not, wrapped
+    /// across lines; and a `type` alias of any of those. A `use` or `type`
+    /// inside a test region binds nothing here, since a call there is
+    /// skipped anyway. Returned as `(0-based line, trimmed line)`.
+    ///
+    /// **What it does not see:** a `Writer` reached through a re-export in
+    /// another module (`pub use libpfs3::writer::Writer;` in one file, then
+    /// `crate::that::Writer::open(` in another), a call built by a macro, and
+    /// a call split across lines inside `Writer::open(`.
+    fn libpfs3_writer_open_sites(label: &str, text: &str) -> Vec<(usize, String)> {
+        let lines: Vec<&str> = text.lines().collect();
+        let regions = test_regions(label, &lines);
+        let live =
+            |n: usize| !is_test_line(&regions, n) && !lines[n].trim_start().starts_with("//");
+        let root = concat!("lib", "pfs3");
+        let writer_mod = format!("{root}::writer");
+        let writer_type = format!("{writer_mod}::Writer");
+        let mut needles = vec![format!("{writer_type}::open(")];
+        // Paths that name the `Writer` type itself, for `type` aliases.
+        let mut type_names = vec![writer_type.clone()];
+        let mut n = 0;
+        while n < lines.len() {
+            let start = n;
+            n += 1;
+            if !live(start) {
+                continue;
+            }
+            let head = compact_rust(lines[start]);
+            let Some(at) = head.find("use ") else {
+                continue;
+            };
+            let before = &head[..at];
+            if !(before.is_empty() || before.starts_with("pub")) {
+                continue;
+            }
+            let mut stmt = head[at + 4..].to_string();
+            while !stmt.contains(';') && n < lines.len() {
+                stmt.push_str(&compact_rust(lines[n]));
+                n += 1;
+            }
+            let stmt = stmt.trim_start_matches("::");
+            let stmt = stmt.split(';').next().unwrap_or("");
+            let rooted = stmt == root
+                || stmt.starts_with(&format!("{root}::"))
+                || stmt.starts_with(&format!("{root} as "));
+            if !rooted {
+                continue;
+            }
+            let mut leaves = Vec::new();
+            use_tree_leaves("", stmt, &mut leaves);
+            for (path, name) in leaves {
+                if name == "_" {
+                    continue;
+                }
+                if path == writer_type {
+                    needles.push(format!("{name}::open("));
+                    type_names.push(name);
+                } else if path == writer_mod {
+                    needles.push(format!("{name}::Writer::open("));
+                    type_names.push(format!("{name}::Writer"));
+                } else if path == format!("{writer_mod}::*") {
+                    needles.push("Writer::open(".to_string());
+                    type_names.push("Writer".to_string());
+                } else if path == root {
+                    needles.push(format!("{name}::writer::Writer::open("));
+                    type_names.push(format!("{name}::writer::Writer"));
+                } else if path == format!("{root}::*") {
+                    needles.push("writer::Writer::open(".to_string());
+                    type_names.push("writer::Writer".to_string());
+                }
+            }
+        }
+        for (n, line) in lines.iter().enumerate() {
+            if !live(n) {
+                continue;
+            }
+            let compact = compact_rust(line);
+            let unpub = compact.strip_prefix("pub ").unwrap_or(&compact);
+            let Some(rest) = unpub.strip_prefix("type ") else {
+                continue;
+            };
+            if let Some((alias, rhs)) = rest.split_once('=') {
+                let rhs = rhs.trim_end_matches(';').trim_start_matches("::");
+                if type_names.iter().any(|t| rhs == t) {
+                    needles.push(format!("{alias}::open("));
+                }
+            }
+        }
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        let mut sites = Vec::new();
+        for (n, line) in lines.iter().enumerate() {
+            if !live(n) {
+                continue;
+            }
+            let compact = compact_rust(line);
+            let hit = needles.iter().any(|needle| {
+                compact
+                    .match_indices(needle.as_str())
+                    .any(|(at, _)| !compact[..at].chars().last().is_some_and(ident))
+            });
+            if hit {
+                sites.push((n, line.trim().to_string()));
+            }
+        }
+        sites
+    }
+
+    /// The fixture for [`libpfs3_writer_open_sites`]: every naming the guard
+    /// claims to see is flagged, and the controls — a different type's
+    /// `open`, a comment, a test, and a `Writer` that is not libpfs3's — are
+    /// not. Re-runnable, where the guard below was first proven only by
+    /// one-off injections.
+    #[test]
+    fn libpfs3_writer_open_sites_sees_every_naming_of_the_writer() {
+        let src = "\
+    use libpfs3::writer::Writer;
+    pub use libpfs3::writer::Writer as PfsWriter;
+    use libpfs3::{
+        volume::Volume,
+        writer::{self as w, Writer as Grouped},
+    };
+    use libpfs3 as pfs;
+    type Alias = libpfs3::writer::Writer;
+
+    fn product(v: Volume) {
+        let _ = Writer::open(v);
+        let _ = PfsWriter :: open(v);
+        let _ = w::Writer::open(v);
+        let _ = Grouped::open(v);
+        let _ = pfs::writer::Writer::open(v);
+        let _ = Alias::open(v);
+        let _ = libpfs3::writer::Writer::open(v);
+        let _ = VolumeWriter::open(v);
+        // Writer::open(v) in a comment
+    }
+
+    #[cfg(test)]
+    mod tests {
+        fn t(v: Volume) {
+            let _ = Writer::open(v);
+        }
+    }
+";
+        let flagged: Vec<String> = libpfs3_writer_open_sites("naming fixture", src)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect();
+        assert_eq!(
+            flagged,
+            [
+                "let _ = Writer::open(v);",
+                "let _ = PfsWriter :: open(v);",
+                "let _ = w::Writer::open(v);",
+                "let _ = Grouped::open(v);",
+                "let _ = pfs::writer::Writer::open(v);",
+                "let _ = Alias::open(v);",
+                "let _ = libpfs3::writer::Writer::open(v);",
+            ]
+        );
+        let unrelated = "\
+    use crate::core::volume::write::Writer;
+
+    fn product() {
+        let _ = Writer::open();
+    }
+";
+        assert!(libpfs3_writer_open_sites("unrelated fixture", unrelated).is_empty());
+    }
+
+    /// `(first, last)` 0-based lines of the top-level item whose opening line
+    /// contains `signature`, through its closing `}` at column 0.
+    fn top_level_item_lines(text: &str, signature: &str) -> Option<(usize, usize)> {
+        let lines: Vec<&str> = text.lines().collect();
+        let first = lines
+            .iter()
+            .position(|l| !l.starts_with(' ') && l.contains(signature))?;
+        let last = (first..lines.len()).find(|&n| lines[n].trim_end() == "}")?;
+        Some((first, last))
+    }
+
     /// ART-317's third debt round, survivor (c) (docs/ISSUES.md). A libpfs3
     /// `Writer` opened without calling `set_entry_date` falls back to
     /// `current_amiga_datestamp` (`vendor/libpfs3/src/writer.rs`'s
@@ -1037,49 +1282,55 @@ fn production_after() -> u32 {
     /// everywhere else, reopened by any fresh `Writer::open` call outside the
     /// one place that stamps it. `core::preload::native::open_pfs3_writer` is
     /// that place: it opens the writer and calls `set_entry_date` with the
-    /// clock's own date before handing the writer back, so
-    /// `libpfs3::writer::Writer::open` itself may be named only inside
-    /// `core/preload/native.rs` (the helper) and, allow-listed as designed,
-    /// `core/card/sizing.rs` — whose own call (in `fill`, a `#[cfg(test)]`
-    /// helper that formats a device in memory to measure free space) sits
-    /// inside a `#[cfg(test)] mod tests` block that already runs to the end
-    /// of the file, so `test_regions` already excludes it from every other
-    /// file's non-test scan; it is named here anyway because the design
-    /// calls for it explicitly, not because it is reachable outside a test
-    /// today.
+    /// clock's own date before handing the writer back.
     ///
-    /// Mutate by naming `libpfs3::writer::Writer::open(` in a real product
-    /// file outside the two allowed ones, above its `#[cfg(test)]`; this
-    /// fails.
+    /// **Final review fix wave, I2.** This walks all of `src/`, and a call is
+    /// found however `Writer` is named ([`libpfs3_writer_open_sites`] says
+    /// which namings it resolves and which it does not). The allow-list is
+    /// the one call inside `open_pfs3_writer`'s own body, not the file it
+    /// lives in, and that body must hold exactly one — so a second call beside
+    /// the helper fails, and so does renaming the helper. It used to look for
+    /// the fully qualified path only, in `core/` only, allowing all of
+    /// `native.rs` and a `core/card/sizing.rs` whose one call was already
+    /// inside `#[cfg(test)]`; `use libpfs3::writer::Writer;` followed by
+    /// `Writer::open(` passed it.
+    ///
+    /// Mutate by adding `use libpfs3::writer::Writer;` and a function calling
+    /// `Writer::open(vol)` above a product file's `#[cfg(test)]`, or the same
+    /// with an `as` alias, or a second call in `native.rs` outside the
+    /// helper; each fails.
     #[test]
     fn libpfs3_writer_open_is_named_only_by_the_pfs3_writer_helper() {
-        let needle = concat!("libpfs3::writer::Writer", "::open(");
-        let allowed = ["core/preload/native.rs", "core/card/sizing.rs"];
         let mut offenders = Vec::new();
-        for path in core_files() {
+        let mut helper_calls = 0;
+        for path in all_src_files() {
             let shown = path.display().to_string().replace('\\', "/");
-            if allowed.iter().any(|ok| shown.ends_with(ok)) {
-                continue;
-            }
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
-            let lines: Vec<&str> = text.lines().collect();
-            let regions = test_regions(&path.display().to_string(), &lines);
-            for (n, line) in lines.iter().enumerate() {
-                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
-                    continue;
-                }
-                if line.contains(needle) {
-                    offenders.push(format!("{shown}:{}: {}", n + 1, line.trim()));
+            let helper = if shown.ends_with("core/preload/native.rs") {
+                top_level_item_lines(&text, "fn open_pfs3_writer(")
+            } else {
+                None
+            };
+            for (n, line) in libpfs3_writer_open_sites(&shown, &text) {
+                if helper.is_some_and(|(first, last)| (first..=last).contains(&n)) {
+                    helper_calls += 1;
+                } else {
+                    offenders.push(format!("{shown}:{}: {line}", n + 1));
                 }
             }
         }
         assert!(
             offenders.is_empty(),
-            "libpfs3::writer::Writer::open named outside \
+            "libpfs3's Writer::open named outside \
              core::preload::native::open_pfs3_writer, which is the only place that stamps \
              the clock's date on a fresh writer (ART-317, third debt round survivor (c)):\n{}",
             offenders.join("\n")
+        );
+        assert_eq!(
+            helper_calls, 1,
+            "core::preload::native::open_pfs3_writer must hold exactly one libpfs3 \
+             Writer::open call — the allow-list is that call, not the file"
         );
     }
 

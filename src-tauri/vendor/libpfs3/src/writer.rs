@@ -26,6 +26,11 @@
 //! Modified by ART on 2026-09-15 (ART-322): a `rename_in` destination that is
 //! the source entry itself — a case-only rename in the same directory — is
 //! renamed in place rather than deleted and recreated;
+//! Modified by ART on 2026-09-15 (the third debt round's final review fix
+//! wave): `rename_in`'s same-entry check compares the name too, and a hard
+//! link found as the destination is refused (I1); the in-place rename writes
+//! Latin-1 (M1); copy-on-write refuses a bitmap that offers the old file's
+//! own block (M2);
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -625,6 +630,21 @@ impl Writer {
         // without room for the whole new content is refused now, before any
         // block is written.
         let new_blocks = self.alloc_data_blocks(new_blocks_needed)?;
+        // Final review fix wave (M2): that holds only for a consistent
+        // bitmap. One that marks an old block free hands it out here, and the
+        // write below would overwrite the old file before any commit, then
+        // the commit would free a block the new chain uses. Refused as
+        // corruption before the first write; `guarded` discards the
+        // allocation.
+        if let Some(&shared) = new_blocks.iter().find(|&&blk| {
+            old_chain
+                .iter()
+                .any(|an| blk >= an.blocknr && blk - an.blocknr < an.clustersize)
+        }) {
+            return Err(Error::Corrupt(format!(
+                "the data bitmap marks block {shared} free, but file anode {file_anode} still uses it"
+            )));
+        }
         let mut sector = vec![0u8; bs];
         for (i, &blk) in new_blocks.iter().enumerate() {
             sector.fill(0);
@@ -857,11 +877,23 @@ impl Writer {
     /// deleted the destination with `delete_in`, its own commit, first.
     ///
     /// ART (2026-09-15, ART-322): a destination that is the source itself —
-    /// same parent, same anode, the names case-insensitively equal, which
-    /// `name_eq_ci` makes true of a case-only rename in the same directory —
-    /// is renamed in place instead of deleted and recreated: its anode,
-    /// size, protection, dates and comment survive, and only the name bytes
-    /// change. The identical name, same case too, is a no-op success.
+    /// found in the same parent, under a name `name_eq_ci` matches to the
+    /// source entry's own, with the same anode, which is true of a case-only
+    /// rename in the same directory — is renamed in place instead of deleted
+    /// and recreated: its anode, size, protection, dates and comment
+    /// survive, and only the name bytes change. The identical name, same
+    /// case too, is a no-op success.
+    ///
+    /// ART (2026-09-15, the third debt round's final review fix wave, I1):
+    /// the name is part of that identity. A hard link stores its target's
+    /// anode, so with the anode alone a link in the same directory was taken
+    /// for the source. A found destination that is a hard link, or that
+    /// shares the source's anode without being the source, is refused with
+    /// `Error::AlreadyExists` before anything is staged: this writer's delete
+    /// of a hard link frees the file it names (ART-323), and pfs3aio's
+    /// `RenameAndMove` refuses every found destination that is not the
+    /// source's own direntry (`ERROR_OBJECT_EXISTS`, `directory.c:2064-2076`,
+    /// `tonioni/pfs3aio` `211f7f0`).
     pub fn rename_in(
         &mut self,
         src_parent: u32,
@@ -887,24 +919,42 @@ impl Writer {
             .ok_or_else(|| Error::NotFound(src_name.to_string()))?
             .clone();
 
-        // ART-322: a destination that names the very entry being renamed —
-        // the same parent, a case-insensitive name match, and the same
-        // anode — is not "an existing destination" to delete. `name_eq_ci`
-        // makes a case-only rename in the same directory find the source
-        // itself this way; deleting it deleted the file and reported `Ok`.
-        // Rename it in place instead, so its anode, size, protection, dates
-        // and comment all survive and only the name bytes change. An
-        // identical name (the same case too) is a no-op success.
+        // ART-322: a destination that names the very entry being renamed is
+        // not "an existing destination" to delete. `name_eq_ci` makes a
+        // case-only rename in the same directory find the source itself this
+        // way; deleting it deleted the file and reported `Ok`. Rename it in
+        // place instead, so its anode, size, protection, dates and comment
+        // all survive and only the name bytes change. An identical name (the
+        // same case too) is a no-op success.
+        //
+        // Final review fix wave (I1): "the very entry" is the same parent, a
+        // found name `name_eq_ci` matches to the source entry's own — names
+        // in one directory are unique under that compare — and the same
+        // anode. The anode alone took a hard link in the same directory for
+        // the source, since a link stores its target's anode.
         if let Ok(dst_entries) = self.vol.list_dir_by_anode(dst_parent)
             && let Some(dst_entry) = dst_entries
                 .iter()
                 .find(|e| crate::util::name_eq_ci(&e.name, dst_name))
         {
-            if dst_parent == src_parent && dst_entry.anode == entry.anode {
+            if dst_parent == src_parent
+                && crate::util::name_eq_ci(&dst_entry.name, &entry.name)
+                && dst_entry.anode == entry.anode
+            {
                 if entry.name == dst_name {
                     return Ok(());
                 }
                 return self.rename_dir_entry_in_place(src_parent, src_name, dst_name);
+            }
+            // Final review fix wave (I1): a hard link cannot be replaced —
+            // `delete_in_no_commit` on one frees the file it names (ART-323) —
+            // and neither can a different entry sharing the source's anode (a
+            // link and the file it names are one file). Refused before
+            // anything is staged. pfs3aio refuses every found destination
+            // that is not the source's own direntry (`RenameAndMove`,
+            // `directory.c:2064-2076`).
+            if dst_entry.is_hardlink() || dst_entry.anode == entry.anode {
+                return Err(Error::AlreadyExists(dst_name.to_string()));
             }
             // ART (ART-319's second gap): staged, not committed on its own.
             self.delete_in_no_commit(dst_parent, dst_name)?;
@@ -927,11 +977,20 @@ impl Writer {
     /// ART-322: rewrite a directory entry's name bytes in place, leaving its
     /// anode, size, protection, dates, comment and every extra field
     /// untouched. Only reached for a destination that is the source entry
-    /// itself — same parent, same anode — where `name_eq_ci` guarantees
-    /// `new_name`'s byte length equals the entry's current one (an
-    /// ASCII-only case fold never changes length); `Error::Corrupt` is a
-    /// safety net, never expected to fire, rather than indexing past the
-    /// entry on a length this crate did not anticipate.
+    /// itself — same parent, a `name_eq_ci` match to the entry's own name,
+    /// same anode.
+    ///
+    /// Final review fix wave (M1): the name is written as **Latin-1**, one
+    /// byte a character, the encoding `find_dir_entry` and the reader decode
+    /// it with (`util::latin1_to_string`) and the one an Amiga writes. It
+    /// used to be the new name's UTF-8 bytes, so a case-only rename of a
+    /// non-ASCII name ("Äa", `C4 61`, to "ÄA") measured three bytes against
+    /// two and refused a healthy volume as corrupt. `name_eq_ci` is an
+    /// ASCII-only fold over names decoded from those same bytes, so the new
+    /// name always has one character at or below U+00FF for each stored
+    /// byte; `Error::Corrupt` is a safety net for the entry no longer
+    /// holding what was just found in it, never expected to fire, rather
+    /// than indexing past the entry.
     fn rename_dir_entry_in_place(
         &mut self,
         dir_anode: u32,
@@ -940,14 +999,21 @@ impl Writer {
     ) -> Result<()> {
         let (blk, mut data, pos) = self.find_dir_entry(dir_anode, old_name)?;
         let old_nlen = data[pos + 17] as usize;
-        let new_name_bytes = new_name.as_bytes();
-        let new_nlen = new_name_bytes.len().min(107);
-        if new_nlen != old_nlen {
-            return Err(Error::Corrupt(format!(
-                "a case-only rename changed the name's byte length ({old_nlen} -> {new_nlen})"
-            )));
-        }
-        data[pos + 18..pos + 18 + new_nlen].copy_from_slice(&new_name_bytes[..new_nlen]);
+        let new_name_bytes: Option<Vec<u8>> = new_name
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).ok())
+            .collect();
+        let new_name_bytes = match new_name_bytes {
+            Some(bytes) if bytes.len() == old_nlen => bytes,
+            _ => {
+                return Err(Error::Corrupt(format!(
+                    "the directory entry found for '{old_name}' does not hold a name that \
+                     '{new_name}' differs from only in letter case"
+                )));
+            }
+        };
+        let new_nlen = new_name_bytes.len();
+        data[pos + 18..pos + 18 + new_nlen].copy_from_slice(&new_name_bytes);
         put_u32(&mut data, 4, self.next_datestamp());
         self.write_reserved(blk, &data)?;
         self.update_rootblock()

@@ -1,4 +1,4 @@
-# `libpfs3` 0.1.3+art.7 — ART's vendored copy
+# `libpfs3` 0.1.3+art.8 — ART's vendored copy
 
 This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART for
 [ART-310](../../../docs/ISSUES.md). ART's build uses it through `[patch.crates-io]` in
@@ -9,8 +9,8 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 | Original | `https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`, SHA-256 `02f457ef99a09ddebf56e454c6a25dc3a6860a602c878489f132a4ca3eed4317` |
 | Upstream source | `metaneutrons/pfs3` commit `33e9ff6ba8462cc4e434dfb6e2783d91b7dd5b14`, `crates/libpfs3` (the crate's `.cargo_vcs_info.json`) |
 | Licence | LGPL-3.0-or-later. `LICENSE` is upstream's own file at that commit, unchanged; the full LGPL-3.0 text is `COPYING.LESSER`; the GPL-3.0 text it builds on is ART's `LICENSE` |
-| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so; 2026-09-14, src/format.rs and src/writer.rs for ART-317; 2026-09-14, src/writer.rs, src/error.rs and src/volume.rs for ART-319; 2026-09-15, src/writer.rs for ART-319's disclosed gaps; 2026-09-15, src/writer.rs for ART-322 |
-| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.7`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
+| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so; 2026-09-14, src/format.rs and src/writer.rs for ART-317; 2026-09-14, src/writer.rs, src/error.rs and src/volume.rs for ART-319; 2026-09-15, src/writer.rs for ART-319's disclosed gaps; 2026-09-15, src/writer.rs for ART-322; 2026-09-15, src/writer.rs for the third debt round's final review fix wave |
+| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.8`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
 | Not carried | `tests/`: `GPL-3.0-only` headers, 9.3 MB of fixtures, and a dev-dependency (`sevenz-rust` 0.6) with RUSTSEC-2026-0245 and RUSTSEC-2026-0246. ART's own tests prove the patch (`src-tauri/src/core/preload/native.rs`) |
 
 ## Changes against 0.1.3
@@ -246,6 +246,10 @@ copy-on-write):
     exactly as a delete sends it, and the rename is one commit. pfs3aio's own overwrite and rename paths were not
     read for this item. ART calls neither method today. ART's tests
     (`src-tauri/src/core/preload/native.rs`) and their mutations are in `docs/ISSUES.md` under ART-319.
+    *(Corrected 2026-09-15 by the final review fix wave, item 23. "ART calls neither method" was too strong:
+    `write_file_in` calls `overwrite_file_in` when its name already exists as a file in the directory. ART's one
+    product caller, `copy_in_pfs3`, never produces that — it refuses a volume that is not empty and writes one
+    entry per relative path. pfs3aio's overwrite path has since been read; see item 23.)*
 
 **2026-09-15, ART-322 (third debt round, item 3b)** (found by item 21's own throwaway experiment; brief
 `.superpowers/sdd/2026-09-15-debt-3-round/item3b-report.md`):
@@ -272,6 +276,55 @@ copy-on-write):
     ART's no-op-with-no-write ending for that sub-case is ART's own choice, not a claim about pfs3aio's. ART calls
     `rename_in` from no product code today (only tests), so nothing user-visible changed. ART's tests
     (`src-tauri/src/core/preload/native.rs`) and their mutation are in `docs/ISSUES.md` under ART-322.
+    *(Corrected 2026-09-15 by the final review fix wave, item 23, on two counts. The check did not use "the same
+    case-insensitive name compare": it compared the parent and the anode only, so a hard link in the same directory,
+    which stores its target's anode, was taken for the source. And "the entry's byte length cannot change" held for
+    the Latin-1 bytes on disk, not for the UTF-8 bytes this item wrote, so a case-only rename of a non-ASCII name
+    was refused as corrupt.)*
+
+**2026-09-15, the third debt round's final review fix wave** ([ART-322](../../../docs/ISSUES.md),
+[ART-319](../../../docs/ISSUES.md); review `.superpowers/sdd/2026-09-15-debt-3-round/final-review.md`, I1, M1, M2,
+M3, M5; report `fix-wave-report.md` beside it):
+
+23. **`rename_in` identifies the source by its name and refuses a hard link as the destination; the in-place
+    rename writes Latin-1; copy-on-write refuses a bitmap that offers the old file's own block (`src/writer.rs`).**
+    - *I1.* Item 22's check compared the parent and the anode. `create_hardlink` stores its target's anode in the
+      link's entry, so `rename_in(root, "File", root, "Link")`, with "Link" a hard link to "File", rewrote "File"
+      to "Link" in place and returned `Ok` with two entries named "Link"; with a link name of another length it
+      called a healthy volume corrupt. The found destination's name must now also match the source entry's own
+      under `name_eq_ci` (names in one directory are unique under it). A found destination that is a hard link,
+      or that shares the source's anode without being it, is refused with `Error::AlreadyExists` before anything is
+      staged: this crate's `delete_in_no_commit` on a hard link frees the data blocks and anodes of the file it
+      names ([ART-323](../../../docs/ISSUES.md)), and pfs3aio's `RenameAndMove` refuses every found destination
+      that is not the source's own direntry (`directory.c:2064-2076`) — a link's direntry is its own.
+    - *M1.* `rename_dir_entry_in_place` writes the new name as Latin-1, one byte a character — what
+      `util::latin1_to_string` decodes and what an Amiga writes — instead of UTF-8. "Äa" (`C4 61`) renamed to
+      "ÄA" is now `C4 41` in place, not a refusal. Its `Error::Corrupt` stays as a safety net that `name_eq_ci`
+      over the decoded name cannot reach.
+    - *M2.* `overwrite_file_in` checks the blocks `alloc_data_blocks` returned against the old chain before the
+      first write. An overlap means the committed bitmap marks a block the file still uses as free; it is refused
+      with `Error::Corrupt` and nothing is written.
+    - *M5, pfs3aio's overwrite path, read for this item* (`tonioni/pfs3aio` `211f7f0`, read, not run). An open with
+      `MODE_NEWFILE` on an existing file is `ACTION_FINDOUTPUT`, which calls `NewFile` with `found` set
+      (`dd_funcs.c:686-709`). `NewFile` takes over the existing direntry rather than deleting and recreating it
+      (`directory.c:1492-1499`): the head anode number is kept; with the deldir on, the old version goes to the
+      deldir under a replacement anode (`directory.c:1538-1551`); the entry's size is set to 0, the head anode is
+      reclaimed empty and the old blocks are freed (`directory.c:1557-1576`) — into the to-be-freed list, "not
+      actually freed until UpdateFreeList is called" (`allocation.c:502-505`). The new content is then written by
+      `WriteToFile`, which allocates blocks as the file grows (`disk.c:807`). A write inside an existing file's
+      size, through a handle that did not call `NewFile` (`ACTION_FINDUPDATE`, `dd_funcs.c:657-684`), goes over
+      the file's own blocks in place (`disk.c:938`). **So for a whole-file replace pfs3aio, like this writer,
+      keeps the head anode number and does not put the new content in blocks it has only just freed; unlike this
+      writer, it sends the old version to the deldir.** `overwrite_file_in` sends nothing to the deldir — a
+      difference recorded, not changed. Not traced: whether pfs3aio can reuse its freed blocks before the commit
+      when its to-be-freed cache fills mid-write (`allocation.c:549-576`), so nothing is claimed about whether it
+      can fit a replacement that needs the old file's own space.
+    - *M3.* `overwrite_file_in` is reached from `write_file_in` when the name already exists as a file (item 21's
+      correction); ART's product path never produces that.
+    - Unchanged, and filed rather than fixed: [ART-324](../../../docs/ISSUES.md), a file size of 4 GiB or more
+      loses its high bits in several of this writer's size paths.
+    - ART's tests (`src-tauri/src/core/preload/native.rs`) and their mutations are in `docs/ISSUES.md` under ART-322
+      and ART-319.
 
 ## Re-vendoring
 
@@ -753,10 +806,10 @@ index 757c2f9..2f3f6f3 100644
                      result.push(entry);
                  }
 diff --git a/src/writer.rs b/src/writer.rs
-index fc692d6..abb8031 100644
+index fc692d6..3bfab58 100644
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,27 @@
+@@ -6,6 +6,32 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
@@ -780,11 +833,16 @@ index fc692d6..abb8031 100644
 +//! Modified by ART on 2026-09-15 (ART-322): a `rename_in` destination that is
 +//! the source entry itself — a case-only rename in the same directory — is
 +//! renamed in place rather than deleted and recreated;
++//! Modified by ART on 2026-09-15 (the third debt round's final review fix
++//! wave): `rename_in`'s same-entry check compares the name too, and a hard
++//! link found as the destination is refused (I1); the in-place rename writes
++//! Latin-1 (M1); copy-on-write refuses a bitmap that offers the old file's
++//! own block (M2);
 +//! `ART-PATCH.md` in this crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -28,8 +49,41 @@ pub struct Writer {
+@@ -28,8 +54,41 @@ pub struct Writer {
      // Mutable state
      res_bitmap: Vec<u32>,
      data_bm: Vec<(u32, Vec<u32>)>, // (blk_num, longs)
@@ -827,7 +885,7 @@ index fc692d6..abb8031 100644
  }
  
  impl Writer {
-@@ -37,6 +91,19 @@ impl Writer {
+@@ -37,6 +96,19 @@ impl Writer {
      pub fn open(vol: Volume) -> Result<Self> {
          let rb = &vol.rootblock;
          let rbs = rb.reserved_blksize as u32;
@@ -847,7 +905,7 @@ index fc692d6..abb8031 100644
          let rescluster = rbs / vol.block_size();
          let firstreserved = rb.firstreserved;
          let numreserved = (rb.lastreserved - firstreserved + 1) / rescluster;
-@@ -57,6 +124,11 @@ impl Writer {
+@@ -57,6 +129,11 @@ impl Writer {
              res_bitmap: Vec::new(),
              data_bm: Vec::new(),
              pending_writes: Vec::new(),
@@ -859,7 +917,7 @@ index fc692d6..abb8031 100644
              vol,
          };
          w.load_reserved_bitmap()?;
-@@ -64,38 +136,163 @@ impl Writer {
+@@ -64,38 +141,163 @@ impl Writer {
          Ok(w)
      }
  
@@ -1024,7 +1082,7 @@ index fc692d6..abb8031 100644
          let name_bytes = name.as_bytes();
          let len = name_bytes.len().min(30);
          self.vol.rootblock.diskname = name[..len].to_string();
-@@ -114,16 +311,32 @@ impl Writer {
+@@ -114,16 +316,32 @@ impl Writer {
          cluster[RB_OFF_DISKNAME + 1..RB_OFF_DISKNAME + 1 + len].copy_from_slice(&name_bytes[..len]);
          let ds = self.next_datestamp();
          put_u32(&mut cluster, RB_OFF_DATESTAMP, ds);
@@ -1060,7 +1118,7 @@ index fc692d6..abb8031 100644
          // Check if file already exists — if so, overwrite it
          if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
              let entry_type = entry_data[pos + 1] as i8;
-@@ -144,6 +357,7 @@ impl Writer {
+@@ -144,6 +362,7 @@ impl Writer {
          name: &str,
          data: &[u8],
      ) -> Result<()> {
@@ -1068,7 +1126,7 @@ index fc692d6..abb8031 100644
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
  
-@@ -165,6 +379,11 @@ impl Writer {
+@@ -165,6 +384,11 @@ impl Writer {
  
      /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
      pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -1080,7 +1138,7 @@ index fc692d6..abb8031 100644
          let dir_blk = self.alloc_reserved_block()?;
          let anodenr = self.alloc_anode(1, dir_blk, 0)?;
  
-@@ -181,6 +400,10 @@ impl Writer {
+@@ -181,6 +405,10 @@ impl Writer {
  
      /// Create a softlink in a parent directory.
      pub fn create_softlink(&mut self, path: &str, target: &str) -> Result<()> {
@@ -1091,7 +1149,7 @@ index fc692d6..abb8031 100644
          let (parent_anode, name) = self.split_path(path)?;
          self.create_softlink_in(parent_anode, &name, target)
      }
-@@ -192,6 +415,16 @@ impl Writer {
+@@ -192,6 +420,16 @@ impl Writer {
          name: &str,
          target: &str,
      ) -> Result<()> {
@@ -1108,7 +1166,7 @@ index fc692d6..abb8031 100644
          let data = target.as_bytes();
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
-@@ -220,13 +453,22 @@ impl Writer {
+@@ -220,13 +458,22 @@ impl Writer {
  
      /// Create a hardlink in a parent directory.
      pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
@@ -1131,7 +1189,7 @@ index fc692d6..abb8031 100644
          // Read the deldir entry
          let rext = self
              .vol
-@@ -256,7 +498,9 @@ impl Writer {
+@@ -256,7 +503,9 @@ impl Writer {
          let blk = deldirblocks[block_idx];
          let data = self.read_reserved_raw(blk)?;
          let off = DELDIR_HEADER_SIZE + slot_idx * DELDIR_ENTRY_SIZE;
@@ -1142,7 +1200,7 @@ index fc692d6..abb8031 100644
              .ok_or_else(|| Error::NotFound("empty deldir slot".into()))?;
  
          // Check destination doesn't already exist
-@@ -266,6 +510,23 @@ impl Writer {
+@@ -266,6 +515,23 @@ impl Writer {
  
          let old_anode = entry.anode;
  
@@ -1166,7 +1224,7 @@ index fc692d6..abb8031 100644
          // Read file data via the anode chain (still intact)
          let file_data = self.vol.read_file_data(old_anode, entry.file_size())?;
  
-@@ -290,139 +551,116 @@ impl Writer {
+@@ -290,139 +556,131 @@ impl Writer {
      /// Force-remove a directory entry without touching anodes or data blocks.
      /// Used by check --repair for entries with broken anode chains.
      pub fn force_remove_entry(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -1245,12 +1303,7 @@ index fc692d6..abb8031 100644
 -        // Write data to existing blocks (reuse as many as possible)
 -        let mut written = 0usize;
 -        let mut blocks_used = 0u32;
-+        // ART (ART-319's first gap): copy-on-write. The old file's blocks are
-+        // still allocated here, so none of them can be handed out; a volume
-+        // without room for the whole new content is refused now, before any
-+        // block is written.
-+        let new_blocks = self.alloc_data_blocks(new_blocks_needed)?;
-         let mut sector = vec![0u8; bs];
+-        let mut sector = vec![0u8; bs];
 -        for an in &old_chain {
 -            for i in 0..an.clustersize {
 -                if blocks_used >= new_blocks_needed {
@@ -1258,11 +1311,7 @@ index fc692d6..abb8031 100644
 -                }
 -                sector.fill(0);
 -                let start = written;
-+        for (i, &blk) in new_blocks.iter().enumerate() {
-+            sector.fill(0);
-+            let start = i * bs;
-+            if start < data.len() {
-                 let end = (start + bs).min(data.len());
+-                let end = (start + bs).min(data.len());
 -                if start < data.len() {
 -                    sector[..end - start].copy_from_slice(&data[start..end]);
 -                }
@@ -1274,13 +1323,29 @@ index fc692d6..abb8031 100644
 -            }
 -            if blocks_used >= new_blocks_needed {
 -                break;
-+                sector[..end - start].copy_from_slice(&data[start..end]);
-             }
-+            self.vol.dev.write_block(blk as u64, &sector)?;
+-            }
++        // ART (ART-319's first gap): copy-on-write. The old file's blocks are
++        // still allocated here, so none of them can be handed out; a volume
++        // without room for the whole new content is refused now, before any
++        // block is written.
++        let new_blocks = self.alloc_data_blocks(new_blocks_needed)?;
++        // Final review fix wave (M2): that holds only for a consistent
++        // bitmap. One that marks an old block free hands it out here, and the
++        // write below would overwrite the old file before any commit, then
++        // the commit would free a block the new chain uses. Refused as
++        // corruption before the first write; `guarded` discards the
++        // allocation.
++        if let Some(&shared) = new_blocks.iter().find(|&&blk| {
++            old_chain
++                .iter()
++                .any(|an| blk >= an.blocknr && blk - an.blocknr < an.clustersize)
++        }) {
++            return Err(Error::Corrupt(format!(
++                "the data bitmap marks block {shared} free, but file anode {file_anode} still uses it"
++            )));
          }
 -        self.vol.dev.flush()?;
-+        self.vol.dev.flush()?; // data durable before metadata
- 
+-
 -        if new_blocks_needed <= old_total {
 -            // Shrink: free excess blocks and truncate the anode chain
 -            self.truncate_anode_chain(file_anode, new_blocks_needed)?;
@@ -1291,26 +1356,27 @@ index fc692d6..abb8031 100644
 -            for &blk in &new_blocks {
 -                sector.fill(0);
 -                let start = written;
--                let end = (start + bs).min(data.len());
++        let mut sector = vec![0u8; bs];
++        for (i, &blk) in new_blocks.iter().enumerate() {
++            sector.fill(0);
++            let start = i * bs;
++            if start < data.len() {
+                 let end = (start + bs).min(data.len());
 -                if start < data.len() {
 -                    sector[..end - start].copy_from_slice(&data[start..end]);
 -                }
 -                self.vol.dev.write_block(blk as u64, &sector)?;
 -                written += bs;
--            }
++                sector[..end - start].copy_from_slice(&data[start..end]);
+             }
 -            self.vol.dev.flush()?;
 -            // Extend the existing chain with new blocks
 -            let new_chain_head = self.create_anode_chain(&new_blocks)?;
 -            self.append_to_anode_chain(file_anode, new_chain_head)?;
-+        // The new chain under the same head anode: the extents after the first
-+        // get anodes of their own, allocated while the old chain's are still
-+        // taken, so none of them can be one this commit is about to clear.
-+        let extents = block_extents(&new_blocks);
-+        let mut next = ANODE_EOF;
-+        for &(start, count) in extents.iter().skip(1).rev() {
-+            next = self.alloc_anode(count, start, next)?;
++            self.vol.dev.write_block(blk as u64, &sector)?;
          }
--
++        self.vol.dev.flush()?; // data durable before metadata
+ 
 -        // Update file size in the directory entry
 -        self.update_dir_entry_size(parent_anode, name, data.len() as u64)?;
 -        self.update_rootblock()
@@ -1346,7 +1412,14 @@ index fc692d6..abb8031 100644
 -                    return Ok(());
 -                }
 -            }
--        }
++        // The new chain under the same head anode: the extents after the first
++        // get anodes of their own, allocated while the old chain's are still
++        // taken, so none of them can be one this commit is about to clear.
++        let extents = block_extents(&new_blocks);
++        let mut next = ANODE_EOF;
++        for &(start, count) in extents.iter().skip(1).rev() {
++            next = self.alloc_anode(count, start, next)?;
+         }
 -        Ok(())
 -    }
 -
@@ -1373,7 +1446,7 @@ index fc692d6..abb8031 100644
      }
  
      /// Append a sub-chain to the tail of an existing anode chain.
-@@ -464,7 +702,18 @@ impl Writer {
+@@ -464,7 +722,18 @@ impl Writer {
  
      /// Clear a single anode slot (set all 3 fields to 0).
      fn clear_single_anode(&mut self, anodenr: u32) -> Result<()> {
@@ -1393,7 +1466,7 @@ index fc692d6..abb8031 100644
      }
  
      /// Find a directory entry by name, returning (block_number, block_data, entry_offset).
-@@ -565,7 +814,7 @@ impl Writer {
+@@ -565,7 +834,7 @@ impl Writer {
          }
  
          // Update datestamp
@@ -1402,7 +1475,7 @@ index fc692d6..abb8031 100644
          put_u16(&mut data, pos + 10, cday);
          put_u16(&mut data, pos + 12, cmin);
          put_u16(&mut data, pos + 14, ctick);
-@@ -580,6 +829,15 @@ impl Writer {
+@@ -580,6 +849,15 @@ impl Writer {
          dir_anode: u32,
          name: &str,
          protection: u8,
@@ -1418,7 +1491,7 @@ index fc692d6..abb8031 100644
      ) -> Result<()> {
          let (blk, mut data, pos) = self.find_dir_entry(dir_anode, name)?;
          data[pos + 16] = protection;
-@@ -588,6 +846,22 @@ impl Writer {
+@@ -588,6 +866,34 @@ impl Writer {
          self.update_rootblock()
      }
  
@@ -1433,15 +1506,27 @@ index fc692d6..abb8031 100644
 +    /// deleted the destination with `delete_in`, its own commit, first.
 +    ///
 +    /// ART (2026-09-15, ART-322): a destination that is the source itself —
-+    /// same parent, same anode, the names case-insensitively equal, which
-+    /// `name_eq_ci` makes true of a case-only rename in the same directory —
-+    /// is renamed in place instead of deleted and recreated: its anode,
-+    /// size, protection, dates and comment survive, and only the name bytes
-+    /// change. The identical name, same case too, is a no-op success.
++    /// found in the same parent, under a name `name_eq_ci` matches to the
++    /// source entry's own, with the same anode, which is true of a case-only
++    /// rename in the same directory — is renamed in place instead of deleted
++    /// and recreated: its anode, size, protection, dates and comment
++    /// survive, and only the name bytes change. The identical name, same
++    /// case too, is a no-op success.
++    ///
++    /// ART (2026-09-15, the third debt round's final review fix wave, I1):
++    /// the name is part of that identity. A hard link stores its target's
++    /// anode, so with the anode alone a link in the same directory was taken
++    /// for the source. A found destination that is a hard link, or that
++    /// shares the source's anode without being the source, is refused with
++    /// `Error::AlreadyExists` before anything is staged: this writer's delete
++    /// of a hard link frees the file it names (ART-323), and pfs3aio's
++    /// `RenameAndMove` refuses every found destination that is not the
++    /// source's own direntry (`ERROR_OBJECT_EXISTS`, `directory.c:2064-2076`,
++    /// `tonioni/pfs3aio` `211f7f0`).
      pub fn rename_in(
          &mut self,
          src_parent: u32,
-@@ -595,6 +869,17 @@ impl Writer {
+@@ -595,6 +901,17 @@ impl Writer {
          dst_parent: u32,
          dst_name: &str,
      ) -> Result<()> {
@@ -1459,19 +1544,24 @@ index fc692d6..abb8031 100644
          let entries = self.vol.list_dir_by_anode(src_parent)?;
          let entry = entries
              .iter()
-@@ -602,13 +887,27 @@ impl Writer {
+@@ -602,13 +919,45 @@ impl Writer {
              .ok_or_else(|| Error::NotFound(src_name.to_string()))?
              .clone();
  
 -        // If destination exists, delete it first
-+        // ART-322: a destination that names the very entry being renamed —
-+        // the same parent, a case-insensitive name match, and the same
-+        // anode — is not "an existing destination" to delete. `name_eq_ci`
-+        // makes a case-only rename in the same directory find the source
-+        // itself this way; deleting it deleted the file and reported `Ok`.
-+        // Rename it in place instead, so its anode, size, protection, dates
-+        // and comment all survive and only the name bytes change. An
-+        // identical name (the same case too) is a no-op success.
++        // ART-322: a destination that names the very entry being renamed is
++        // not "an existing destination" to delete. `name_eq_ci` makes a
++        // case-only rename in the same directory find the source itself this
++        // way; deleting it deleted the file and reported `Ok`. Rename it in
++        // place instead, so its anode, size, protection, dates and comment
++        // all survive and only the name bytes change. An identical name (the
++        // same case too) is a no-op success.
++        //
++        // Final review fix wave (I1): "the very entry" is the same parent, a
++        // found name `name_eq_ci` matches to the source entry's own — names
++        // in one directory are unique under that compare — and the same
++        // anode. The anode alone took a hard link in the same directory for
++        // the source, since a link stores its target's anode.
          if let Ok(dst_entries) = self.vol.list_dir_by_anode(dst_parent)
 -            && dst_entries
 +            && let Some(dst_entry) = dst_entries
@@ -1480,29 +1570,51 @@ index fc692d6..abb8031 100644
 +                .find(|e| crate::util::name_eq_ci(&e.name, dst_name))
          {
 -            self.delete_in(dst_parent, dst_name)?;
-+            if dst_parent == src_parent && dst_entry.anode == entry.anode {
++            if dst_parent == src_parent
++                && crate::util::name_eq_ci(&dst_entry.name, &entry.name)
++                && dst_entry.anode == entry.anode
++            {
 +                if entry.name == dst_name {
 +                    return Ok(());
 +                }
 +                return self.rename_dir_entry_in_place(src_parent, src_name, dst_name);
++            }
++            // Final review fix wave (I1): a hard link cannot be replaced —
++            // `delete_in_no_commit` on one frees the file it names (ART-323) —
++            // and neither can a different entry sharing the source's anode (a
++            // link and the file it names are one file). Refused before
++            // anything is staged. pfs3aio refuses every found destination
++            // that is not the source's own direntry (`RenameAndMove`,
++            // `directory.c:2064-2076`).
++            if dst_entry.is_hardlink() || dst_entry.anode == entry.anode {
++                return Err(Error::AlreadyExists(dst_name.to_string()));
 +            }
 +            // ART (ART-319's second gap): staged, not committed on its own.
 +            self.delete_in_no_commit(dst_parent, dst_name)?;
          }
  
          // Add entry in new location with new name
-@@ -625,8 +924,49 @@ impl Writer {
+@@ -625,8 +974,65 @@ impl Writer {
          self.update_rootblock()
      }
  
 +    /// ART-322: rewrite a directory entry's name bytes in place, leaving its
 +    /// anode, size, protection, dates, comment and every extra field
 +    /// untouched. Only reached for a destination that is the source entry
-+    /// itself — same parent, same anode — where `name_eq_ci` guarantees
-+    /// `new_name`'s byte length equals the entry's current one (an
-+    /// ASCII-only case fold never changes length); `Error::Corrupt` is a
-+    /// safety net, never expected to fire, rather than indexing past the
-+    /// entry on a length this crate did not anticipate.
++    /// itself — same parent, a `name_eq_ci` match to the entry's own name,
++    /// same anode.
++    ///
++    /// Final review fix wave (M1): the name is written as **Latin-1**, one
++    /// byte a character, the encoding `find_dir_entry` and the reader decode
++    /// it with (`util::latin1_to_string`) and the one an Amiga writes. It
++    /// used to be the new name's UTF-8 bytes, so a case-only rename of a
++    /// non-ASCII name ("Äa", `C4 61`, to "ÄA") measured three bytes against
++    /// two and refused a healthy volume as corrupt. `name_eq_ci` is an
++    /// ASCII-only fold over names decoded from those same bytes, so the new
++    /// name always has one character at or below U+00FF for each stored
++    /// byte; `Error::Corrupt` is a safety net for the entry no longer
++    /// holding what was just found in it, never expected to fire, rather
++    /// than indexing past the entry.
 +    fn rename_dir_entry_in_place(
 +        &mut self,
 +        dir_anode: u32,
@@ -1511,14 +1623,21 @@ index fc692d6..abb8031 100644
 +    ) -> Result<()> {
 +        let (blk, mut data, pos) = self.find_dir_entry(dir_anode, old_name)?;
 +        let old_nlen = data[pos + 17] as usize;
-+        let new_name_bytes = new_name.as_bytes();
-+        let new_nlen = new_name_bytes.len().min(107);
-+        if new_nlen != old_nlen {
-+            return Err(Error::Corrupt(format!(
-+                "a case-only rename changed the name's byte length ({old_nlen} -> {new_nlen})"
-+            )));
-+        }
-+        data[pos + 18..pos + 18 + new_nlen].copy_from_slice(&new_name_bytes[..new_nlen]);
++        let new_name_bytes: Option<Vec<u8>> = new_name
++            .chars()
++            .map(|c| u8::try_from(u32::from(c)).ok())
++            .collect();
++        let new_name_bytes = match new_name_bytes {
++            Some(bytes) if bytes.len() == old_nlen => bytes,
++            _ => {
++                return Err(Error::Corrupt(format!(
++                    "the directory entry found for '{old_name}' does not hold a name that \
++                     '{new_name}' differs from only in letter case"
++                )));
++            }
++        };
++        let new_nlen = new_name_bytes.len();
++        data[pos + 18..pos + 18 + new_nlen].copy_from_slice(&new_name_bytes);
 +        put_u32(&mut data, 4, self.next_datestamp());
 +        self.write_reserved(blk, &data)?;
 +        self.update_rootblock()
@@ -1541,7 +1660,7 @@ index fc692d6..abb8031 100644
          let entries = self.vol.list_dir_by_anode(parent_anode)?;
          let target = entries
              .iter()
-@@ -642,96 +982,123 @@ impl Writer {
+@@ -642,96 +1048,123 @@ impl Writer {
              self.free_anode_chain_reserved(target.anode)?;
              self.clear_anode_chain(target.anode)?;
          } else {
@@ -1579,7 +1698,10 @@ index fc692d6..abb8031 100644
 +    fn move_to_deldir(&mut self, entry: &crate::ondisk::DirEntry) -> Result<bool> {
 +        if !self.vol.rootblock.has_flag(MODE_DELDIR) || !self.vol.rootblock.has_extension() {
 +            return Ok(false);
-+        }
+         }
+-        let rext = match &self.vol.rootblock_ext {
+-            Some(e) => e,
+-            None => return false,
 +        let ext_blk = self.vol.rootblock.extension;
 +        let mut rext = self.read_reserved_raw(ext_blk)?;
 +        let u16_at = |b: &[u8], at: usize| u16::from_be_bytes([b[at], b[at + 1]]);
@@ -1588,10 +1710,7 @@ index fc692d6..abb8031 100644
 +        let slots = usize::from(u16_at(&rext, 0x36)).min(MAXDELDIR + 1) * DELENTRIES_PER_BLOCK;
 +        if slots == 0 {
 +            return Ok(false);
-         }
--        let rext = match &self.vol.rootblock_ext {
--            Some(e) => e,
--            None => return false,
++        }
 +        let block_of =
 +            |rext: &[u8], slot: usize| u32_at(rext, 0x90 + (slot / DELENTRIES_PER_BLOCK) * 4);
 +        let roving = usize::from(u16_at(&rext, 0x34));
@@ -1735,7 +1854,7 @@ index fc692d6..abb8031 100644
      }
  
      // ---- Data bitmap ----
-@@ -739,9 +1106,11 @@ impl Writer {
+@@ -739,9 +1172,11 @@ impl Writer {
      fn load_data_bitmap(&mut self) -> Result<()> {
          let no_bmb = {
              let bits_per_bmb = self.index_per_block * 32;
@@ -1749,7 +1868,7 @@ index fc692d6..abb8031 100644
          };
          for seq in 0..no_bmb {
              if let Some(blk) = self.get_bitmap_block_nr(seq)? {
-@@ -778,7 +1147,10 @@ impl Writer {
+@@ -778,7 +1213,10 @@ impl Writer {
                              .ok_or_else(|| {
                                  Error::Corrupt("block number overflow in bitmap".into())
                              })?;
@@ -1761,7 +1880,7 @@ index fc692d6..abb8031 100644
                              continue; // skip out-of-range bitmap bits
                          }
                          longs[li] &= !(0x8000_0000 >> bit);
-@@ -825,7 +1197,9 @@ impl Writer {
+@@ -825,7 +1263,9 @@ impl Writer {
      }
  
      fn free_data_block(&mut self, blk: u32) -> Result<()> {
@@ -1772,7 +1891,7 @@ index fc692d6..abb8031 100644
              return Ok(());
          }
          let rel = blk - self.bitmapstart;
-@@ -896,55 +1270,106 @@ impl Writer {
+@@ -896,55 +1336,106 @@ impl Writer {
  
      // ---- Anode allocation ----
  
@@ -1883,10 +2002,10 @@ index fc692d6..abb8031 100644
 +                // No free anode in this block (pfs3aio clears its bit, `anodes.c:414-416`).
 +                self.anode_block_full[seqnr as usize] = true;
 +                seqnr += 1;
-+            }
+             }
 +            if start == 0 {
 +                return Err(Error::DiskFull("no free anode slots".into()));
-             }
++            }
 +            start = 0;
          }
 -        Err(Error::DiskFull("no free anode slots".into()))
@@ -1916,7 +2035,7 @@ index fc692d6..abb8031 100644
      }
  
      /// Allocate a new anode block and register it in the index.
-@@ -964,43 +1389,62 @@ impl Writer {
+@@ -964,43 +1455,62 @@ impl Writer {
          let idx_off = seqnr % ipb;
  
          if self.vol.rootblock.is_large() {
@@ -1993,7 +2112,7 @@ index fc692d6..abb8031 100644
                  put_u32(&mut sdata, soff, new_idx);
                  put_u32(&mut sdata, 4, self.datestamp);
                  self.write_reserved(super_blk, &sdata)?;
-@@ -1012,8 +1456,14 @@ impl Writer {
+@@ -1012,8 +1522,14 @@ impl Writer {
                  self.write_reserved(idx_blk, &idata)?;
              }
          } else {
@@ -2010,7 +2129,7 @@ index fc692d6..abb8031 100644
                  .vol
                  .rootblock
                  .indexblocks
-@@ -1021,7 +1471,18 @@ impl Writer {
+@@ -1021,7 +1537,18 @@ impl Writer {
                  .copied()
                  .unwrap_or(0);
              if idx_blk == 0 {
@@ -2030,7 +2149,7 @@ index fc692d6..abb8031 100644
              }
              let mut idata = self.read_reserved_raw(idx_blk)?;
              let entry_off = INDEX_BLOCK_HEADER_SIZE + idx_off as usize * 4;
-@@ -1036,18 +1497,7 @@ impl Writer {
+@@ -1036,18 +1563,7 @@ impl Writer {
      }
  
      fn create_anode_chain(&mut self, blocks: &[u32]) -> Result<u32> {
@@ -2050,7 +2169,7 @@ index fc692d6..abb8031 100644
          // Allocate in reverse so we can set next pointers
          let mut next_nr = 0u32;
          for &(start, count) in clusters.iter().rev() {
-@@ -1097,6 +1547,7 @@ impl Writer {
+@@ -1097,6 +1613,7 @@ impl Writer {
                  .anodes
                  .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
  
@@ -2058,7 +2177,7 @@ index fc692d6..abb8031 100644
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,6 +1555,11 @@ impl Writer {
+@@ -1104,6 +1621,11 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -2070,7 +2189,7 @@ index fc692d6..abb8031 100644
                  // Find end of entries
                  let mut pos = DIR_BLOCK_HEADER_SIZE;
                  while pos < self.resblocksize as usize {
-@@ -1123,13 +1579,17 @@ impl Writer {
+@@ -1123,13 +1645,17 @@ impl Writer {
                  }
              }
          }
@@ -2090,7 +2209,7 @@ index fc692d6..abb8031 100644
          new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
              .copy_from_slice(&entry_bytes);
          self.write_reserved(new_blk, &new_data)?;
-@@ -1172,7 +1632,7 @@ impl Writer {
+@@ -1172,7 +1698,7 @@ impl Writer {
          entry[1] = entry_type as u8;
          put_u32(&mut entry, 2, anode);
          put_u32(&mut entry, 6, fsize as u32);
@@ -2099,7 +2218,7 @@ index fc692d6..abb8031 100644
          put_u16(&mut entry, 10, cday);
          put_u16(&mut entry, 12, cmin);
          put_u16(&mut entry, 14, ctick);
-@@ -1200,11 +1660,52 @@ impl Writer {
+@@ -1200,11 +1726,52 @@ impl Writer {
  
      // ---- Rootblock update ----
  
@@ -2153,7 +2272,7 @@ index fc692d6..abb8031 100644
          let bs = self.vol.block_size() as usize;
          let rblkcluster = self.vol.rootblock.rblkcluster as u32;
          let cluster_size = rblkcluster as usize * bs;
-@@ -1236,6 +1737,25 @@ impl Writer {
+@@ -1236,6 +1803,25 @@ impl Writer {
              }
          }
  
@@ -2179,7 +2298,7 @@ index fc692d6..abb8031 100644
          self.vol
              .dev
              .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)?;
-@@ -1286,10 +1806,44 @@ impl Writer {
+@@ -1286,10 +1872,44 @@ impl Writer {
          Ok(())
      }
  
@@ -2227,7 +2346,7 @@ index fc692d6..abb8031 100644
      }
  
      fn get_bitmap_block_nr(&mut self, seqnr: u32) -> Result<Option<u32>> {
-@@ -1316,3 +1870,21 @@ impl Writer {
+@@ -1316,3 +1936,21 @@ impl Writer {
          Ok((parent, filename))
      }
  }
