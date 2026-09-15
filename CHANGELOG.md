@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **First boot asks, on the Amiga, only the preferences ART did not set.** A second tick on the OS Builder's *What to
+  install* tab — on unless you turn it off — has first boot open the language-and-country window, the keyboard
+  window unless you chose a keymap, and the screen-mode window unless you applied a screen depth. The boot waits for the first
+  two; the screen-mode window opens on the Workbench. Beside the tick, ART says which windows will open on the tree as
+  it is now. Rehearsed under WinUAE; saving from the windows by hand has not yet been measured.
+- **A first-boot step can restart the Amiga.** The Amiga waits three seconds for its disk and restarts, and the rest of
+  first boot runs on the next boot. AmigaOS 3.9 ships no restart command: first boot then logs that it could not, and
+  carries on; the tab names the Aminet package that supplies one.
+
+### Changed
+
+- The first-boot report says when a step asked for a restart, and whether the Amiga restarted, had no command for it,
+  or has not come back yet. A rehearsal that runs out of time while the Amiga waits in a preferences window names that
+  window.
+
 ## [0.9.4] - 2026-09-15
 
 ### Added
