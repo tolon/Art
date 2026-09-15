@@ -544,7 +544,9 @@ mod tests {
         };
         let outcome = apply_appearance_request(&tree, request).unwrap();
 
-        assert_eq!(outcome.written.len(), 1);
+        // The depth and ART_Set_ScreenMode (first-boot phase 3 design §4.2).
+        assert_eq!(outcome.written.len(), 2);
+        assert!(outcome.written[1].ends_with("ART_Set_ScreenMode"));
         assert_eq!(
             outcome.backups.len(),
             1,

@@ -367,10 +367,13 @@ fn plan_wallpaper(
     })
 }
 
-/// A fully validated screen-depth change.
+/// A fully validated screen-depth change, and the first-boot marker that
+/// travels with it (first-boot phase 3 design §4.2).
 struct ScreenModePlan {
     path: PathBuf,
     bytes: Vec<u8>,
+    marker: PathBuf,
+    marker_bytes: Vec<u8>,
 }
 
 fn plan_screen_mode(tree: &Path, depth: u16) -> CoreResult<ScreenModePlan> {
@@ -388,7 +391,22 @@ fn plan_screen_mode(tree: &Path, depth: u16) -> CoreResult<ScreenModePlan> {
     mode.depth = depth;
     let new_body = screenmode::write_screen_mode(&mode)?;
     let bytes = prefs.replace_bodies(&[(index, new_body)])?;
-    Ok(ScreenModePlan { path, bytes })
+
+    // `ART_Set_ScreenMode`: `S:FirstBoot/90-prefs` skips the ScreenMode window
+    // when it exists. Planned here so a tree with no `Prefs/Env-Archive`
+    // refuses before anything is written, like every other part of a request.
+    let archive = resolve_ci(tree, ENV_ARCHIVE_REL)?;
+    let marker = match crate::core::osinstall::find_child_ci(&archive, env::ART_SET_SCREENMODE)? {
+        Some(existing) => existing,
+        None => archive.join(env::ART_SET_SCREENMODE),
+    };
+    let marker_bytes = env::encode_value(env::MARKER_VALUE)?;
+    Ok(ScreenModePlan {
+        path,
+        bytes,
+        marker,
+        marker_bytes,
+    })
 }
 
 /// A fully validated `Prefs/Env-Archive/<name>` write.
@@ -713,7 +731,7 @@ pub fn apply_appearance_with(
     let total: u64 = wallpaper_plan
         .as_ref()
         .map_or(0, |p| 1 + p.picture.is_some() as u64)
-        + screen_plan.as_ref().map_or(0, |_| 1)
+        + screen_plan.as_ref().map_or(0, |_| 2)
         + shell_plans.len() as u64
         + icon_plan.as_ref().map_or(0, |p| p.writes.len() as u64);
     let mut done: u64 = 0;
@@ -754,6 +772,19 @@ pub fn apply_appearance_with(
         check_cancelled(sink, &committed)?;
         let message = plan.path.display().to_string();
         commit_write(plan.path, &plan.bytes, BackupPolicy::CONFIG, &mut committed)?;
+        done += 1;
+        sink.report(done, Some(total), &message);
+
+        // The marker, with no cancellation check before it: a depth written
+        // without its marker would have the Amiga ask a question ART already
+        // answered. Never removed afterwards — a depth ART wrote stays written.
+        let message = plan.marker.display().to_string();
+        commit_write(
+            plan.marker,
+            &plan.marker_bytes,
+            BackupPolicy::CONFIG,
+            &mut committed,
+        )?;
         done += 1;
         sink.report(done, Some(total), &message);
     }
@@ -1281,6 +1312,68 @@ mod tests {
         let scratch = ScratchDir::new("art-appearance", "no-drawer");
         let names = backdrops_in_tree(scratch.path()).unwrap();
         assert!(names.is_empty());
+    }
+
+    fn screenmode_marker_path(tree: &Path) -> PathBuf {
+        tree.join("Prefs")
+            .join("Env-Archive")
+            .join(env::ART_SET_SCREENMODE)
+    }
+
+    fn depth_only(depth: Option<u16>) -> AppearanceRequest {
+        AppearanceRequest {
+            wallpaper: None,
+            screen_depth: depth,
+            shell_defaults: depth.is_none(),
+            arrange_icons: false,
+        }
+    }
+
+    /// First-boot phase 3 design §4.2: the depth and the marker that tells
+    /// `90-prefs` not to ask ScreenMode land in one committed list.
+    #[test]
+    fn a_screen_depth_writes_the_screenmode_marker_in_the_same_outcome() {
+        let (_scratch, tree) = build_tree("screen-marker");
+        let outcome = apply_appearance(&tree, &depth_only(Some(8))).unwrap();
+        assert_eq!(
+            outcome.written,
+            vec![screenmode_path(&tree), screenmode_marker_path(&tree)]
+        );
+        assert_eq!(
+            std::fs::read(screenmode_marker_path(&tree)).unwrap(),
+            b"TRUE"
+        );
+    }
+
+    #[test]
+    fn no_screen_depth_writes_no_screenmode_marker() {
+        let (_scratch, tree) = build_tree("no-screen-marker");
+        let outcome = apply_appearance(&tree, &depth_only(None)).unwrap();
+        assert!(!screenmode_marker_path(&tree).exists());
+        assert!(!outcome
+            .written
+            .iter()
+            .any(|p| p.ends_with(env::ART_SET_SCREENMODE)));
+    }
+
+    #[test]
+    fn a_refused_screen_depth_writes_no_marker() {
+        let (_scratch, tree) = build_tree("refused-screen-marker");
+        std::fs::remove_file(screenmode_path(&tree)).unwrap();
+        assert!(apply_appearance(&tree, &depth_only(Some(8))).is_err());
+        assert!(!screenmode_marker_path(&tree).exists());
+    }
+
+    /// The marker belongs to the depth: a stop between the two would leave a
+    /// depth ART wrote and a wizard that asks for it anyway. No cancellation
+    /// check sits between them.
+    #[test]
+    fn a_stop_is_not_offered_between_the_depth_and_its_marker() {
+        let (_scratch, tree) = build_tree("screen-marker-stop");
+        let sink = crate::core::amigainstall::run::fakes::CancelAfter::new(1);
+        apply_appearance_with(&tree, &depth_only(Some(8)), &sink)
+            .expect("the one check before the depth passes; nothing else asks");
+        assert!(screenmode_marker_path(&tree).is_file());
     }
 
     #[test]
