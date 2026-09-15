@@ -496,6 +496,29 @@ survivors remain **open**, neither guarded nor disclosed before this fix wave: (
 `clock.rs` is on `core_makes_amiga_dates_only_through_the_clock`'s own allow-list, so no guard sees it; (c) a
 libpfs3 `Writer` opened without calling `set_entry_date` falls back to UTC (`vendor/libpfs3/src/writer.rs:132-133`)
 and the independence guards do not read `vendor/`. Dates already on volumes stay as written.
+**Survivors (b) and (c) closed, third debt round item 2, 2026-09-15 on `art-debt-3-0915`:** two new
+`core::independence` guards, modelled on `core_makes_amiga_dates_only_through_the_clock` and
+`commands_and_tools_never_name_utc_clock_outside_a_test`. (b)
+`only_clock_and_local_time_name_amiga_from_wall_or_system_now_unix` walks all of `src/` (not only `core/`, since
+`tools/local_time.rs` must be checked too) for `amiga_from_wall` and `system_now_unix`, allow-listing only
+`core/clock.rs` (where both are declared) and `tools/local_time.rs` (the product clock); `core/volume/write/layout.rs`'s
+two calls (lines 403, 412) are inside `#[cfg(test)]` and need no allow-list entry — confirmed by grep and by
+`test_regions` skipping them. (c) `libpfs3_writer_open_is_named_only_by_the_pfs3_writer_helper` walks `core/` for
+`libpfs3::writer::Writer::open(`, allow-listing `core/preload/native.rs` (the new helper) and `core/card/sizing.rs`
+(its own call, in the `fill` test helper, already sits inside a `#[cfg(test)] mod tests` that runs to the file's end,
+so it needs no allow-list entry on its own account either — named anyway per the approved design). A new
+`core::preload::native::open_pfs3_writer(vol, clock)` is now the one product path to a libpfs3 `Writer`: it opens the
+writer and calls `set_entry_date` with the clock's date before handing it back, so a writer used immediately after
+open — before any per-entry refresh — still carries the clock's local date rather than falling back to
+`current_amiga_datestamp`'s UTC (`vendor/libpfs3/src/writer.rs`). `copy_in_pfs3` now calls it in place of a bare
+`Writer::open`; its own per-entry `set_entry_date` refresh inside the loop is unchanged. Tests: both guards seen red
+with an injected product call (a temporary function in `core/card/sizing.rs` for (b), `core/dirsize.rs` for (c) —
+neither file is allow-listed for the other guard) and green after restore;
+`core::preload::native::tests::open_pfs3_writer_stamps_the_clocks_local_date_before_any_write` (writes through a
+writer immediately after `open_pfs3_writer`, no `set_entry_date` call of its own) was red when the helper's own
+`set_entry_date` call was removed (day 17789/UTC-now vs the expected 17546 from `PLUS_THREE`'s fixed clock) and green
+restored. Backups by absolute path into `D:\Projeler\Amiga\scratch-0913\` (`sizing.rs.bak`, `dirsize.rs.bak`,
+`native.rs.bak`), grep-confirmed; restored with `shutil.copyfile`, never `git checkout --`. No survivor disclosed.
 
 **ART-301** 🔵 ✅ **The job bar's titles were English sentences composed in Rust** — *found 2026-09-10 in the
 owner's screenshot; fixed 2026-09-14 on `art-debt-0914`*
