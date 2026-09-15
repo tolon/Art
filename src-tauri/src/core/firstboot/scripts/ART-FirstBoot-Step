@@ -17,6 +17,19 @@ ELSE
   Echo >>S:FirstBoot.log "step [name] ok"
   Delete >NIL: S:FirstBoot/[name]
 ENDIF
+; A step asks for a restart with SetEnv ART_Reboot "TRUE". The request is
+; cleared first, because on 3.2 ENV: may be ENVARC: itself and a TRUE left
+; behind would restart the next boot too. Wait 3 lets the filesystem finish
+; its writes (measured 2026-09-15 on FFS: without it the volume needed
+; validation 8 times in 8, with it 0 in 6). A release with no C:Reboot logs
+; that it could not, and the run carries on to its end.
 IF ${ART_Reboot} EQ "TRUE"
+  SetEnv ART_Reboot "FALSE"
   Echo >>S:FirstBoot.log "reboot requested by [name]"
+  IF EXISTS C:Reboot
+    C:Wait 3
+    C:Reboot
+  ELSE
+    Echo >>S:FirstBoot.log "reboot unavailable"
+  ENDIF
 ENDIF

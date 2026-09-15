@@ -57,8 +57,9 @@ pub struct FirstBootPlan {
 /// `.new`/`_AUX` file into place (M1, final review — missing from this list
 /// even though both scripts already ran it; a completeness gap in the guard,
 /// not a live bug, since every real release ships `C:Rename` too).
-pub const NEEDED_COMMANDS: [&str; 8] = [
-    "List", "Sort", "Delete", "Copy", "Rename", "Version", "Mount", "Assign",
+/// `Wait` joined in phase 3: the step wrapper runs `C:Wait 3` before `C:Reboot` (design §3.4). `Reboot` is not here — it is an availability, not a requirement.
+pub const NEEDED_COMMANDS: [&str; 9] = [
+    "List", "Sort", "Delete", "Copy", "Rename", "Version", "Mount", "Assign", "Wait",
 ];
 
 pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
@@ -179,6 +180,21 @@ mod tests {
         .unwrap_err();
         match err {
             CoreError::FirstBootNeedsCommand { command } => assert_eq!(command, "Rename"),
+            other => panic!("wrong refusal: {other:?}"),
+        }
+    }
+
+    /// Phase 3: the step wrapper waits with `C:Wait 3` before `C:Reboot`.
+    #[test]
+    fn a_tree_without_c_wait_is_refused_by_name() {
+        let d = tree("nowait");
+        fs::remove_file(d.join("C/Wait")).unwrap();
+        let err = plan(&FirstBootRequest {
+            tree: d.path().to_path_buf(),
+        })
+        .unwrap_err();
+        match err {
+            CoreError::FirstBootNeedsCommand { command } => assert_eq!(command, "Wait"),
             other => panic!("wrong refusal: {other:?}"),
         }
     }
