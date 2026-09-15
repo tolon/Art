@@ -728,6 +728,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // finished edit (`embeddedPhrase`). `preload.test.ts` and
     // `phrase-keys.test.ts` resolve every key each can return, which is the
     // check this scan cannot make.
-    expect(dynamicCalls).toBe(191);
+    // 191 → 196 (first-boot phase 3): five. `ChoiceTab.tsx` renders
+    // `rebootCommandPhrase` beside the first-boot tick and names each wizard
+    // window through one `windowLabel` helper (`t(wizardWindowPhrase(w).key)`);
+    // `FirstBootReportPanel.tsx` renders `rebootReportPhrase`, the same helper,
+    // and each read detail line (`t(d.phrase.key, { window })`).
+    // `phrase-keys.test.ts` resolves every key those mappers return.
+    expect(dynamicCalls).toBe(196);
   });
 });

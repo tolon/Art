@@ -762,6 +762,13 @@
       "notATree": "Bu klasör ART'ın kurduğu bir AmigaOS ağacı değil: içinde distribution.json yok, bu yüzden ART içinde ne olduğunu ve bir güncellemenin neyin yerine geçeceğini söyleyemez. Kickstart ve hedef sekmesinde başka bir klasör seçin ya da önce bir tane kurun:"
     },
     "choice": {
+      "askPrefsAfterBuild": "Hangi pencerelerin açılacağı ağaç oluşunca bilinir.",
+      "askPrefsAsk": "Amiga şunları açacak: {{windows}}.",
+      "askPrefsAsOf": "Ağacın şu anki hâlinden okundu. Derlemeden sonra Birimleri hazırla sekmesinde uygulanan bir ekran derinliği o zaman ayarlanır ve Amiga o gün o pencereyi atlar.",
+      "askPrefsMissing": "Bu sürümde penceresi olmadığı için sorulmayacak: {{windows}}.",
+      "askPrefsNoEffect": "İlk açılış kapalı, bu yüzden bunun bir etkisi yok.",
+      "askPrefsRow": "Kalan tercihleri ilk açılışta Amiga'da sor",
+      "askPrefsSetByArt": "ART ayarladığı için sorulmayacak: {{windows}}.",
       "firstboot": "Amiga'da ilk açılışta",
       "firstbootHint": "Bir kez koşar, sonra kendini siler. Raporu kart hattında okursunuz.",
       "firstbootRow": "Amiga'da ilk açılışta: donanımı tanı, ek diskleri ve datatype'ları kur, raporu S:FirstBoot.log'a yaz",

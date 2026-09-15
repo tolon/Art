@@ -212,3 +212,72 @@ describe("a card that has never been booted", () => {
     expect(screen.queryByTestId("firstboot-report-source")).toBeNull();
   });
 });
+
+describe("a restart, in its own sentence", () => {
+  const asked = { rebootRequestedBy: "15-probe" };
+
+  it("says the Amiga restarted only when a later boot shows it", () => {
+    render(<FirstBootReportPanel report={report({ ...asked, restartedAfterRequest: true })} />);
+    expect(screen.getByTestId("firstboot-report-reboot").textContent).toBe(
+      i18n.t("firstboot.report.reboot.restarted", { step: "15-probe" })
+    );
+  });
+
+  it("says restart it yourself when this Amiga has no command for it", () => {
+    render(<FirstBootReportPanel report={report({ ...asked, rebootUnavailable: true })} />);
+    expect(screen.getByTestId("firstboot-report-reboot").textContent).toBe(
+      i18n.t("firstboot.report.reboot.unavailable", { step: "15-probe" })
+    );
+  });
+
+  it("says the log does not show it coming back when neither is known", () => {
+    render(<FirstBootReportPanel report={report(asked)} />);
+    expect(screen.getByTestId("firstboot-report-reboot").textContent).toBe(
+      i18n.t("firstboot.report.reboot.pending", { step: "15-probe" })
+    );
+  });
+
+  it("says nothing about a restart nobody asked for", () => {
+    render(<FirstBootReportPanel report={report()} />);
+    expect(screen.queryByTestId("firstboot-report-reboot")).toBeNull();
+  });
+});
+
+describe("the wizard's own lines", () => {
+  const wizardStep = {
+    name: "90-prefs",
+    outcome: { kind: "ok" as const },
+    details: ["opened Locale", "not-asked Input", "missing ScreenMode"],
+  };
+
+  it("reads them as sentences in Beginner mode, with no raw line", () => {
+    render(<FirstBootReportPanel report={report({ steps: [wizardStep] })} />);
+    const said = screen.getByTestId("firstboot-report-wizard").textContent ?? "";
+    expect(said).toContain(i18n.t("firstboot.report.wizard.opened", { window: i18n.t("firstboot.wizard.window.locale") }));
+    expect(said).toContain(i18n.t("firstboot.report.wizard.notAsked", { window: i18n.t("firstboot.wizard.window.input") }));
+    expect(said).toContain(i18n.t("firstboot.report.wizard.missing", { window: i18n.t("firstboot.wizard.window.screenMode") }));
+    expect(screen.queryByText("opened Locale")).toBeNull();
+  });
+
+  it("does not read another step's details as the wizard's", () => {
+    render(
+      <FirstBootReportPanel
+        report={report({ steps: [{ name: "10-hardware", outcome: { kind: "ok" }, details: ["missing Locale"] }] })}
+      />
+    );
+    expect(screen.queryByTestId("firstboot-report-wizard")).toBeNull();
+  });
+
+  // Controller ruling (pre-flight): the raw `step.details` dump Power mode
+  // already draws (`{power && step.details.length > 0 && …}`) must exclude
+  // `90-prefs` — this describe's sentences are that step's own detail lines
+  // read as words, and drawing both would say the same fact twice.
+  it("does not repeat 90-prefs's own detail words as the raw Power-mode dump", () => {
+    useSettingsStore.setState((state) => ({ settings: { ...state.settings, uxMode: "power" } }));
+    render(<FirstBootReportPanel report={report({ steps: [wizardStep] })} />);
+    const row = screen.getByTestId("firstboot-report-step");
+    expect(row.textContent).not.toContain("opened Locale");
+    expect(row.textContent).not.toContain("not-asked Input");
+    expect(row.textContent).not.toContain("missing ScreenMode");
+  });
+});

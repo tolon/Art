@@ -22,16 +22,27 @@
 // first-boot lane. **The rule outlived the precedent.** What is never hidden
 // is *that* a step was refused: `stepOutcomePhrase`'s beginner variant still
 // says so, in one sentence, without the code underneath it.
+//
+// **A restart is told apart** (first-boot phase 3 design §6): restarted, no
+// command, not back yet — and the wizard's own detail lines read as
+// sentences in both modes, because *which windows opened* is the outcome,
+// not AmigaDOS noise.
 
 import { useTranslation } from "react-i18next";
 
 import {
   endingPhrase,
+  rebootReportPhrase,
   reportSourcePhrase,
   stepOutcomePhrase,
   stepOutcomeTone,
+  wizardDetail,
+  wizardWindowPhrase,
+  WIZARD_STEP_NAME,
   type FirstBootReport,
   type ReportSource,
+  type WizardDetail,
+  type WizardWindow,
 } from "@/lib/firstboot";
 import { usePowerMode } from "@/lib/uxmode";
 
@@ -70,6 +81,9 @@ export function FirstBootReportPanel({ report, source }: FirstBootReportPanelPro
   const power = usePowerMode();
   const ending = endingPhrase(report.ending);
   const sourcePhrase = source ? reportSourcePhrase(source) : null;
+  const reboot = rebootReportPhrase(report);
+  /** A window's label, never its file name. */
+  const windowLabel = (window: WizardWindow) => t(wizardWindowPhrase(window).key);
 
   if (report.ending === "not-booted") {
     return (
@@ -119,7 +133,23 @@ export function FirstBootReportPanel({ report, source }: FirstBootReportPanelPro
                   <td style={{ padding: "2px 8px 2px 0", whiteSpace: "nowrap" }}>{step.name}</td>
                   <td className={TONE_CLASS[tone]} style={{ padding: "2px 0" }}>
                     {t(outcome.key, outcome.params)}
-                    {power && step.details.length > 0 && (
+                    {step.name === WIZARD_STEP_NAME &&
+                      (() => {
+                        const read = step.details
+                          .map(wizardDetail)
+                          .filter((d): d is WizardDetail => d !== null);
+                        return read.length > 0 ? (
+                          <div data-testid="firstboot-report-wizard" className="faint" style={{ fontSize: 11 }}>
+                            {read.map((d, i) => (
+                              <div key={`${d.window}-${i}`}>{t(d.phrase.key, { window: windowLabel(d.window) })}</div>
+                            ))}
+                          </div>
+                        ) : null;
+                      })()}
+                    {/* `90-prefs` excluded (task 9): its own detail lines are
+                        read as the sentences above, and drawing both here and
+                        there would say one fact twice. */}
+                    {power && step.name !== WIZARD_STEP_NAME && step.details.length > 0 && (
                       <div className="faint" style={{ fontSize: 11 }}>
                         <div style={{ fontWeight: 600 }}>{t("firstboot.report.details")}</div>
                         {step.details.map((detail) => (
@@ -138,6 +168,12 @@ export function FirstBootReportPanel({ report, source }: FirstBootReportPanelPro
       <p data-testid="firstboot-report-ending" style={{ fontSize: 12, margin: "0 0 6px" }}>
         {t(ending.key, ending.params)}
       </p>
+
+      {reboot && (
+        <p data-testid="firstboot-report-reboot" style={{ fontSize: 12, margin: "0 0 6px" }}>
+          {t(reboot.key, reboot.params)}
+        </p>
+      )}
 
       {report.fatCopyFailed && (
         <p

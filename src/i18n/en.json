@@ -762,6 +762,13 @@
       "notATree": "This folder is not an AmigaOS tree ART built: it holds no distribution.json, so ART cannot say what is in it or what an update would replace. Choose another on the Kickstart and destination tab, or build one first:"
     },
     "choice": {
+      "askPrefsAfterBuild": "Which windows open is known once the tree exists.",
+      "askPrefsAsk": "The Amiga will open: {{windows}}.",
+      "askPrefsAsOf": "Read from the tree as it is now. A screen depth applied on Prepare volumes after the build is set then, and the Amiga skips that window on the day.",
+      "askPrefsMissing": "Not asked, because this release has no window for it: {{windows}}.",
+      "askPrefsNoEffect": "First boot is off, so this has no effect.",
+      "askPrefsRow": "Ask the remaining preferences on the Amiga at first boot",
+      "askPrefsSetByArt": "Not asked, because ART set it: {{windows}}.",
       "firstboot": "At first boot on the Amiga",
       "firstbootHint": "Runs once, then removes itself. You read the report on the card lane.",
       "firstbootRow": "At first boot on the Amiga: detect the hardware, mount the extra disks and datatypes, write the report to S:FirstBoot.log",

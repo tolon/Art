@@ -201,6 +201,24 @@ describe("the five rehearsal endings stay five sentences on screen", () => {
     const card = screen.getByTestId("firstboot-rehearsal-report");
     expect(card.textContent).not.toContain(i18n.t("firstboot.panel.copyDiscarded"));
   });
+
+  it("names the window a timed-out wizard was waiting in, and never the plain timeout beside it", async () => {
+    await runRehearsal();
+    const outcome: RehearsalOutcome = {
+      kind: "timed-out",
+      waited: { secs: 120, nanos: 0 },
+      report: { ...REPORT, ending: "unfinished", waitingIn: "locale" },
+    };
+    resolveRehearsal!({ job_id: 42, outcome, copy: "D:/amiga/os39.rehearsal", discarded: false });
+    const shown = await screen.findByTestId("firstboot-rehearsal-outcome");
+    expect(shown.textContent).toBe(i18n.t("firstboot.rehearsal.outcome.timedOutInLocale", { seconds: 120 }));
+    expect(screen.getByTestId("firstboot-rehearsal-next").textContent).toBe(
+      i18n.t("firstboot.rehearsal.next.timedOutInLocale")
+    );
+    expect(screen.getByTestId("firstboot-rehearsal-report").textContent).not.toContain(
+      i18n.t("firstboot.rehearsal.outcome.timedOut", { seconds: 120 })
+    );
+  });
 });
 
 describe("stopping a rehearsal", () => {
