@@ -47,6 +47,8 @@ use crate::tools::winuae_launcher::WinUaeLauncher;
 pub fn firstboot_preview(tree: String) -> AppResult<FirstBootPlan> {
     Ok(plan(&FirstBootRequest {
         tree: PathBuf::from(tree.trim()),
+        // Task 8 of the phase-3 plan threads the tick; until then no wizard is written.
+        ask_prefs: false,
     })?)
 }
 
@@ -56,6 +58,8 @@ pub fn firstboot_preview(tree: String) -> AppResult<FirstBootPlan> {
 pub fn firstboot_write(tree: String, oplog: State<'_, JsonlOperationLog>) -> AppResult<Written> {
     let request = FirstBootRequest {
         tree: PathBuf::from(tree.trim()),
+        // Task 8 of the phase-3 plan threads the tick; until then no wizard is written.
+        ask_prefs: false,
     };
     let result = plan(&request)
         .and_then(|p| write(&p))
@@ -381,8 +385,11 @@ pub fn firstboot_rehearse(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::firstboot::plan::{FatMount, PlannedStep};
+    use crate::core::firstboot::plan::{
+        FatMount, PlannedStep, RebootCommand, WindowState, WizardPlan, WizardRow,
+    };
     use crate::core::firstboot::report::{Ending, FirstBootReport, StepOutcome};
+    use crate::core::firstboot::WizardWindow;
     use crate::core::firstboot::{REPORT_PATH, STEP_DIR};
     use crate::core::jobs::NoProgress;
     use crate::core::ScratchDir;
@@ -401,6 +408,14 @@ mod tests {
             user_startup_exists: false,
             already_written: false,
             bytes_added: 1,
+            reboot: RebootCommand::Unavailable { needs: "reboot" },
+            wizard: Some(WizardPlan {
+                rows: vec![WizardRow {
+                    window: WizardWindow::ScreenMode,
+                    state: WindowState::SetByArt,
+                }],
+            }),
+            input_set_by_art: true,
         };
         let json = serde_json::to_value(&p).unwrap();
         assert_eq!(json["fatMount"]["kind"], "unavailable");
@@ -409,6 +424,11 @@ mod tests {
         assert_eq!(json["alreadyWritten"], false);
         assert_eq!(json["bytesAdded"], 1);
         assert_eq!(json["steps"][0]["treePath"], "S/FirstBoot/10-hardware");
+        assert_eq!(json["reboot"]["kind"], "unavailable");
+        assert_eq!(json["reboot"]["needs"], "reboot");
+        assert_eq!(json["wizard"]["rows"][0]["window"], "screen-mode");
+        assert_eq!(json["wizard"]["rows"][0]["state"], "set-by-art");
+        assert_eq!(json["inputSetByArt"], true);
     }
 
     /// The result's own wire shape. `job_id` stays snake_case — `jobs.ts`
@@ -534,7 +554,11 @@ mod tests {
         println!("rom: {}", rom.display());
         println!("machine: {} ({})", profile.name, profile.id);
 
-        let planned = plan(&FirstBootRequest { tree: copy.clone() }).expect("planning");
+        let planned = plan(&FirstBootRequest {
+            tree: copy.clone(),
+            ask_prefs: false,
+        })
+        .expect("planning");
         let written = write(&planned).expect("writing the first boot into the copy");
         println!("wrote {} files", written.files.len());
 

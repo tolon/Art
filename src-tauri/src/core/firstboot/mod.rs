@@ -36,6 +36,8 @@
 //! `commands/firstboot.rs`'s job, the same rule as `core::artwork` and
 //! `core::gameindex`.
 
+use serde::Serialize;
+
 pub mod cardread;
 pub mod plan;
 pub mod report;
@@ -56,6 +58,31 @@ pub const FLAG_PATH: &str = "Prefs/Env-Archive/ART_FirstBoot";
 /// the report uses (phase 3 design §3.1).
 pub const WIZARD_STEP: &str = "90-prefs";
 pub const WIZARD_PATH: &str = "S/FirstBoot/90-prefs";
+
+/// A Preferences window the wizard may open, in the order `90-prefs` asks
+/// them (phase 3 design §3.2). Wire: `locale`, `input`, `screen-mode`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WizardWindow {
+    Locale,
+    Input,
+    ScreenMode,
+}
+
+impl WizardWindow {
+    pub const ALL: [WizardWindow; 3] = [Self::Locale, Self::Input, Self::ScreenMode];
+
+    /// The editor's own name in `SYS:Prefs/` — also the word `90-prefs`
+    /// writes into its `detail` lines.
+    pub fn amiga_name(self) -> &'static str {
+        match self {
+            Self::Locale => "Locale",
+            Self::Input => "Input",
+            Self::ScreenMode => "ScreenMode",
+        }
+    }
+}
+
 /// `core::amigainstall::workvol::FAIL_AT`'s reason, verbatim (ART-188).
 pub const FAIL_AT: i64 = 2_000_000_000;
 

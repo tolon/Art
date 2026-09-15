@@ -132,6 +132,7 @@ mod tests {
         let d = tree("all");
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         let w = super::write(&p).unwrap();
@@ -163,12 +164,14 @@ mod tests {
         let d = tree("twice");
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         super::write(&p).unwrap();
         let first = snapshot(d.path());
         let p2 = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         assert!(p2.already_written);
@@ -190,6 +193,7 @@ mod tests {
         fs::write(d.join("S/User-Startup"), theirs).unwrap();
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         let w = super::write(&p).unwrap();
@@ -213,6 +217,7 @@ mod tests {
         fs::write(d.join("S/FirstBoot"), b"in the way").unwrap();
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         assert!(super::write(&p).is_err());
@@ -228,6 +233,7 @@ mod tests {
         fs::write(d.join("S/User-Startup"), &theirs).unwrap();
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         super::write(&p).unwrap();
