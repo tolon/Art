@@ -79,29 +79,6 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-323** 🟡 **libpfs3's writer deletes a hard link by freeing the file it names — the file stays listed and
-reads back empty** — *found 2026-09-15 by the third debt round's final review fix wave, while fixing I1 (a
-`rename_in` onto a hard link); measured; not fixed*
-`src-tauri/vendor/libpfs3/src/writer.rs` (`delete_in_no_commit`, `create_hardlink_impl`) · Pre-existing since 0.1.3.
-`create_hardlink_impl` stores the *target's* anode in the link's own entry (`ST_LINKFILE`, no link extra field).
-`delete_in_no_commit` treats any entry that is not `ST_USERDIR` as a file: for a link, `entry_type != ST_FILE`, so
-nothing goes to the deldir, and then `free_data_blocks(target.anode)` and `clear_anode_chain(target.anode)` run on
-that anode — the target's. **Measured** with a throwaway two-arm test (removed before commit) on
-`pfs3_mutator_fixture`: "DstLink" made with `create_hardlink("DstLink", <Dst's anode 9>)`. Control, the link left
-alone: Dst's block 2821 in use, anode 9 raw `(1, 2821, 0)`, `read_file("Dst")` its 17 bytes. Arm, then
-`delete_in(root, "DstLink")` — `Ok`: block 2821 **free** in the on-disk bitmap, anode 9 raw **`(0, 0, 0)`**,
-`read_file("Dst")` **`Ok([])`**, and "Dst" still listed in the root. A file silently emptied, its blocks free for the
-next write to take, reported as a successful delete of something else — the failure that does not crash.
-**pfs3aio's model is different** (`tonioni/pfs3aio` `211f7f0`, read): a link's direntry anode is the link's own
-node, and the object's anode is `extrafields.link` (`NewFile`, `directory.c:1508-1516`); `DeleteObject` sends a link
-to `DeleteLink` and never frees the object (`directory.c:1779-1783`). So libpfs3's `create_hardlink` does not write
-a pfs3aio link either, and fixing the delete alone would not make one. **Unreachable from ART today:** ART's product
-code calls neither `create_hardlink` nor `delete`/`delete_in` on PFS3 (`copy_in_pfs3` only creates directories and
-files and sets protection). `rename_in` refuses a hard link as its destination since the fix wave (ART-322), so a
-rename can no longer reach this. **Fix direction:** write links as pfs3aio does (a link node, `extrafields.link`,
-the object's link chain) and delete one as `DeleteLink` does; until then, refuse `delete_in` on an `ST_LINKFILE` /
-`ST_LINKDIR` entry.
-
 **ART-324** 🔵 **libpfs3's writer drops the high bits of a file size of 4 GiB or more in several size paths** —
 *found 2026-09-15 by the third debt round's final whole-branch review (M6), by reading; filed, not fixed, by its fix
 wave*
@@ -122,6 +99,45 @@ more than 4 GiB as an in-memory `&[u8]`, which the writer's API takes. **Unreach
 `MODE_LARGEFILE` PFS3 volume. **Fix direction:** refuse a size above `u32::MAX` on a volume without
 `MODE_LARGEFILE`, as pfs3aio does, and rebuild the entry when `fsizex` must be added.
 
+**ART-325** 🔵 **libpfs3's `DirEntry::parse` reads a directory entry's extra fields in a layout neither pfs3aio nor
+hst-amiga uses** — *found 2026-09-15 while fixing ART-323, by reading two sources; not measured*
+`src-tauri/vendor/libpfs3/src/ondisk/direntry.rs` (`parse_extrafields`) · Pre-existing since 0.1.3. It reads the flags
+word right after the comment, then the fields forward, one flag bit per field (`0x1` link, `0x2` uid, … `0x40`
+`fsizex`). pfs3aio's `GetExtraFields` reads the flags word from the entry's **last** two bytes, one bit per **16-bit
+word** of `struct extrafields` (link is two bits, `fsizex` is bit 10), with the words set lying before it, read
+backwards (`directory.c:3719-3731`, `blocks.h:342-353`, `tonioni/pfs3aio` `211f7f0`); `AddExtraFields` writes that
+way (`directory.c:3764-3800`), and hst-amiga's `DirEntryReader.ReadExtraFields` reads the same way
+(`henrikstengaard/hst-amiga` `6b45584`). The two layouts agree only when there are no extra fields (flags 0), which
+is every entry ART writes below 4 GiB. So a real pfs3aio entry with a link, a uid/gid, upper protection bits or a
+rollover field reads back wrong `extra` values, and `build_dir_entry`'s own `fsizex` entry (ART-324's paths) is not
+pfs3aio's. ART-323's writer does not use this parser; it reads a `link` field with its own
+`Writer::entry_link_field`. **Unreachable from ART's product behaviour today:** nothing ART does reads `extra`
+except `file_size()`'s `fsizex`, which only a `MODE_LARGEFILE` volume sets. **Fix direction:** read and write the
+layout as `GetExtraFields`/`AddExtraFields` do, with a pfs3aio-written entry as the test's oracle.
+
+**ART-326** 🔵 **libpfs3's writer adds a second directory entry under a name that already exists** — *found
+2026-09-15 while fixing ART-323, by reading; not measured*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`add_dir_entry` and its callers) · Pre-existing since 0.1.3.
+`add_dir_entry` never looks for the name. `create_dir_in` and `create_softlink_in` call it without a lookup, and
+`write_file_in` looks one up but only overwrites an `ST_FILE`/`ST_ROLLOVERFILE`: over a directory, a soft link or a
+hard link of the same name it adds a second entry. pfs3aio refuses an existing name (`CreateLink`'s
+`SearchInDir` → `ERROR_OBJECT_EXISTS`, `directory.c:2665-2670`, is one instance). **Unreachable from ART:**
+`copy_in_pfs3` writes into a volume it has checked is empty, one entry per path of a Windows directory walk.
+**Fix direction:** refuse `AlreadyExists` before anything is allocated, in each creating call.
+
+**ART-327** 🔵 **libpfs3's `rename_in` rebuilds the entry it moves, dropping its comment, its date and its extra
+fields** — *found 2026-09-15 while fixing ART-323, by reading; not measured*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`rename_in_impl`) · Pre-existing since 0.1.3. Every rename except ART-322's
+same-entry case adds the destination with `add_dir_entry(dst_parent, dst_name, type, anode, size, protection)`,
+whose `build_dir_entry` writes no comment, flags 0 and "now" as the creation date, then removes the old entry. The
+entry's comment, its creation date and every extra field — uid/gid, protection bits 8–31, a link's `link` field or
+an object's chain of links — are gone. pfs3aio's `RenameAndMove` moves the entry through `ChangeDirEntry`, copying
+them ([ART-322](#fixed) cites it, `directory.c:2064-2076,2130`), and updates the link nodes when a linked object or
+a link moves (`MoveLink`, `directory.c:3993-4028`). For a link this cannot free data: ART-323's delete finds a
+pfs3aio link by its own `link` field as well as by the object's, and refuses. **Unreachable from ART:** ART's
+product code never renames on PFS3. **Fix direction:** move the entry's raw bytes with the new name, and refuse, or
+update as `MoveLink` does, a link or a linked object moved to another directory.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -140,6 +156,94 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-323** 🟡 **libpfs3's writer deleted a hard link by freeing the file it names — fixed: a link's delete removes
+only its entry, and what the writer cannot do as pfs3aio does is refused by name** — *found 2026-09-15 by the third
+debt round's final review fix wave, measured; fixed 2026-09-15 on `art-debt-3-0915`, unmerged; libpfs3
+`0.1.3+art.9`, ART-PATCH item 24; report `.superpowers/sdd/2026-09-15-debt-3-round/art323-report.md`*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`delete_in`/`delete_in_no_commit`, `create_hardlink_impl`, new
+`entry_link_field` and `links_naming`), `src/error.rs` (`HardLinkNotWritten`, `Pfs3aioLinkNotDeleted`,
+`HasHardLinks`) · **The defect, as the fix wave measured it:** `create_hardlink` stored the linked object's anode in
+the link's own `ST_LINKFILE` entry, and `delete_in_no_commit` took every entry that is not a directory for a file.
+With "DstLink" a link to "Dst" (anode 9), `delete_in(root, "DstLink")` returned `Ok`, left block 2821 free in the
+bitmap and anode 9 raw `(0, 0, 0)`, and "Dst" still listed, reading back `Ok([])`.
+**pfs3aio**, read at `tonioni/pfs3aio` `211f7f0` (fetched raw, not run):
+- *The link.* `CreateLink` gives a link an anode of its own, a link node with clustersize = the object's directory,
+  blocknr = the link's directory and next = the next node. It stores the object's anode in the link's `link` extra
+  field, and the object's own `link` field heads the chain of nodes (`directory.c:2672-2748`).
+- *Deleting a link.* `DeleteObject` sends a link to `DeleteLink` (`directory.c:1778-1783`). That removes the entry,
+  takes the node out of the chain — rewriting the object's entry when the node is the head, the previous node's
+  `next` otherwise — and frees the node, never the object (`directory.c:3835-3895`).
+- *Deleting an object with links.* `RemapLinks` promotes the first link to be the object
+  (`directory.c:1795-1799,3903-3965`), discarding nodes whose entries are gone (`directory.c:3922-3934`).
+- *Extra fields.* `GetExtraFields` reads the flags word from the entry's last two bytes, one bit per 16-bit word of
+  `struct extrafields`, the words set lying before it (`directory.c:3719-3731`, `blocks.h:342-353`), and
+  `AddExtraFields` writes them that way (`directory.c:3764-3800`).
+- *A second source:* hst-amiga (`henrikstengaard/hst-amiga` `6b45584`) reads extra fields the same way
+  (`DirEntryReader.cs:58-87`), and its own `When_DeletingLinkToFile_Then_LinkIsDeleted`
+  (`GivenPfs3VolumeUsingLinks.cs:461-489`) expects the file kept and its `link` field 0 after a link is deleted.
+
+**What the writer does now**, by the ruling:
+1. **A link in 0.1.3's shape** (no `link` field) loses its entry and nothing else.
+2. **A link pfs3aio made** (its `link` field set) is refused, `'<name>' is a hard link pfs3aio made, and this writer
+   cannot take it out of its object's chain of links, so it did not delete it — delete it on the Amiga`. Refused
+   rather than implemented: `DeleteLink`'s chain update rewrites the object's entry at a different size and walks a
+   chain, and there is no pfs3aio-written volume here to test that against.
+3. **An object that links name** is refused, `'<name>' has hard links (<links>): this writer cannot hand it over to
+   one of them as pfs3aio does, so it did not delete it — delete the links first`. It is found by a link entry in
+   any directory — by its anode (0.1.3's shape) or its `link` field (pfs3aio's) — or by the object's own `link`
+   field. Promotion is not cheap, so it is refused rather than followed; no link is left naming freed blocks.
+4. **`create_hardlink`** is refused, `hard link '<path>' was not created: this writer cannot write pfs3aio's hard-link
+   format (a link anode and the linked object's chain of links)`, before anything is read or written. ART's product
+   code never creates a link: `create_hardlink` appears only in `native.rs` tests, grep 2026-09-15.
+
+Every refusal comes before anything is staged and goes through `guarded`; each refusal test commits once more and
+reopens to exactly the last commit.
+**Tests** (`src-tauri/src/core/preload/native.rs`):
+`deleting_a_pfs3_hard_link_removes_only_its_entry_and_the_file_it_names_keeps_its_blocks`,
+`deleting_a_pfs3aio_hard_link_is_refused_by_name_and_leaves_the_last_commit`,
+`deleting_a_pfs3_file_or_directory_a_hard_link_names_is_refused_by_name` (a file and a directory),
+`deleting_a_pfs3aio_linked_file_is_refused_whether_its_chain_or_its_link_names_it` (three arms: both there; the
+object's own field gone; the link's entry gone) and `pfs3_create_hardlink_is_refused_by_name_and_writes_nothing`,
+which replaces `a_failed_pfs3_create_hardlink_leaves_the_last_commit` and
+`a_pfs3_create_hardlink_commit_failure_locks_the_writer`. The helpers `pfs3_raw_entry` (pfs3aio's extra-field
+layout), `pfs3_append_raw_entries` and `pfs3aio_linked_file` put links on the device directly; the three I1 rename
+tests now build their link that way.
+**Red first**, on the unchanged writer: `test result: FAILED. 3 passed; 5 failed`. The first test failed with
+`assertion `left == right` failed: deleting a hard link to Dst emptied Dst  left: Some([])`; the other four each
+failed with `the injected failure must fail the call: ()`, an `Ok`. **Green:** `test result: ok. 8 passed; 0
+failed`.
+**Mutations**, predicted before the run and applied by `D:\Projeler\Amiga\scratch-0913\art323-mutate.py` to exactly one
+occurrence each. `writer.rs` was backed up to `D:\Projeler\Amiga\scratch-0913\writer.rs.art323-fixed`,
+grep-confirmed, same SHA-256 as the live file. Each mutation ran the 8 tests and was restored with
+`shutil.copyfile`, hash-identical; each gave `7 passed; 1 failed`:
+- **M1** — a link's delete frees what it names again → `deleting a hard link to Dst emptied Dst`.
+- **M2** — the pfs3aio-link refusal dropped → the pfs3aio-link test `must fail the call: ()`.
+- **M3** — the object's own field no longer names links → the linked-file test `must fail the call: ()`. The failing
+  arm is the third (link entry gone), by reasoning: the panic line names none, and the scan still refuses the first
+  two.
+- **M4** — the scan's 0.1.3-shape match dropped → the file-or-directory test `must fail the call: ()`.
+- **M5** — the scan's pfs3aio-shape match dropped → the linked-file test `not the injected failure: 'Obj' has hard
+  links (a pfs3aio link chain from anode 13)…`.
+- **M6** — `create_hardlink` writes 0.1.3's link again → the refusal test `must fail the call: ()`.
+- **M7** — the `link` field's two flag bits swapped → red, but **not as predicted**: the object's own field garbles
+  too (`a pfs3aio link chain from anode 851968`, 13 << 16), so the first arm fails on the sentence, where the second
+  arm was predicted. The pfs3aio-link delete test survives M7, as predicted: its refusal needs only a non-zero field.
+  A weak guard of the bit order there, the linked-file test catching it.
+
+**Disclosed:**
+- Each delete of anything that is not a link reads every directory on the volume.
+- A directory chain that cannot be read anywhere on the volume now fails such a delete with that error.
+- A 0.1.3-written entry with `fsizex` (≥ 4 GiB, `MODE_LARGEFILE`, which ART never formats) reads as a `link` field,
+  so its delete is refused — the safe direction.
+- pfs3aio would delete an object whose chain names only vanished links; this writer refuses.
+
+Filed alongside: [ART-325](#open) (the crate's own extra-field parser), [ART-326](#open) (a second entry under an
+existing name), [ART-327](#open) (`rename_in` drops a moved entry's comment, date and extra fields).
+Verification: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo deny check` (`advisories
+ok, bans ok, licenses ok, sources ok`) clean; the ART-PATCH diff regenerated and byte-identical (104 900 bytes);
+`cargo test --lib` counts, the control-byte sweep and `pfs3-oracle-check.py` are in STATUS. Unreachable from ART —
+its product code neither creates nor deletes on PFS3 — so CHANGELOG is not touched.
 
 **ART-322** 🟡 ✅ **A PFS3 rename that changes only a name's case deleted the file and reported success — fixed by
 treating the destination as the source when it is one** — *found 2026-09-15 on `art-debt-3-0915` while closing
@@ -200,7 +304,7 @@ bytes and was refused as corrupt. **Fixed:** the same-entry check now also requi
 name and anode together are the entry. A found destination that is a hard link, or that shares the source's anode
 without being the source, is refused with `Error::AlreadyExists` before anything is staged, in both directions (the
 file onto its link, the link onto its file). Why refused rather than replaced: this writer's delete of a hard link
-frees the file it names ([ART-323](#open), measured), and pfs3aio's own `RenameAndMove` refuses every found
+frees the file it names ([ART-323](#fixed), measured), and pfs3aio's own `RenameAndMove` refuses every found
 destination whose direntry is not the source's with `ERROR_OBJECT_EXISTS` (`directory.c:2064-2076`, `tonioni/pfs3aio`
 `211f7f0`, read) — a link's direntry is its own. `rename_dir_entry_in_place` now writes the new name as Latin-1, one
 byte a character; its `Error::Corrupt` stays as a safety net that `name_eq_ci` over the decoded name cannot reach.
@@ -604,7 +708,10 @@ reserved area byte for byte (the rootblock's datestamp zeroed), the tree with co
 deldir: `a_failed_pfs3_{create_dir,create_dir_in,create_softlink,create_softlink_in,undelete}_leaves_the_last_commit`
 (into a directory whose block has lost its `DB` id, so `add_dir_entry` fails after the allocation),
 `a_failed_pfs3_create_hardlink_leaves_the_last_commit` (a full directory, one free reserved block, no free anode:
-the eighth link stages a new directory block, then finds no reserved block for a new anode block), and the
+the eighth link stages a new directory block, then finds no reserved block for a new anode block) *(removed
+2026-09-15 by ART-323, with `a_pfs3_create_hardlink_commit_failure_locks_the_writer` below: `create_hardlink` is now
+refused before anything is read or written, so it has no part-way failure and no commit to lock on;
+`pfs3_create_hardlink_is_refused_by_name_and_writes_nothing` replaces both)*, and the
 overwrite and rename tests above. `a_refused_pfs3_force_remove_entry_leaves_the_last_commit` and
 `a_refused_pfs3_update_dir_entry_protection_leaves_the_last_commit` fail before staging: each mutator's one staged
 write is its last step before the commit, so no part-way failure exists for them. Lock tests — the commit's first
