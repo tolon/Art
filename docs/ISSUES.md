@@ -26,6 +26,23 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
+**ART-322** 🟡 **A PFS3 rename that changes only a name's case deletes the file and reports success** — *found
+2026-09-15 on `art-debt-3-0915` while closing ART-319's `rename_in` gap (third debt round, item 3); not fixed —
+outside that item's approved design, the owner's call*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`rename_in_impl`) · `rename_in` looks for an existing destination with
+`name_eq_ci`, so renaming "File" to "FILE" in the same directory finds the source itself as "the destination" and
+deletes it (data blocks freed; to the deldir on a deldir volume), adds the new entry with the now-deleted file's
+anode, and then removes "the old entry" by the same case-insensitive name — which is the entry it just added. The
+call returns `Ok(())` and the directory holds neither name: the user is told the rename worked and the file is gone.
+**Measured, not read** — a throwaway controlled experiment (one variable: the new name; both arms; removed before
+commit), on the fixture `pfs3_mutator_fixture` builds: control `rename_in(root, "File", root, "Other")` →
+`Ok(())`, entries `["Other"]`, `read_file("Other")` the original bytes; case-only `rename_in(root, "File", root,
+"FILE")` → `Ok(())`, entries `[]`, `read_file("FILE")` `NotFound`. The same two arms on the writer at `277bea0`,
+before item 3's change, gave the identical result, so it predates the one-commit rename and was not introduced by
+it. **Blast radius today: none** — ART never renames on PFS3 (only tests call `rename_in`, checked 2026-09-15),
+which is why it is Medium, not Critical. A fix would treat a destination that *is* the source (same parent, same
+entry) as no destination at all, and needs its own test.
+
 **ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~2200 keys have not** (2262 leaf keys as of 2026-09-14 — count them, the figures written into this entry have been overtaken repeatedly). **Mechanical part done 2026-09-14** on `art-debt-2-0914` — the one string this table's original rows could still name and reach without a backend was measured, found clipped, and fixed; **stays open**, see "What remains" below.
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
@@ -381,7 +398,8 @@ holds the failed attempt's in-memory rootblock and other state, and `Writer::ope
 it, so its next commit would write those stale values. Documented on `Error::CommitFailed`, on
 `CoreError::Pfs3WriterLocked`, and on `Writer::into_volume`'s own doc comment; not exercised by a test — ART
 never reopens a locked writer this way today either.
-**Out of scope, disclosed rather than fixed:** `overwrite_file_in` writes new data over a file's existing blocks
+**Out of scope, disclosed rather than fixed** (*both closed 2026-09-15 on `art-debt-3-0915` — see "Closed
+2026-09-15" at the end of this entry; the paragraph is left as it read on the day*)**:** `overwrite_file_in` writes new data over a file's existing blocks
 before its metadata, so an error after that point cannot be undone in memory — **unreachable from ART today:**
 `copy_in_pfs3` only ever calls `write_file_in` against a freshly-formatted, still-empty volume (it refuses when
 `vol.list_dir("")` is non-empty) with one entry per relative path from `collect_entries`'s walk of a Windows
@@ -437,7 +455,7 @@ through to the generic `Malformed` arm (M4) → red, and the first time this par
 red: `panicked … malformed pfs3: a write to this PFS3 volume failed and ART could not confirm what is on the
 disk: reopen it (and check it) before writing to it again`. No survivor across all seven mutations: every one
 was killed by at least the guard aimed at it.
-Any public mutator the tests above do not exercise directly for its own discard/lock behaviour — `create_dir`/
+*(Emptied 2026-09-15 — see "Closed 2026-09-15" below; the paragraph is left as it read on the day.)* Any public mutator the tests above do not exercise directly for its own discard/lock behaviour — `create_dir`/
 `create_dir_in`, `create_softlink`/`create_softlink_in`, `create_hardlink`, `undelete`, `force_remove_entry`,
 `update_dir_entry_protection`, `rename_in`, `overwrite_file_in` — is wrapped the same way but has no
 behavioural test of its own: its test would be structurally identical to the ones above, applied to a different
@@ -446,6 +464,57 @@ previously wrong** — it omitted `create_dir`/`create_dir_in`, `rename_in` and 
 `set_volume_name`, which now has the test above). `repair_reserved_free` is exercised, but **only as the
 second, already-locked call** in `a_pfs3_commit_failing_part_way_locks_the_writer` — that covers its refusal
 once the writer is poisoned, not its own discard-to-last-commit behaviour on an ordinary failure of its own.
+**Closed 2026-09-15 on `art-debt-3-0915`, unmerged** (third debt round, item 3; brief
+`.superpowers/sdd/2026-09-15-debt-3-round/item3-brief.md`, design approved in chat, copy-on-write the owner's
+choice; report `item3-report.md` beside it; libpfs3 `0.1.3+art.6`). **(1) `overwrite_file_in` is copy-on-write.**
+The new content goes only into blocks `alloc_data_blocks` hands out while the old file's blocks are still
+allocated; the extents after the first get anodes allocated while the old chain's are still taken; only then are
+the old data blocks freed and the old chain's other anodes cleared, the head anode rewritten in place (the anode
+number is the method's contract) and the entry's size set — all pending, all made true by the one
+`update_rootblock`. An error before that is discarded by `guarded`, and the old file is intact on disk. **The
+limit:** the whole new content needs free space of its own; an overwrite that would fit only by reusing the file's
+own blocks is refused `DiskFull` before a block is written, and the file keeps its old content. Still unreachable
+from ART (only tests call it, checked 2026-09-15). `truncate_anode_chain` and `free_and_clear_anodes`, used only by
+the old in-place path, are removed; the extent loop is shared as `block_extents`. **(2) `rename_in` is one
+commit.** `delete_in`'s body is now `delete_in_no_commit`, which both `delete_in` and `rename_in` call, so a
+destination file goes to the deldir exactly as a delete sends it, and the delete, the new entry and the old
+entry's removal are one commit. **(3) Every public mutator has a test of its own** (`src-tauri/src/core/preload/native.rs`).
+Red on the old writer first: `a_failed_pfs3_overwrite_keeps_the_old_content_on_disk` (`a failed overwrite destroyed
+the old content`), `a_pfs3_overwrite_writes_new_blocks_and_frees_the_old_ones_in_its_commit` (`old block 2818 is
+not free after the overwrite (new blocks [2818, 2819, 2822])`), `a_pfs3_overwrite_needs_free_space_for_the_whole_new_content`
+(`copy-on-write has no room for the whole new content: ()` — the old writer fitted it in place),
+`a_failed_pfs3_rename_over_an_existing_file_keeps_the_destination` (`a failed rename deleted its destination`,
+`left: None`). Green on the old writer too, as guards of what must not change:
+`a_pfs3_overwrite_frees_the_old_chains_other_anodes`,
+`a_pfs3_rename_over_an_existing_file_sends_it_to_the_deldir_as_delete_does` (one volume renamed over "Dst", another
+with "Dst" deleted first and then renamed onto, read the same — tree, free counts, deldir). Discard tests — a
+failure part-way, then the same writer commits once more, and the reopened volume must equal the last commit: the
+reserved area byte for byte (the rootblock's datestamp zeroed), the tree with contents, the free counts, the
+deldir: `a_failed_pfs3_{create_dir,create_dir_in,create_softlink,create_softlink_in,undelete}_leaves_the_last_commit`
+(into a directory whose block has lost its `DB` id, so `add_dir_entry` fails after the allocation),
+`a_failed_pfs3_create_hardlink_leaves_the_last_commit` (a full directory, one free reserved block, no free anode:
+the eighth link stages a new directory block, then finds no reserved block for a new anode block), and the
+overwrite and rename tests above. `a_refused_pfs3_force_remove_entry_leaves_the_last_commit` and
+`a_refused_pfs3_update_dir_entry_protection_leaves_the_last_commit` fail before staging: each mutator's one staged
+write is its last step before the commit, so no part-way failure exists for them. Lock tests — the commit's first
+write refused, then the next call `CommitFailed` and `write_count()` unchanged:
+`a_pfs3_{create_dir,create_dir_in,create_softlink,create_softlink_in,create_hardlink,undelete,force_remove_entry,update_dir_entry_protection,rename,overwrite,repair_reserved_free}_commit_failure_locks_the_writer`.
+`pfs3_test_device::MemDevice` gained `fail_read_of(sector, nth)`, a one-shot read failure, for the rename test: a
+directory block with a bad id cannot fail it, because `list_entries` and `find_dir_entry` both skip such a block.
+Mutations (`writer.rs` backed up to `D:\Projeler\Amiga\scratch-0913\writer.rs.item3-backup`, grep-confirmed; each
+restored with `shutil.copyfile` and seen green again, never `git checkout --`): **M1** new data written over the old
+blocks again → red: the overwrite discard test (`a failed overwrite destroyed the old content`), with the success
+and leak tests; **M2** the old blocks freed before the new ones are allocated → red: the discard test (same line),
+the success test (`old block 2818 is not free…`) and the free-space test; **M3** the destination delete committed
+separately (`delete_in`) → red: `a failed rename deleted its destination`; **M4** the old chain's other anodes not
+cleared → red: `the old chain's anode 6 leaked`, `left: (2, 2820, 0)`; **M5** `discard_to_last_commit` a no-op →
+the eight new discard tests that stage something red (`the failed call's in-memory state reached the next commit`),
+with ART-319's own two; **M6** `update_rootblock`'s `self.poisoned = true` dropped → all eleven new lock tests red
+(`the next operation must return the lock error, got: block 2 out of range`), with
+`a_pfs3_commit_failing_part_way_locks_the_writer`. **Survivors, judged:** under M5, the two refused-before-staging
+tests — those mutators have no staged state for a discard to undo, so this is the mutation reaching nothing, not a
+weak guard; under M6, `a_failed_pfs3_set_volume_name_locks_the_writer`, which locks through its own write rather
+than `update_rootblock` (ART-319's mutation (e) is its guard).
 
 **ART-317** 🟡 ✅ **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
 the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
