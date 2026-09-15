@@ -15,6 +15,29 @@ import type { Phrase } from "@/lib/phrase";
 
 export type FatMount = { kind: "available" } | { kind: "unavailable"; needs: string };
 
+/** Whether the step wrapper can carry out a reboot request (phase 3 design §2
+ *  decision 4). Not a refusal — the `FatMount` shape. */
+export type RebootCommand = { kind: "available" } | { kind: "unavailable"; needs: string };
+
+/** A Preferences window the wizard may open, in `90-prefs`'s order. */
+export type WizardWindow = "locale" | "input" | "screen-mode";
+export type WindowState = "ask" | "set-by-art" | "missing";
+
+export interface WizardRow {
+  window: WizardWindow;
+  state: WindowState;
+}
+
+export interface WizardPlan {
+  rows: WizardRow[];
+}
+
+/** A window the boot waits in. ScreenMode runs detached and never is. */
+export type ForegroundWindow = "locale" | "input";
+
+/** `core::firstboot::WIZARD_STEP` — `firstboot.test.ts` holds it to the Rust. */
+export const WIZARD_STEP_NAME = "90-prefs";
+
 export interface PlannedStep {
   name: string;
   treePath: string;
@@ -28,12 +51,16 @@ export interface FirstBootPlan {
   userStartupExists: boolean;
   alreadyWritten: boolean;
   bytesAdded: number;
+  reboot: RebootCommand;
+  wizard: WizardPlan | null;
+  inputSetByArt: boolean;
 }
 
 export interface FirstBootWritten {
   files: string[];
   userStartupBackup: string | null;
   userStartupCreated: boolean;
+  removed: string[];
 }
 
 export type StepOutcome =
@@ -63,15 +90,18 @@ export interface FirstBootReport {
   ending: Ending;
   fatCopyFailed: boolean;
   rebootRequestedBy: string | null;
+  rebootUnavailable: boolean;
+  restartedAfterRequest: boolean;
+  waitingIn: ForegroundWindow | null;
   unknown: string[];
 }
 
-export async function firstbootPreview(tree: string): Promise<FirstBootPlan> {
-  return invoke<FirstBootPlan>("firstboot_preview", { tree });
+export async function firstbootPreview(tree: string, askPrefs: boolean): Promise<FirstBootPlan> {
+  return invoke<FirstBootPlan>("firstboot_preview", { tree, askPrefs });
 }
 
-export async function firstbootWrite(tree: string): Promise<FirstBootWritten> {
-  return invoke<FirstBootWritten>("firstboot_write", { tree });
+export async function firstbootWrite(tree: string, askPrefs: boolean): Promise<FirstBootWritten> {
+  return invoke<FirstBootWritten>("firstboot_write", { tree, askPrefs });
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +161,99 @@ export function fatMountPhrase(fat: FatMount): Phrase {
   return fat.kind === "available"
     ? { key: "firstboot.fat.available" }
     : { key: "firstboot.fat.unavailable", params: { needs: fat.needs } };
+}
+
+/** The line beside the tick when the tree has no reboot command; an
+ *  available command has nothing to say. */
+export function rebootCommandPhrase(reboot: RebootCommand): Phrase | null {
+  return reboot.kind === "available"
+    ? null
+    : { key: "firstboot.reboot.unavailable", params: { needs: reboot.needs } };
+}
+
+/** A window's label — what it asks, never its file name (Beginner mode). */
+export function wizardWindowPhrase(window: WizardWindow): Phrase {
+  switch (window) {
+    case "locale":
+      return { key: "firstboot.wizard.window.locale" };
+    case "input":
+      return { key: "firstboot.wizard.window.input" };
+    case "screen-mode":
+      return { key: "firstboot.wizard.window.screenMode" };
+  }
+}
+
+/** The editor `90-prefs` runs — for Power mode only. An AmigaDOS path, never translated. */
+export function wizardEditorPath(window: WizardWindow): string {
+  switch (window) {
+    case "locale":
+      return "SYS:Prefs/Locale";
+    case "input":
+      return "SYS:Prefs/Input";
+    case "screen-mode":
+      return "SYS:Prefs/ScreenMode";
+  }
+}
+
+export interface WizardLines {
+  ask: WizardWindow[];
+  setByArt: WizardWindow[];
+  missing: WizardWindow[];
+}
+
+/** The rows, grouped by what the Amiga will do with each. */
+export function wizardLines(wizard: WizardPlan): WizardLines {
+  const pick = (state: WindowState) =>
+    wizard.rows.filter((row) => row.state === state).map((row) => row.window);
+  return { ask: pick("ask"), setByArt: pick("set-by-art"), missing: pick("missing") };
+}
+
+export interface WizardDetail {
+  phrase: Phrase;
+  window: WizardWindow;
+}
+
+function windowNamed(name: string | undefined): WizardWindow | null {
+  switch (name) {
+    case "Locale":
+      return "locale";
+    case "Input":
+      return "input";
+    case "ScreenMode":
+      return "screen-mode";
+    default:
+      return null;
+  }
+}
+
+/** One of `90-prefs`'s own detail lines, read as a sentence: `opened Locale`,
+ *  `not-asked Input`, `missing ScreenMode`. `null` for any other detail, which
+ *  stays a raw line only Power mode shows. The component fills `window` with
+ *  the translated {@link wizardWindowPhrase}. */
+export function wizardDetail(detail: string): WizardDetail | null {
+  const words = detail.split(" ");
+  const window = windowNamed(words[1]);
+  if (words.length !== 2 || window === null) return null;
+  switch (words[0]) {
+    case "opened":
+      return { phrase: { key: "firstboot.report.wizard.opened" }, window };
+    case "not-asked":
+      return { phrase: { key: "firstboot.report.wizard.notAsked" }, window };
+    case "missing":
+      return { phrase: { key: "firstboot.report.wizard.missing" }, window };
+    default:
+      return null;
+  }
+}
+
+/** What the report says about a restart. Four states, three sentences and
+ *  silence: a request is not a restart until a later boot shows one. */
+export function rebootReportPhrase(report: FirstBootReport): Phrase | null {
+  const step = report.rebootRequestedBy;
+  if (step === null) return null;
+  if (report.rebootUnavailable) return { key: "firstboot.report.reboot.unavailable", params: { step } };
+  if (report.restartedAfterRequest) return { key: "firstboot.report.reboot.restarted", params: { step } };
+  return { key: "firstboot.report.reboot.pending", params: { step } };
 }
 
 /** Which copy of the report was actually read (spec §9: the Amiga volume's
@@ -251,11 +374,17 @@ export function rehearsalOutcomePhrase(outcome: RehearsalOutcome): Phrase {
       return { key: "firstboot.rehearsal.outcome.finished" };
     case "step-refused":
       return { key: "firstboot.rehearsal.outcome.stepRefused" };
-    case "timed-out":
-      return {
-        key: "firstboot.rehearsal.outcome.timedOut",
-        params: { seconds: waitedSeconds(outcome.waited) },
-      };
+    case "timed-out": {
+      const params = { seconds: waitedSeconds(outcome.waited) };
+      switch (outcome.report.waitingIn) {
+        case "locale":
+          return { key: "firstboot.rehearsal.outcome.timedOutInLocale", params };
+        case "input":
+          return { key: "firstboot.rehearsal.outcome.timedOutInInput", params };
+        case null:
+          return { key: "firstboot.rehearsal.outcome.timedOut", params };
+      }
+    }
     case "emulator-closed":
       return {
         key: "firstboot.rehearsal.outcome.emulatorClosed",
@@ -282,7 +411,14 @@ export function rehearsalNextStepPhrase(outcome: RehearsalOutcome): Phrase {
     case "step-refused":
       return { key: "firstboot.rehearsal.next.stepRefused" };
     case "timed-out":
-      return { key: "firstboot.rehearsal.next.timedOut" };
+      switch (outcome.report.waitingIn) {
+        case "locale":
+          return { key: "firstboot.rehearsal.next.timedOutInLocale" };
+        case "input":
+          return { key: "firstboot.rehearsal.next.timedOutInInput" };
+        case null:
+          return { key: "firstboot.rehearsal.next.timedOut" };
+      }
     case "emulator-closed":
       return { key: "firstboot.rehearsal.next.emulatorClosed" };
     case "wrote-without-stopping":

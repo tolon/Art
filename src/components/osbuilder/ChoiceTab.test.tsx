@@ -345,6 +345,9 @@ beforeEach(() => {
     userStartupExists: false,
     alreadyWritten: false,
     bytesAdded: 4096,
+    reboot: { kind: "available" },
+    wizard: null,
+    inputSetByArt: false,
   } satisfies FirstBootPlan);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
@@ -1190,6 +1193,9 @@ describe("the first-boot tick", () => {
       userStartupExists: true,
       alreadyWritten: true,
       bytesAdded: 4096,
+      reboot: { kind: "available" },
+      wizard: null,
+      inputSetByArt: false,
     } satisfies FirstBootPlan);
 
     await renderChoice("AmigaOS 3.9");
@@ -1225,6 +1231,9 @@ describe("the first-boot tick", () => {
       userStartupExists: true,
       alreadyWritten: false,
       bytesAdded: 4096,
+      reboot: { kind: "available" },
+      wizard: null,
+      inputSetByArt: false,
     } satisfies FirstBootPlan);
 
     await renderChoice("AmigaOS 3.9");
@@ -1242,6 +1251,9 @@ describe("the first-boot tick", () => {
       userStartupExists: true,
       alreadyWritten: false,
       bytesAdded: 4096,
+      reboot: { kind: "available" },
+      wizard: null,
+      inputSetByArt: false,
     } satisfies FirstBootPlan);
 
     await renderChoice("AmigaOS 3.9");

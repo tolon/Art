@@ -44,22 +44,24 @@ use crate::tools::winuae_launcher::WinUaeLauncher;
 
 /// §92 PREVIEW: what a first boot would run. Writes nothing.
 #[tauri::command]
-pub fn firstboot_preview(tree: String) -> AppResult<FirstBootPlan> {
+pub fn firstboot_preview(tree: String, ask_prefs: bool) -> AppResult<FirstBootPlan> {
     Ok(plan(&FirstBootRequest {
         tree: PathBuf::from(tree.trim()),
-        // Task 8 of the phase-3 plan threads the tick; until then no wizard is written.
-        ask_prefs: false,
+        ask_prefs,
     })?)
 }
 
 /// §92 APPLY: put the files into the tree. `Safe` — nothing of the user's is
 /// overwritten except `S/User-Startup`, which is merged and backed up first.
 #[tauri::command]
-pub fn firstboot_write(tree: String, oplog: State<'_, JsonlOperationLog>) -> AppResult<Written> {
+pub fn firstboot_write(
+    tree: String,
+    ask_prefs: bool,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<Written> {
     let request = FirstBootRequest {
         tree: PathBuf::from(tree.trim()),
-        // Task 8 of the phase-3 plan threads the tick; until then no wizard is written.
-        ask_prefs: false,
+        ask_prefs,
     };
     let result = plan(&request)
         .and_then(|p| write(&p))

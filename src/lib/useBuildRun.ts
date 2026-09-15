@@ -273,7 +273,9 @@ export function useBuildRun(args: BuildRunArgs): BuildRun {
             return { state: "succeeded", outcome, elapsedMs: performance.now() - startedAt };
           }
           case "firstboot": {
-            const written = await firstbootWrite(destination);
+            // The second tick rides on the phase (`sequenceFor`); absent
+            // means ticked, the session's own rule.
+            const written = await firstbootWrite(destination, phase.askPrefs ?? true);
             if (mounted.current) argsRef.current.onFirstBootWritten();
             return { state: "succeeded", outcome: written, elapsedMs: performance.now() - startedAt };
           }

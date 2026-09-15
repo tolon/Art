@@ -487,4 +487,32 @@ describe("FIRSTBOOT_SPEC", () => {
     // from one they did.
     expect("wanted" in DEFAULT_FIRSTBOOT).toBe(false);
   });
+
+  // First-boot phase 3 design §5: the second tick is the `wanted` rule, guarded the same way.
+  it("leaves askPrefs absent for a firstboot stored before the second tick", () => {
+    const recalled = recallInto<FirstBootChoice>(
+      { [SESSION_KEYS.firstboot]: { written: true, wanted: true } },
+      SESSION_KEYS.firstboot,
+      FIRSTBOOT_SPEC,
+      DEFAULT_FIRSTBOOT
+    );
+    expect("askPrefs" in recalled).toBe(false);
+  });
+
+  it("keeps an askPrefs the user turned off, and one turned back on", () => {
+    for (const askPrefs of [false, true]) {
+      expect(
+        recallInto<FirstBootChoice>(
+          { [SESSION_KEYS.firstboot]: { written: false, askPrefs } },
+          SESSION_KEYS.firstboot,
+          FIRSTBOOT_SPEC,
+          DEFAULT_FIRSTBOOT
+        ).askPrefs
+      ).toBe(askPrefs);
+    }
+  });
+
+  it("ships no askPrefs in the default, so rendering the second tick stores nothing", () => {
+    expect("askPrefs" in DEFAULT_FIRSTBOOT).toBe(false);
+  });
 });

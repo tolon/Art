@@ -185,6 +185,14 @@ export interface FirstBootChoice {
    * tick puts a boolean there. A stored `false` is a boolean and survives.
    */
   wanted?: boolean;
+
+  /**
+   * Whether first boot asks the remaining Preferences on the Amiga — the
+   * second tick (first-boot phase 3 design §5). **The `wanted` rule exactly:**
+   * absent means ticked, rendering writes nothing, a stored `false` survives.
+   * It is a preference, not a fact about a folder, so `setTree` leaves it.
+   */
+  askPrefs?: boolean;
 }
 
 /**
@@ -362,6 +370,8 @@ export const FIRSTBOOT_SPEC: { [K in keyof FirstBootChoice]: Guard<FirstBootChoi
   // default is what keeps an untouched tick out of `settings.json`. See
   // `FirstBootChoice.wanted`.
   wanted: isFlag,
+  // Guarded, and absent from DEFAULT_FIRSTBOOT, for `wanted`'s reason.
+  askPrefs: isFlag,
 };
 
 export const DEFAULT_MATERIAL: MaterialChoice = { folders: [] };

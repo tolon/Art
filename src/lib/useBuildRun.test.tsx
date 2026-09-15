@@ -100,6 +100,7 @@ const WRITTEN: FirstBootWritten = {
   files: ["S:ART-FirstBoot", "S:ART-FirstBoot-Report"],
   userStartupBackup: null,
   userStartupCreated: true,
+  removed: [],
 };
 
 const FOLDER_MISSING: RefusalReason = {
@@ -127,6 +128,7 @@ const FIRSTBOOT_PHASE: Phase = {
   id: "firstboot",
   kind: "firstboot",
   name: FIRST_BOOT_PHASE_NAME,
+  askPrefs: true,
 };
 
 function progress(id: number, state: JobProgress["state"], done = 0): JobProgress {
@@ -276,7 +278,7 @@ describe("the build run's sequence", () => {
       ["boingbag-39-1"],
       [["boingbag-39-1-archive", BB1]]
     );
-    expect(firstbootWriteMock).toHaveBeenCalledWith(DEST);
+    expect(firstbootWriteMock).toHaveBeenCalledWith(DEST, true);
 
     // Each job waited on its own result event, never the other's.
     expect(awaitJobResultMock.mock.calls[0][0]).toBe(OSINSTALL_EVENT);
@@ -552,5 +554,14 @@ describe("the build run's sequence", () => {
     // Nothing ran, so nothing is finished — an empty report is not a finished
     // one, which is the difference between "not started" and "all done".
     expect(result.current.finished).toBe(false);
+  });
+
+  it("hands first boot the second tick the phase carries, unticked included", async () => {
+    const { result } = setup();
+    act(() => {
+      result.current.start([{ ...FIRSTBOOT_PHASE, askPrefs: false }], PLAN);
+    });
+    await waitFor(() => expect(result.current.finished).toBe(true));
+    expect(firstbootWriteMock).toHaveBeenCalledWith(DEST, false);
   });
 });

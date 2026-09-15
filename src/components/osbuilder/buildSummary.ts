@@ -129,6 +129,7 @@ export function useBuildSummary({
   // line went on counting them.
   const ticked = useTickedUpdates(revision);
   const firstBootWanted = session.firstboot.wanted ?? true;
+  const firstBootAskPrefs = session.firstboot.askPrefs ?? true;
 
   // **Every ticked row, always.** There was a `previewReplacements: false`
   // arm here for the bar under the tabs, which drew a size line and not the
@@ -218,6 +219,7 @@ export function useBuildSummary({
     release,
     updates: ticked.rows,
     firstBootWanted,
+    firstBootAskPrefs,
   });
 
   const lines = runSummaryLines({

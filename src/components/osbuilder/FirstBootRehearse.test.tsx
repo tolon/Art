@@ -79,6 +79,9 @@ const REPORT: FirstBootReport = {
   ending: "done-all",
   fatCopyFailed: false,
   rebootRequestedBy: null,
+  rebootUnavailable: false,
+  restartedAfterRequest: false,
+  waitingIn: null,
   unknown: [],
 };
 

@@ -152,10 +152,14 @@ import { STEP_IDS, stepLabelKey } from "@/lib/buildSteps";
 import {
   endingPhrase,
   fatMountPhrase,
+  rebootCommandPhrase,
+  rebootReportPhrase,
   rehearsalNextStepPhrase,
   rehearsalOutcomePhrase,
   reportSourcePhrase,
   stepOutcomePhrase,
+  wizardDetail,
+  wizardWindowPhrase,
   type Ending,
   type FatMount,
   type RehearsalOutcome,
@@ -2019,6 +2023,9 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       ending: "unfinished" as const,
       fatCopyFailed: false,
       rebootRequestedBy: null,
+      rebootUnavailable: false,
+      restartedAfterRequest: false,
+      waitingIn: null,
       unknown: [],
     };
     const endings: RehearsalOutcome[] = [
@@ -2026,10 +2033,33 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       { kind: "step-refused", report },
       { kind: "timed-out", waited: { secs: 60, nanos: 0 }, report },
       { kind: "emulator-closed", waited: { secs: 60, nanos: 0 }, report },
+      { kind: "timed-out", waited: { secs: 60, nanos: 0 }, report: { ...report, waitingIn: "locale" as const } },
+      { kind: "timed-out", waited: { secs: 60, nanos: 0 }, report: { ...report, waitingIn: "input" as const } },
     ];
     for (const outcome of endings) {
       expect(isLeafKey(rehearsalOutcomePhrase(outcome).key), outcome.kind).toBe(true);
       expect(isLeafKey(rehearsalNextStepPhrase(outcome).key), outcome.kind).toBe(true);
+    }
+  });
+
+  it("the reboot, the wizard's windows and details, and the restart lines all resolve", () => {
+    const unavailable = rebootCommandPhrase({ kind: "unavailable", needs: "reboot" });
+    expect(isLeafKey(unavailable!.key), unavailable!.key).toBe(true);
+    for (const window of ["locale", "input", "screen-mode"] as const) {
+      expect(isLeafKey(wizardWindowPhrase(window).key), window).toBe(true);
+    }
+    for (const detail of ["opened Locale", "not-asked Input", "missing ScreenMode"]) {
+      const read = wizardDetail(detail);
+      expect(isLeafKey(read!.phrase.key), detail).toBe(true);
+    }
+    const base = {
+      version: 1, system: null, steps: [], ending: "unfinished" as const, fatCopyFailed: false,
+      rebootRequestedBy: "15-probe", rebootUnavailable: false, restartedAfterRequest: false,
+      waitingIn: null, unknown: [],
+    };
+    for (const report of [base, { ...base, rebootUnavailable: true }, { ...base, restartedAfterRequest: true }]) {
+      const phrase = rebootReportPhrase(report);
+      expect(isLeafKey(phrase!.key), phrase!.key).toBe(true);
     }
   });
 });

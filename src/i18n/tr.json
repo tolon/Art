@@ -3060,11 +3060,23 @@
       "available": "FAT önyükleme bölümü EMU68BOOT: olarak bağlanacak (L:fat95 ağaçta var).",
       "unavailable": "FAT önyükleme bölümü bağlanmayacak: ağaçta L:{{needs}} yok. Aminet disk/misc/{{needs}} bunu sağlar; adım o olmadan atlanır."
     },
+    "reboot": {
+      "unavailable": "Bu sürümde yeniden başlatma komutu yok: yeniden başlatma isteyen bir adım bunu size bırakır. Aminet util/boot/{{needs}} bunu sağlar."
+    },
+    "wizard": {
+      "window": {
+        "locale": "dil ve ülke",
+        "input": "klavye",
+        "screenMode": "ekran modu"
+      }
+    },
     "rehearsal": {
       "outcome": {
         "finished": "Her adım WinUAE altında çalıştı ve blok kendini kaldırdı.",
         "stepRefused": "Bir adım reddetti. Amiga'nın kendi günlüğünü okuyabilmeniz için kopya saklandı.",
         "timedOut": "Kimse yanıt vermedi. Amiga {{seconds}} saniye sonra hâlâ sonunu yazmamıştı, bu yüzden ART başlattığı emülatörü sonlandırdı; kopya saklandı.",
+        "timedOutInLocale": "Dil ve ülke penceresini kimse yanıtlamadı. Amiga {{seconds}} saniye sonra hâlâ o pencerede bekliyordu, bu yüzden ART başlattığı emülatörü sonlandırdı; kopya saklandı.",
+        "timedOutInInput": "Klavye penceresini kimse yanıtlamadı. Amiga {{seconds}} saniye sonra hâlâ o pencerede bekliyordu, bu yüzden ART başlattığı emülatörü sonlandırdı; kopya saklandı.",
         "emulatorClosed": "Emülatör penceresi {{seconds}} saniye sonra, ilk açılış sonuna ulaşmadan kapatıldı; kopya saklandı.",
         "wroteWithoutStopping": "İlk açılış durmadan yazıyordu: {{seconds}} saniye sonra kopya {{written}} MB büyümüştü ve bir koşunun ekleyebileceği {{ceiling}} MB'ı aşmıştı; bu yüzden ART başlattığı emülatörü sonlandırdı; kopya saklandı."
       },
@@ -3072,6 +3084,8 @@
         "finished": "Ağacı bir karta yazın. Donanım adımı emülatör altında atlanır ve yalnızca gerçek makinede çalışır.",
         "stepRefused": "Kopyadaki S/FirstBoot.log dosyasını açın: reddeden adımın kendi satırları nedenini söyler ve adım bir sonraki açılışta yeniden denenecek.",
         "timedOut": "Yeniden çalıştırın ve bu kez emülatör penceresini izleyin. Sonunu hiç yazmayan bir ilk açılış bir adımda durmuş ya da takılmıştır; kopyadaki S/FirstBoot.log hangisi olduğunu söyler.",
+        "timedOutInLocale": "Yeniden çalıştırın ve WinUAE penceresinin içindeki dil ve ülke penceresini yanıtlayın: ilk açılış siz Save düğmesine basana kadar orada bekler.",
+        "timedOutInInput": "Yeniden çalıştırın ve WinUAE penceresinin içindeki klavye penceresini yanıtlayın: ilk açılış siz Save düğmesine basana kadar orada bekler.",
         "emulatorClosed": "Yeniden çalıştırın ve pencerenin işini bitirmesine izin verin. ART kalan adımların ne yapacağını söyleyemez, bu yüzden hiçbir yönde bir karar oluşmadı.",
         "wroteWithoutStopping": "Yalnızca yeniden çalıştırmayın. Kopyadaki S/FirstBoot.log dosyasını açın: başlayıp hiç bitmeyen adım, yazmayı sürdürmüş olması en olası adımdır. Kopyayı silmek güvenlidir."
       }
@@ -3086,7 +3100,17 @@
       "fatCopyFailed": "FAT önyükleme bölümüne kopyalama başarısız oldu; dosyalar AmigaDOS tarafında kaldı.",
       "unknown": "Daha yeni bir ART'tan gelen, atılmayıp taşınan satırlar:",
       "details": "Ayrıntılar",
-      "readFailed": "Bu kartın ilk açılış raporu okunamadı:"
+      "readFailed": "Bu kartın ilk açılış raporu okunamadı:",
+      "wizard": {
+        "opened": "{{window}}: pencere açıldı",
+        "notAsked": "{{window}}: sorulmadı — ART ayarladı",
+        "missing": "{{window}}: sorulmadı — bu sürümde bunun için pencere yok"
+      },
+      "reboot": {
+        "restarted": "{{step}} yeniden başlatma istedi ve Amiga yeniden başladı.",
+        "unavailable": "{{step}} yeniden başlatma istedi, ama bu Amiga'da bunun için komut yok — bitirmek için onu kendiniz yeniden başlatın.",
+        "pending": "{{step}} yeniden başlatma istedi; günlük Amiga'nın yeniden açıldığını henüz göstermiyor."
+      }
     },
     "rehearse": {
       "needsTree": "Ağacı yukarıdan (kurucunun Dağıtım ağacı alanı) ya da İşletim Sistemi Kurucusu'nun Kickstart ve hedef sekmesinden seçin."

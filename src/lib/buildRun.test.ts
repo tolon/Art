@@ -105,6 +105,7 @@ const INPUTS: SequenceInputs = {
     },
   ],
   firstBootWanted: true,
+  firstBootAskPrefs: true,
 };
 
 const APPLIED: ApplyOutcome = {
@@ -123,6 +124,7 @@ const WRITTEN: FirstBootWritten = {
   files: ["S/ART-FirstBoot", "S/ART-FirstBoot-Step", "S/FirstBoot/10-hardware"],
   userStartupBackup: null,
   userStartupCreated: false,
+  removed: [],
 };
 
 function phaseOf(kind: Phase["kind"]): Phase {
@@ -203,6 +205,13 @@ describe("sequenceFor", () => {
       "package",
       "package",
     ]);
+  });
+
+  it("carries the second tick on the first-boot phase, as the user confirmed it", () => {
+    const off = sequenceFor({ ...INPUTS, firstBootAskPrefs: false }).find((p) => p.kind === "firstboot");
+    const on = sequenceFor(INPUTS).find((p) => p.kind === "firstboot");
+    expect(off?.askPrefs).toBe(false);
+    expect(on?.askPrefs).toBe(true);
   });
 
   it("is a tree alone when nothing is ticked and first boot is off", () => {

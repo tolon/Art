@@ -515,6 +515,7 @@ export function ChoiceTab() {
    * looked at is exactly the confident wrong sentence.
    */
   const [firstbootFat, setFirstbootFat] = useState<FatMount | null>(null);
+  const askPrefs = session.firstboot.askPrefs ?? true;
   useEffect(() => {
     // Same gate as the chain's: a folder the destination check has not
     // answered for is not a folder to read a first-boot block out of.
@@ -525,7 +526,7 @@ export function ChoiceTab() {
       return;
     }
     let cancelled = false;
-    firstbootPreview(treeRoot)
+    firstbootPreview(treeRoot, askPrefs)
       .then((preview) => {
         if (!cancelled) {
           setFirstbootWritten(preview.alreadyWritten);
@@ -541,7 +542,7 @@ export function ChoiceTab() {
     return () => {
       cancelled = true;
     };
-  }, [treeRoot, treeSettled]);
+  }, [treeRoot, treeSettled, askPrefs]);
   const firstbootFatPhrase = firstbootFat ? fatMountPhrase(firstbootFat) : null;
 
   /** The one component id currently showing the "this will not boot"
