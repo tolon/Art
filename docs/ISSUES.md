@@ -95,9 +95,23 @@ file past `MAXFILESIZE32` (0xffffffff, `blocks.h:627`; `WriteToFile`, `disk.c:79
 new public `Writer::check_file_size`, asked by `write_file_in_no_commit`, `create_softlink_in` and
 `overwrite_file_in` before they allocate, refuses `'<name>' was not written: it is <n> bytes, and this PFS3 volume
 holds files of at most 4294967295 bytes: it is not formatted for large files (MODE_LARGEFILE with
-MODE_DIR_EXTENSION)`, and ART's `from_pfs3` hands it on as `ART-INPUT-INVALID`, not "malformed pfs3" —
-`copy_in_pfs3` reads a host file whole and checks only free space, so a file of 4 GiB could reach it. **Tests**
-(`core::preload::native`): `a_pfs3_entrys_fsizex_is_part_of_its_size_only_on_a_largefile_volume` (one raw entry,
+MODE_DIR_EXTENSION)`, and ART's `from_pfs3` hands it on as `ART-INPUT-INVALID`, not "malformed pfs3". **ART's copy
+asks first (the third scoped re-review's Minor 1, 2026-09-15).** `copy_in_pfs3` read each host file whole
+(`std::fs::read`) and only then did `write_file_in` refuse, so a file of 4 GiB or more was loaded into memory before
+the refusal, which did not say what to do. It now opens the writer (which reads the bitmaps and writes nothing) before
+its fit check and asks `check_file_size` of every file, from the size `collect_entries` took from the file's metadata,
+before the fit check and before any host file is read; the refusal names each file and its size (up to 20, then a
+count) and says what to do: `'<file>' (<n> bytes) in '<folder>' cannot be copied to '<drive>': a file on it can be at
+most 4294967295 bytes, because this PFS3 partition is not formatted for large files, and ART's own PFS3 format does not
+make large-file partitions. Nothing was copied. Leave that file out of '<folder>' and run the copy again.` —
+`libpfs3::format` never sets `MODE_LARGEFILE` (`src/format.rs`, the option word and `FormatOptions`, checked), so
+formatting again cannot help. It reaches the screen through `errors.verbatim`: no `ART-INPUT-INVALID` pattern in
+`src/lib/errorText.ts` matches it, and no catalogue key changed. A file under 4 GiB is still read whole before it is
+written. **Tests**
+(`core::preload::native`): `a_pfs3_copy_refuses_a_file_of_4_gib_or_more_by_name_before_reading_it` (the seam is
+`CopyEntry::size`, with a host file that does not exist, so a read before the refusal ends in "not found"; a small
+volume, a 5 100 MiB volume, a byte under the limit as the control, and two files),
+`a_pfs3_entrys_fsizex_is_part_of_its_size_only_on_a_largefile_volume` (one raw entry,
 `fsize` 700 and `fsizex` 1, under three modes), `a_pfs3_overwrite_writes_no_fsizex_on_a_volume_that_is_not_largefile`,
 `a_pfs3_file_of_4_gib_or_more_is_refused_by_name_on_a_volume_that_is_not_largefile`,
 `a_pfs3_file_too_large_reaches_the_user_as_invalid_input_not_a_malformed_volume`;
@@ -115,7 +129,16 @@ overwrite test; **M1d** (the limit ignores the mode) → the "largefile, 4 GiB" 
 byte less" arm alone. **Survived, as predicted, judged:** **M1g** (`build_dir_entry`'s gate off), **M1h**
 (`write_file_in_no_commit` no longer asks the limit) and **M1i** (a largefile entry without the word cut to 32 bits),
 each green over all 131 PFS3 tests — no test can hand the writer 4 GiB. The limit itself is pinned through
-`check_file_size`; each call site is one line, read, not tested. **Still open, on a largefile volume only** (ART
+`check_file_size`; each call site is one line, read, not tested. **Minor 1, red first** on the unchanged copy: `left:
+[("small volume, 4 GiB", "ART-INPUT-INVALID: invalid input: '…copy-in-too-large-…' needs 4294967296 bytes but 'DH0'
+only has 8018944 bytes free; 0 listed"), ("5 100 MiB volume, 4 GiB", "io NotFound; 0 listed"), ("5 100 MiB volume, a
+byte less", "io NotFound; 0 listed")]` — the fit check answered with a byte count on the small volume, and on the large
+one the copy read the file before anything refused it; the control was the same before and after. **Its mutations**
+(`D:\Projeler\Amiga\scratch-0913\minors-mutate.py`; `native.rs` backed up to `scratch-0913\native.rs.minors-fixed`,
+restored with `shutil.copyfile`, SHA-256 identical, green again): **m1** (the early check removed) → every size arm red,
+the two small-volume arms with the fit check's sentence and the 5 100 MiB arm `io NotFound`; **m2** (the check moved
+after the fit check, before the loop) → the two small-volume arms alone; **m3** (the plural wording made singular) →
+the two-file arm alone. None survived. **Still open, on a largefile volume only** (ART
 formats none): an entry without `fsizex` that must take high bits is refused `FileTooLarge` rather than grown and
 moved, as `AddExtraFields` would (`:3764-3800`); the block counts are cast `as u32` (`write_file_in_no_commit`,
 `create_softlink_in_impl`, `overwrite_file_in_impl`); and an overwrite that clears the high bits leaves a zero
@@ -230,7 +253,7 @@ sees now.** The install check fails the file with `ART could not tell whether th
 directory 'C' is damaged: its block 22 holds a malformed entry at offset 20 (size 12), so the entries after it cannot
 be read — check this volume with a PFS3 repair tool`, shown as Rust wrote it (`VerifyAgainstCard.tsx`). The
 first-boot report is "could not be checked": `malformed card: the Amiga volume's own first-boot report could not be
-checked: area 1 partition 'DH0': malformed pfs3: the directory 'S' is damaged: …`, under `firstboot.readFailed` and
+checked: area 1 partition 'DH0': malformed pfs3: the directory 'S' is damaged: …`, under `firstboot.report.readFailed` and
 through `errors.verbatim`. No catalogue key changed. **Tests:**
 `core::preload::native::…::a_pfs3_name_behind_a_malformed_directory_entry_is_corrupt_not_not_found` — a clean volume's
 miss, `Ok(None)`, as the control; a name before the damage found; a name behind it, a name not there, a path through
