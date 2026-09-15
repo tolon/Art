@@ -218,6 +218,18 @@ pub fn merge_user_startup(existing: Option<&str>, component: &str, lines: &[Stri
     out
 }
 
+/// Whether `existing` carries a well-formed `;BEGIN <component>` /
+/// `;END <component>` block — asked through the **same** [`matched_blocks`]
+/// pairing [`merge_user_startup`] replaces, so a reader and the writer can
+/// never disagree about what a block is. A stray opener with no closer is no
+/// block (the module doc's "An opener with no closer at all is left alone"),
+/// and neither is a marker that is only the start of a longer line.
+pub fn has_block(existing: &str, component: &str) -> bool {
+    let begin_marker = format!(";BEGIN {component}");
+    let end_marker = format!(";END {component}");
+    !matched_blocks(existing, &begin_marker, &end_marker).is_empty()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,5 +441,42 @@ mod tests {
             "no leftover duplicate block"
         );
         assert_eq!(out, ";BEGIN alpha\nthree\n;END alpha\n");
+    }
+
+    // ---- phase 3: the one public reader of the pairing ----
+
+    #[test]
+    fn has_block_answers_yes_for_a_block_merge_wrote() {
+        let text = merge_user_startup(
+            Some("; mine\n"),
+            "keymap-selection",
+            &["SetKeyboard usa".into()],
+        );
+        assert!(has_block(&text, "keymap-selection"));
+    }
+
+    /// The module doc's "An opener with no closer at all is left alone": the
+    /// merge appends after it rather than calling it a block, so a reader must
+    /// not call it one either.
+    #[test]
+    fn has_block_says_no_to_a_stray_opener_with_no_closer() {
+        let stray = ";BEGIN keymap-selection\nSetKeyboard usa\n; the END line is missing\n";
+        assert!(!has_block(stray, "keymap-selection"));
+    }
+
+    #[test]
+    fn has_block_says_no_to_another_components_block_and_to_a_longer_marker() {
+        let other = ";BEGIN art-firstboot\nIF EXISTS S:ART-FirstBoot\n  Execute S:ART-FirstBoot\nENDIF\n;END art-firstboot\n";
+        assert!(!has_block(other, "keymap-selection"));
+        let longer = ";BEGIN keymap-selection-old\nSetKeyboard usa\n;END keymap-selection-old\n";
+        assert!(!has_block(longer, "keymap-selection"));
+    }
+
+    #[test]
+    fn has_block_reads_crlf_the_way_the_merge_does() {
+        assert!(has_block(
+            ";BEGIN keymap-selection\r\nSetKeyboard usa\r\n;END keymap-selection\r\n",
+            "keymap-selection"
+        ));
     }
 }
