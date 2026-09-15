@@ -955,6 +955,134 @@ fn production_after() -> u32 {
         files
     }
 
+    /// Every `.rs` file under `src/`, recursively — wider than [`core_files`]
+    /// (`core/` only) because [`only_clock_and_local_time_name_amiga_from_wall_or_system_now_unix`]
+    /// must also see `tools/local_time.rs`, the one legitimate caller outside
+    /// `core/clock.rs` itself.
+    fn all_src_files() -> Vec<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+            {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        files
+    }
+
+    /// ART-317's third debt round, survivor (b) (docs/ISSUES.md). Both
+    /// `amiga_from_wall` and `system_now_unix` are `pub`, and `clock.rs` is on
+    /// [`core_makes_amiga_dates_only_through_the_clock`]'s own allow-list — so
+    /// nothing stopped a product site from calling
+    /// `amiga_from_wall(system_now_unix())` directly, which makes a UTC Amiga
+    /// date with no offset at all, bypassing `AmigaClock::offset_at`
+    /// entirely, invisibly to every guard ART-317 shipped. Only
+    /// `core/clock.rs` (where both are declared, and where
+    /// `AmigaClock::amiga_from_unix`'s default body legitimately calls
+    /// `amiga_from_wall`) and `tools/local_time.rs` (the product clock,
+    /// which calls `system_now_unix()` inside `now_unix()`) may name either
+    /// outside a test. This walks all of `src/`, not just `core/`, since
+    /// `tools/local_time.rs` must be checked too.
+    ///
+    /// Mutate by adding a line naming `amiga_from_wall` or `system_now_unix`
+    /// to a real product file outside the two allowed ones, above its
+    /// `#[cfg(test)]`; this fails.
+    #[test]
+    fn only_clock_and_local_time_name_amiga_from_wall_or_system_now_unix() {
+        let needles = [
+            concat!("amiga_from", "_wall"),
+            concat!("system_now", "_unix"),
+        ];
+        let allowed = ["core/clock.rs", "tools/local_time.rs"];
+        let mut offenders = Vec::new();
+        for path in all_src_files() {
+            let shown = path.display().to_string().replace('\\', "/");
+            if allowed.iter().any(|ok| shown.ends_with(ok)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&path.display().to_string(), &lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                if needles.iter().any(|needle| line.contains(needle)) {
+                    offenders.push(format!("{shown}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "amiga_from_wall or system_now_unix named outside core::clock and \
+             tools::local_time — a date made this way carries no UTC offset at all \
+             (ART-317, third debt round survivor (b)):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// ART-317's third debt round, survivor (c) (docs/ISSUES.md). A libpfs3
+    /// `Writer` opened without calling `set_entry_date` falls back to
+    /// `current_amiga_datestamp` (`vendor/libpfs3/src/writer.rs`'s
+    /// `entry_datestamp`), which stamps UTC — the same defect ART-317 closed
+    /// everywhere else, reopened by any fresh `Writer::open` call outside the
+    /// one place that stamps it. `core::preload::native::open_pfs3_writer` is
+    /// that place: it opens the writer and calls `set_entry_date` with the
+    /// clock's own date before handing the writer back, so
+    /// `libpfs3::writer::Writer::open` itself may be named only inside
+    /// `core/preload/native.rs` (the helper) and, allow-listed as designed,
+    /// `core/card/sizing.rs` — whose own call (in `fill`, a `#[cfg(test)]`
+    /// helper that formats a device in memory to measure free space) sits
+    /// inside a `#[cfg(test)] mod tests` block that already runs to the end
+    /// of the file, so `test_regions` already excludes it from every other
+    /// file's non-test scan; it is named here anyway because the design
+    /// calls for it explicitly, not because it is reachable outside a test
+    /// today.
+    ///
+    /// Mutate by naming `libpfs3::writer::Writer::open(` in a real product
+    /// file outside the two allowed ones, above its `#[cfg(test)]`; this
+    /// fails.
+    #[test]
+    fn libpfs3_writer_open_is_named_only_by_the_pfs3_writer_helper() {
+        let needle = concat!("libpfs3::writer::Writer", "::open(");
+        let allowed = ["core/preload/native.rs", "core/card/sizing.rs"];
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let shown = path.display().to_string().replace('\\', "/");
+            if allowed.iter().any(|ok| shown.ends_with(ok)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&path.display().to_string(), &lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                if line.contains(needle) {
+                    offenders.push(format!("{shown}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "libpfs3::writer::Writer::open named outside \
+             core::preload::native::open_pfs3_writer, which is the only place that stamps \
+             the clock's date on a fresh writer (ART-317, third debt round survivor (c)):\n{}",
+            offenders.join("\n")
+        );
+    }
+
     /// ART-317, final review I1's survivor (a). Nothing stopped a
     /// `commands/` or `tools/` site from passing `&crate::core::clock::UtcClock`
     /// in place of `&crate::tools::local_time::LOCAL_TIME` — that makes a UTC

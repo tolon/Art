@@ -145,6 +145,26 @@ fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
     )
 }
 
+/// The one product path to a libpfs3 [`Writer`](libpfs3::writer::Writer)
+/// (ART-317, third debt round's survivor (c)). A `Writer` opened without
+/// calling `set_entry_date` falls back to `current_amiga_datestamp`
+/// (`vendor/libpfs3/src/writer.rs`), which stamps UTC — so every writer
+/// opened through this helper is stamped with `clock`'s own date before it
+/// is handed back, and `core::independence::
+/// libpfs3_writer_open_is_named_only_by_the_pfs3_writer_helper` keeps this
+/// the only place that calls `Writer::open` outside a test. A caller that
+/// writes for longer than an instant, such as `copy_in_pfs3`'s loop, still
+/// refreshes the date per entry with its own `set_entry_date` call — this
+/// helper only guarantees the writer is never left holding no date at all.
+fn open_pfs3_writer(
+    vol: libpfs3::volume::Volume,
+    clock: &dyn AmigaClock,
+) -> CoreResult<libpfs3::writer::Writer> {
+    let mut writer = libpfs3::writer::Writer::open(vol).map_err(from_pfs3)?;
+    writer.set_entry_date(Some(pfs3_datestamp(clock.amiga_now())));
+    Ok(writer)
+}
+
 impl VolumeFormatter for NativeFormatter {
     fn probe(&self) -> CoreResult<ToolVersion> {
         Ok(ToolVersion {
@@ -929,7 +949,7 @@ fn copy_in_pfs3(
         )));
     }
 
-    let mut writer = libpfs3::writer::Writer::open(vol).map_err(from_pfs3)?;
+    let mut writer = open_pfs3_writer(vol, clock)?;
     let mut summary = CopySummary::default();
     let mut anode_of: HashMap<String, u32> = HashMap::new();
     anode_of.insert(String::new(), libpfs3::ondisk::ANODE_ROOTDIR);
@@ -3573,6 +3593,42 @@ mod tests {
             (be16(&dd, 0x1A), be16(&dd, 0x1C), be16(&dd, 0x1E)),
             local,
             "deldir block date at format"
+        );
+    }
+
+    /// ART-317, third debt round's survivor (c): `open_pfs3_writer` itself —
+    /// not `copy_in_pfs3`'s per-entry `set_entry_date` refresh — is what is
+    /// under test here, so this writes through the writer immediately after
+    /// `open_pfs3_writer` hands it back, with no `set_entry_date` call of its
+    /// own in between. Without the helper's own stamp, `write_file` would
+    /// fall through to `entry_datestamp`'s `current_amiga_datestamp` default,
+    /// which is UTC (`vendor/libpfs3/src/writer.rs`).
+    #[test]
+    fn open_pfs3_writer_stamps_the_clocks_local_date_before_any_write() {
+        const TOTAL: u64 = 48_000;
+        let dev = MemDevice::with_end(TOTAL);
+        formatted_in_memory(&dev, TOTAL);
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+
+        let mut writer = open_pfs3_writer(vol, &PLUS_THREE).unwrap();
+        writer.write_file("A", b"one block").unwrap();
+        let mut vol = writer.into_volume();
+
+        let entry = vol
+            .list_dir("")
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == "A")
+            .unwrap();
+        assert_eq!(
+            (
+                entry.creation_day,
+                entry.creation_minute,
+                entry.creation_tick
+            ),
+            (17_546u16, 900u16, 0u16),
+            "open_pfs3_writer must stamp PLUS_THREE's local date (15:00 at 12:00 UTC, \
+             UTC+3) before the first write, not UTC's fallback"
         );
     }
 
