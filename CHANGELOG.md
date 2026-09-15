@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **ART reads the size of a file on a PFS3 partition correctly when the Amiga stored more about the file** — a hard
+  link, a rollover file, or owner, group or other protection bits. Until now such a file could be reported with the
+  wrong size, or as too large to read, by the first-boot report and by the check after an install. Checked against
+  directory entries laid out from the Amiga handler's source, not yet against a card a real Amiga wrote.
 - **The Files screen's empty-pane text no longer clips in Turkish at 1024x768.** "Hiçbir şey açık değil" is now
   "Açık bir şey yok".
 - **The job bar names each job in the language you chose.** Titles such as
