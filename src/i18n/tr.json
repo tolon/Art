@@ -1401,7 +1401,11 @@
       "body": "“{{description}}” yarıda kesildi. ART, değiştirmek üzere olduğu her bloğun kaydını tuttu, böylece imaj tam olarak eski haline getirilebilir. Siz karar verene kadar yazma engellenir.",
       "undo": "Geri al",
       "leave": "İmajı olduğu gibi bırak",
-      "leaveTitle": "İmajı tam olarak şu anki haliyle bırakın ve kaydı unutun. Bunu yalnızca işlemin tamamlandığından eminseniz yapın."
+      "leaveTitle": "İmajı tam olarak şu anki haliyle bırakın ve kaydı unutun. Bunu yalnızca işlemin tamamlandığından eminseniz yapın.",
+      "finishedAriaLabel": "Geride kalan günlük",
+      "finishedTitle": "Bu imaj üzerindeki bir işlem tamamlandı, ama günlüğü geride kaldı",
+      "finishedBody": "“{{description}}” tamamlandı ve doğrulandı; yalnızca günlük dosyası kaldırılamadı. Geri almayın — bu, tamamlanan değişikliği yeniden çıkarır. Bu imaja yeniden yazmak için günlüğü silin.",
+      "deleteJournal": "Günlüğü sil"
     },
     "writeRefusal": {
       "local": "Bu bölme bir disk imajı değil, bir klasör içeriyor",
@@ -1448,7 +1452,7 @@
       "newFolder": "Yeni Klasör"
     },
     "pane": {
-      "nothingOpen": "Hiçbir şey açık değil",
+      "nothingOpen": "Açık bir şey yok",
       "truncated": "Bu klasör ART'ın listeleyeceğinden daha fazlasını içeriyor — yalnızca ilk girdiler gösteriliyor.",
       "empty": "Burada hiçbir şey yok.",
       "filterNoMatch": "“{{mask}}” ile eşleşen dosya yok.",
@@ -2108,7 +2112,7 @@
   "preload": {
     "heading": "Kartın Amiga birimlerini hazırla",
     "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",
-    "scope": "ART, sıradan bir kart için PFS3'ü ve FFS'i varsayılan olarak kendi yazıcısıyla yazar — dış bir araca gerek yok. hst-imager — mevcut iki PiStorm imaj aracının da dayandığı araç — ART'ın kendi yazıcısının henüz yapamadığı iki şey için adı konmuş bir yedek olarak kalır: bir sürücüyü kartın mevcut RDB'sine yerinde gömmek, ve bir PFS3 biriminde düz ASCII dışındaki bir AmigaDOS adı. Bunlardan biri bu kart için geçerliyse kendi kopyanı ayarla.",
+    "scope": "ART, sıradan bir kart için PFS3'ü ve FFS'i varsayılan olarak kendi yazıcısıyla yazar — dış bir araca gerek yok — ve RDB alanını senin seçtiğin bir dosyaya kopyaladıktan sonra kartın RDB'sine bir dosya sistemi sürücüsünü kendisi gömer ya da günceller. hst-imager — mevcut iki PiStorm imaj aracının da dayandığı araç — ART'ın kendi yazıcısının henüz yapamadığı tek şey için adı konmuş bir yedek olarak kalır: bir PFS3 biriminde düz ASCII dışındaki bir AmigaDOS adı. Bu kart için geçerliyse kendi kopyanı ayarla.",
     "tool": {
       "label": "hst.imager",
       "none": "Ayarlanmadı",
@@ -2129,8 +2133,14 @@
     "driver": {
       "label": "Dosya sistemi sürücüsü",
       "none": "Seçilmedi",
-      "chooseTitle": "Gömülecek dosya sistemi sürücüsünü seç (pfs3aio.lha)",
+      "chooseTitle": "Dosya sistemi sürücüsünün kendisini seç — .lha arşivini değil, pfs3aio dosyasını",
       "hint": "Bir bölüm, kartın sürücüsünü taşımadığı bir dosya sistemi adlandırıyorsa gerekir — genellikle PFS3. FFS'i Kickstart'ın kendisi taşır, onun için bir şey gerekmez. Gerekliyken eksikse önizleme bunu söyler; Amiga'nın sessizce yok sayacağı bir birim üretmez."
+    },
+    "backup": {
+      "label": "RDB yedek dosyası",
+      "none": "Seçilmedi — her çalıştırmada sorulur",
+      "chooseTitle": "ART'ın kartın RDB alanını değiştirmeden önce kopyalayacağı yer",
+      "hint": "Önizleme sürücünün gömüleceğini ya da değiştirileceğini gösterdiğinde gerekir. ART, tek bir blok yazmadan önce RDB alanını — birkaç megabayt — bu yeni dosyaya kopyalar ve zaten var olan bir dosyayı reddeder. Hatırlanmaz: her çalıştırma kendi dosyasını yapar."
     },
     "partitions": {
       "heading": "Hangi birimler",
@@ -2154,15 +2164,30 @@
       "willErase_one": "Bu, {{count}} bölümü siler. Yedek yok, geri alma yok.",
       "willErase_other": "Bu, {{count}} bölümü siler. Yedek yok, geri alma yok.",
       "step": {
-        "import": "{{name}} sürücüsünü RDB'ye {{dostype}} olarak göm",
+        "import": "{{name}} {{version}} sürücüsünü RDB'ye {{dostype}} olarak göm",
+        "replace": "Karttaki {{dostype}} {{card}} sürücüsünü {{name}} dosyasındaki {{file}} ile değiştir",
+        "blocks": "RDB blokları {{first}}–{{last}}.",
+        "blocksRaised": "RDB blokları {{first}}–{{last}}; bu, RDB'nin ayrılmış alanını boş bloklar üzerinden {{from}}. bloktan {{to}}. bloğa genişletir.",
+        "backup": "RDB alanı önce {{backup}} dosyasına kopyalanır.",
+        "backupMissing": "Çalıştırmadan önce RDB yedeğinin nereye gideceğini seç.",
         "format": "{{drive}} bölümünü {{volume}} adıyla biçimlendir — içindeki her şey gider",
         "copy": "{{source}} içeriğini {{drive}} bölümüne kopyala",
         "tool": {
           "native": "Bunu ART'ın kendi yazıcısı yapar.",
           "nativeConditional": "Bunu ART'ın kendi yazıcısı yapar — içindeki bir ad düz ASCII değilse hst-imager onun yerine yapar, sonuç bunu söyler.",
           "formatConditional": "Bunu ART'ın kendi yazıcısı yapar — bu birime kopyalanacak klasördeki bir ad düz ASCII değilse biçimlendirmeyi de hst-imager yapar: bir birimi tek bir araç biçimlendirip doldurur, yarısını biri yarısını diğeri asla.",
-          "hstImager": "Bunu hst-imager yapar — bir sürücüyü kartın mevcut RDB'sine yerinde gömmek, güvenle yalnızca onun yapabildiği bir şey (ART-117)."
+          "nativeEmbed": "Bunu ART'ın kendi RDB düzenleyicisi yapar ve değişikliği yalnızca yazdığı her bloğu geri okuduktan sonra tutar."
         }
+      },
+      "note": {
+        "kept": "Karttaki {{dostype}} {{card}} kalıyor: seçtiğin dosya {{file}} olduğunu belirtiyor, bu daha yeni değil.",
+        "keptNoVersion": "Karttaki {{dostype}} {{card}} kalıyor: seçtiğin dosya sürümünü belirtmiyor.",
+        "replaceRefused": "Karttaki {{dostype}} {{card}} kalıyor ve bağlanmaya devam ediyor: ART onu değiştirmeyecek — {{detail}} ({{code}})",
+        "differentDriver": "Karttaki {{dostype}} {{card}} kalıyor: kendini {{cardName}} olarak adlandırıyor, seçtiğin dosya ise {{fileName}} olarak; ART bir sürücüyü yalnızca aynı sürücünün daha yeni bir kopyasıyla değiştirir. hst-imager değiştirebilir — önce kartı yedekle.",
+        "differentDriverUnknown": "Karttaki {{dostype}} {{card}} kalıyor: ne olduğunu söylemiyor, bu yüzden ART {{fileName}} dosyasının onun daha yeni bir kopyası olup olmadığını anlayamaz. hst-imager değiştirebilir — önce kartı yedekle.",
+        "differentDriverFileUnnamed": "Karttaki {{dostype}} {{card}} kalıyor: kendini {{cardName}} olarak adlandırıyor, seçtiğin dosya ise bir sürüm belirtiyor ama program adı vermiyor; bu yüzden ART onun aynı sürücünün daha yeni bir kopyası olup olmadığını anlayamaz. hst-imager değiştirebilir — önce kartı yedekle.",
+        "differentDriverBothUnnamed": "Karttaki {{dostype}} {{card}} kalıyor: ne o ne de seçtiğin dosya hangi program olduğunu söylüyor; bu yüzden ART dosyanın onun daha yeni bir kopyası olup olmadığını anlayamaz. hst-imager değiştirebilir — önce kartı yedekle.",
+        "secondEdit": "Karttaki {{dostype}} sürücüsü bu çalıştırmada güncelleme için denetlenmiyor: ART her çalıştırmada tek bir RDB düzenlemesi yapar."
       }
     },
     "pairing": {
@@ -2183,7 +2208,7 @@
     "running": "Çalışıyor…",
     "blocked": {
       "noCard": "Önce kart imajını seç.",
-      "noTool": "Bu kart, RDB'sine gömülecek bir dosya sistemi sürücüsü istiyor ve bunu güvenle yalnızca hst-imager yapabilir — hst.imager'ın nerede olduğunu ayarla.",
+      "noBackup": "Bu plan kartın RDB'sini değiştiriyor — önce yedeğinin nereye gideceğini seç.",
       "nothingChosen": "Hazırlanacak en az bir bölüm seç.",
       "blankName": "{{drive}} için bir birim adı gerekiyor.",
       "badName": "{{drive}} biriminin adında ':' veya '/' var; bunlar Amiga'da yol ayırıcıdır ve bir adın içinde yer alamaz.",
@@ -2191,7 +2216,6 @@
       "notPlanned": "Önce önizle — ne biçimlendirileceğini görmeden hiçbir şey biçimlendirilmez."
     },
     "fallback": {
-      "foreignRdbEmbed": "Bu adımı hst-imager yaptı: kartın mevcut RDB'sine yerinde bir sürücü gömmek, ART'ın oluşturmadığı bir bölüm tablosunu düzenlemeyi gerektirir; ART'ın kendi yazıcısı bunu güvenle yapamaz.",
       "nonAsciiPfs3Names_one": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunu doğru yazamıyor ({{paths}}).",
       "nonAsciiPfs3Names_other": "Bu adımı hst-imager yaptı: {{count}} ad ASCII değil ve libpfs3'ün bu sürümü bunları doğru yazamıyor ({{paths}}).",
       "pairedWithFallbackCopy": "Bu adımı hst-imager yaptı: {{drive}} birimine yapılacak kopyalama onun üzerinden yürümek zorunda ve bir birimi tek bir araç biçimlendirip doldurur — hst-imager, ART'ın kendi yazıcısının biçimlendirdiği bir birime yazamıyor."
@@ -2201,6 +2225,11 @@
       "formatted": "Biçimlendirilen: {{volumes}}",
       "copied": "Kopyalanan: {{files}} dosya, {{directories}} klasör, {{bytes}} bayt.",
       "copiedNoBytes": "Kopyalanan: {{files}} dosya, {{directories}} klasör. Kopyalamayı yapan araç toplamı yuvarlayarak bildiriyor (\"12.2 MB\"), bu yüzden ART uydurulmuş bir bayt sayısı yerine hiç göstermiyor.",
+      "embedded": "{{dostype}} {{file}}, RDB blokları {{first}}–{{last}} içine gömüldü. RDB yedeği {{backup}} konumunda.",
+      "stoppedHeading": "Bitmeden durdu",
+      "stoppedAfterEmbedded": "Çalışma bitmeden durdu, ama {{dostype}} {{file}} sürücüsünü RDB blokları {{first}}–{{last}} içine çoktan gömmüştü; bu değişiklik kartta kalıyor. RDB yedeği {{backup}} konumunda.",
+      "stoppedAfterReplaced": "Çalışma bitmeden durdu, ama RDB blokları {{first}}–{{last}} içinde {{dostype}} {{card}} sürücüsünü {{file}} ile çoktan değiştirmişti; bu değişiklik kartta kalıyor. RDB yedeği {{backup}} konumunda.",
+      "replaced": "{{dostype}} {{card}}, RDB blokları {{first}}–{{last}} içinde {{file}} ile değiştirildi; eski sürücünün blokları kartta bağlantısız olarak kalıyor. RDB yedeği {{backup}} konumunda.",
       "tool": "{{version}} ile.",
       "notVerified": "Bu çalıştırma birimi sonradan geri okuyup denetlemedi — ne ART'ın kendi yazıcısının yaptığı bir adım için, ne de hst-imager'ın yaptığı bir adım için. Amiga'da ya da ART olmayan bir şeyle doğrula.",
       "steps": {

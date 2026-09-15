@@ -70,15 +70,20 @@ import {
 } from "@/lib/cardBuild";
 import {
   copiedPhrase,
+  editsRdb,
+  embedDetailPhrases,
+  embeddedPhrase,
   fallbackPhrase,
   formatCount,
   pairingPhrase,
+  planNotePhrase,
   plannedToolPhrase,
   preloadBlocker,
   stepPhrase,
   type FallbackReason,
   type Pairing,
   type PartitionPick,
+  type PlanNote,
   type PreloadPlan,
   type PreloadStep,
 } from "@/lib/preload";
@@ -956,9 +961,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       {
         step: "import-filesystem",
         slot: 2,
-        driver: "pfs3aio.lha",
+        driver: "pfs3aio",
         dostype: "PDS3",
         name: "pfs3aio",
+        file_version: { version: 19, revision: 3 },
+        blocks: [2, 130],
+        rdb_blocks_hi_raised: [1, 130],
+      },
+      {
+        step: "replace-filesystem",
+        slot: 2,
+        driver: "pfs3aio",
+        dostype: "PDS3",
+        name: "pfs3aio",
+        card_version: { version: 19, revision: 2 },
+        file_version: { version: 19, revision: 3 },
+        blocks: [131, 259],
+        rdb_blocks_hi_raised: null,
       },
       { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
       { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
@@ -966,7 +985,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const step of steps) {
       expect(resolvesAtRuntime(stepPhrase(step).key), step.step).toBe(true);
     }
-    expect(formatCount({ image: "card.img", steps })).toBe(1);
+    expect(formatCount({ image: "card.img", steps, notes: [], rdb_backup: null })).toBe(1);
   });
 
   it("plannedToolPhrase: every PreloadStep variant resolves", () => {
@@ -974,25 +993,46 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       {
         step: "import-filesystem",
         slot: 2,
-        driver: "pfs3aio.lha",
+        driver: "pfs3aio",
         dostype: "PDS3",
         name: "pfs3aio",
+        file_version: { version: 19, revision: 3 },
+        blocks: [2, 130],
+        rdb_blocks_hi_raised: [1, 130],
+      },
+      {
+        step: "replace-filesystem",
+        slot: 2,
+        driver: "pfs3aio",
+        dostype: "PDS3",
+        name: "pfs3aio",
+        card_version: { version: 19, revision: 2 },
+        file_version: { version: 19, revision: 3 },
+        blocks: [131, 259],
+        rdb_blocks_hi_raised: null,
       },
       { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
       { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
     ];
     // This plan fills the volume it formats, so the format resolves through
     // ART-122's conditional branch.
-    const paired = { image: "card.img", steps };
+    const paired = { image: "card.img", steps, notes: [], rdb_backup: null };
     for (const step of steps) {
       expect(isLeafKey(plannedToolPhrase(step, paired).key), step.step).toBe(true);
     }
     // And once more with nothing copied in, which is the *other* branch a
     // format can take — a plan of only the three steps above would never
     // reach it, leaving `preload.plan.step.tool.native` unchecked here.
-    const formatOnly = steps[1];
+    const formatOnly = steps[2];
     expect(
-      isLeafKey(plannedToolPhrase(formatOnly, { image: "card.img", steps: [formatOnly] }).key),
+      isLeafKey(
+        plannedToolPhrase(formatOnly, {
+          image: "card.img",
+          steps: [formatOnly],
+          notes: [],
+          rdb_backup: null,
+        }).key,
+      ),
       "format-partition, unpaired",
     ).toBe(true);
   });
@@ -1011,23 +1051,30 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       steps: [
         { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
       ],
+      notes: [],
+      rdb_backup: null,
     };
     // ART-117 — the one case the native path always refuses, so the plan
-    // itself already shows the tool is needed.
+    // itself already shows a backup path is needed.
     const importPlan: PreloadPlan = {
       image: "card.img",
       steps: [
         {
           step: "import-filesystem",
           slot: 2,
-          driver: "pfs3aio.lha",
+          driver: "pfs3aio",
           dostype: "PDS3",
           name: "pfs3aio",
+          file_version: { version: 19, revision: 3 },
+          blocks: [2, 130],
+          rdb_blocks_hi_raised: [1, 130],
         },
         { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
       ],
+      notes: [],
+      rdb_backup: null,
     };
-    const ready = { image: "card.img", toolPath: "hst.imager.exe", picks: [pick], plan };
+    const ready = { image: "card.img", rdbBackup: null, picks: [pick], plan };
 
     const blockers = [
       preloadBlocker({ ...ready, image: null }),
@@ -1036,24 +1083,16 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "Work:" }] }),
       preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "W".repeat(31) }] }),
       preloadBlocker({ ...ready, plan: null }),
-      // The one case where the tool is genuinely needed (ART-117) and is
-      // not configured.
-      preloadBlocker({ ...ready, plan: importPlan, toolPath: null }),
+      // ART-117: an RDB edit with no backup path.
+      preloadBlocker({ ...ready, plan: importPlan }),
     ];
     for (const blocker of blockers) {
       expect(blocker).not.toBeNull();
       expect(isLeafKey(blocker!.key), blocker!.key).toBe(true);
     }
     expect(preloadBlocker(ready)).toBeNull();
-    // **ART-120, mutation-checked at this layer too**: native is the
-    // default, so no tool configured is not a blocker when the plan does not
-    // need one — a regression back to "the tool is always required" would
-    // fail this specific assertion even though every other case above still
-    // passes.
-    expect(preloadBlocker({ ...ready, toolPath: null })).toBeNull();
-    expect(preloadBlocker({ ...ready, toolPath: "" })).toBeNull();
-    // A configured tool is fine even when the plan does need it.
-    expect(preloadBlocker({ ...ready, plan: importPlan })).toBeNull();
+    expect(editsRdb(importPlan)).toBe(true);
+    expect(preloadBlocker({ ...ready, plan: importPlan, rdbBackup: "E:\\rdb.bin" })).toBeNull();
   });
 
   it("copiedPhrase: both the with-bytes and the without-bytes sentence resolve", () => {
@@ -1068,13 +1107,61 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
 
   it("fallbackPhrase: every FallbackReason variant resolves", () => {
     const reasons: FallbackReason[] = [
-      { reason: "foreign-rdb-embed" },
       { reason: "non-ascii-pfs3-names", paths: ["Locale/español"], more: 3 },
       { reason: "paired-with-fallback-copy", drive: "DH0" },
     ];
     for (const reason of reasons) {
       expect(resolvesAtRuntime(fallbackPhrase(reason).key), reason.reason).toBe(true);
     }
+  });
+
+  it("the RDB edit's notes, detail lines and result resolve", () => {
+    const card = { version: 19, revision: 2 };
+    const notes: PlanNote[] = [
+      { note: "driver-kept", dostype: "PDS3", card_version: card, file_version: card },
+      { note: "driver-kept", dostype: "PDS3", card_version: card, file_version: null },
+      { note: "replace-refused", dostype: "PDS3", card_version: card, code: "ART-RDB-EDIT-NO-ROOM", detail: "x" },
+      { note: "different-driver", dostype: "SFS0", card_version: card, card_name: "SmartFilesystem", file_name: "pfs3aio" },
+      { note: "different-driver", dostype: "PDS3", card_version: card, card_name: null, file_name: "pfs3aio" },
+      { note: "different-driver", dostype: "SFS0", card_version: card, card_name: "SmartFilesystem", file_name: null },
+      { note: "different-driver", dostype: "PDS3", card_version: card, card_name: null, file_name: null },
+      { note: "second-edit-skipped", dostype: "DOS3" },
+    ];
+    for (const note of notes) {
+      expect(resolvesAtRuntime(planNotePhrase(note).key), note.note).toBe(true);
+    }
+    const step: Extract<PreloadStep, { step: "import-filesystem" }> = {
+      step: "import-filesystem",
+      slot: 2,
+      driver: "pfs3aio",
+      dostype: "PDS3",
+      name: "pfs3aio",
+      file_version: card,
+      blocks: [2, 130],
+      rdb_blocks_hi_raised: [1, 130],
+    };
+    const plan: PreloadPlan = { image: "card.img", steps: [step], notes: [], rdb_backup: null };
+    const lines = [
+      ...embedDetailPhrases(step, plan),
+      ...embedDetailPhrases({ ...step, rdb_blocks_hi_raised: null }, { ...plan, rdb_backup: "E:\\rdb.bin" }),
+    ];
+    for (const line of lines) {
+      expect(resolvesAtRuntime(line.key), line.key).toBe(true);
+    }
+    const report = {
+      slot: 2,
+      dostype: "PDS3",
+      card_version: null,
+      file_version: card,
+      first_block: 2,
+      last_block: 130,
+      rdb_blocks_hi_raised: null,
+      backup: "E:\\rdb.bin",
+    };
+    expect(resolvesAtRuntime(embeddedPhrase(report).key)).toBe(true);
+    expect(resolvesAtRuntime(embeddedPhrase({ ...report, card_version: card }).key)).toBe(true);
+    expect(resolvesAtRuntime(embeddedPhrase(report, true).key)).toBe(true);
+    expect(resolvesAtRuntime(embeddedPhrase({ ...report, card_version: card }, true).key)).toBe(true);
   });
 
   it("pairingPhrase: every Pairing variant resolves, or is deliberately null", () => {

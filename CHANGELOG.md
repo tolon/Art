@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **ART can put a filesystem driver into a card's existing partition table, or update the one there, without
+  hst-imager.** When a partition needs a driver the card lacks, or the driver you chose is newer than the card's, the
+  preview names both versions and where on the card it goes, and asks where to save a copy of the card's partition
+  area. Only then does ART write — in four undoable steps, reading every block back before keeping the change. A card
+  ART built gets room by widening its reserved area over empty space. A driver on the card is replaced only by a newer copy of the same driver: a different one, or one that does not
+  say what it is — on the card or in the file you chose — is left as it is, and the preview says why. A card ART cannot fully account for is refused
+  with the reason, and hst-imager is named there; ART no longer runs hst-imager for this step on its own. The
+  driver is written before any partition is formatted, so a problem with it stops the run before anything is
+  erased. If a later step fails or you cancel, the result still says the partition table was changed and where the
+  copy is; and if the change was written and checked but ART could not remove its undo file, it says the change
+  stands and that the file is to be deleted, not undone.
 - **PFS3 partitions ART formats now carry PFS3's deleted-files area (deldir), in the
   layout the Amiga's own handler reads.** A file deleted through ART's writer goes into
   it and can be undeleted through that same writer. Checked only by reading pfs3aio's
@@ -17,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The Files screen's empty-pane text no longer clips in Turkish at 1024x768.** "Hiçbir şey açık değil" is now
+  "Açık bir şey yok".
 - **The job bar names each job in the language you chose.** Titles such as
   "Adding 1 package(s) to …" were English on a Turkish screen and counted
   with "(s)"; they now read, for example, "Work.hdf içine 1 paket ekleniyor",

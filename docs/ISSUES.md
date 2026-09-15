@@ -26,9 +26,175 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-117** 🟡 **`import_filesystem` refuses a foreign card's existing RDB —
-by design, but the gap has no other path today** — *found 2026-08-16 (Task 9),
-named for filing at Task 14*
+**ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~2200 keys have not** (2262 leaf keys as of 2026-09-14 — count them, the figures written into this entry have been overtaken repeatedly). **Mechanical part done 2026-09-14** on `art-debt-2-0914` — the one string this table's original rows could still name and reach without a backend was measured, found clipped, and fixed; **stays open**, see "What remains" below.
+`src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
+was verified by `pnpm test`'s key-parity check and by reading the JSON — never
+by opening the running application and looking at a screen. Several Turkish
+strings are substantially longer than their English originals and sit in tight
+controls, so the check that remains is visual, not automatable in general —
+though a plain browser, off Tauri, can now measure the screens that need no
+backend (below).
+
+**This table had decayed.** Read against the live catalogue (`src/i18n/tr.json`, `src/i18n/en.json`) and the current
+source on 2026-09-14, two of its four original rows named a key or a control that no longer exists:
+
+| ART-062 row | Status, 2026-09-14 |
+|---|---|
+| `pistorm.saveSync` — "Save & Sync PiStorm SD" | **Gone.** No such key exists in either catalogue. The nearest surviving string is `gotek.saveSync` = "USB'ye Kaydet ve Eşitle" (EN "Save & Sync to USB"), on the **Gotek** screen, not PiStorm (`src/pages/GotekStudio.tsx:156`). It is gated behind `drivePath` — the button is not in the DOM until a USB folder is picked via a native Tauri file dialog — so a plain browser cannot reach it. Unmeasured. |
+| `hardDisk.bootablePri` — "Bootable (Pri {{n}})" | **Real key** (`src/i18n/tr.json:640`, "Önyüklenebilir (Öncelik {{n}})"), but renders only when `p.bootable` is true on a real RDB partition (`src/pages/HardDiskStudio.tsx:492,690`), which needs the Rust core to have actually analyzed a card or disk image. Unmeasured — needs a live Tauri session with a loaded card. |
+| `pistorm.profile.classic.badge` — "Cycle-Exact & Demos" | **Gone.** There is no "classic" PiStorm profile and no per-profile `.badge` field any more; `PistormStudio.tsx`'s `PROFILES` are now `["performance", "daily", "compatibility", "diagnostics"]`, each with only `.title`/`.description`. No key under `pistorm.profile.*.badge` and no string reading "Cycle-Exact"/"Demos" (or their Turkish) exists anywhere in either catalogue. |
+| FileManager function-key "View" → "Görüntüle" | **Real and live.** `files.functionKeys.view`, measured 2026-09-14 in a real browser at 1280x800/1024x768/960x768, both languages: 0 overflow hits at any width. |
+| FileManager function-key "Grid" → "Izgara" | **Wrong screen.** There is no grid/list function key in FileManager (`files.functionKeys` has only `view/edit/copy/move/rename/newFolder/delete/attributes`). The string lives at `collection.toolbar.gridView`, a **Collection Studio** toolbar button instead — measured there 2026-09-14, both languages, all three widths: 0 hits. |
+| job status "Done" / "Failed" | **Unmeasurable off Tauri.** `JobBar` (`src/components/JobBar.tsx:90`) renders `null` with no running or notable job — nothing is in the tree to measure without a real background job, which needs the Rust core. |
+
+**Browser measurement, 2026-09-14** (`scripts/tr-overflow-check.py`, headless Chrome against `pnpm dev`,
+`D:\Projeler\Amiga\scratch-0913\art062-overflow.md` is the full working note): every top-level route in
+`src/App.tsx`'s router (16 routes), at 1280x800, 1024x768 and 960x768 (the shell's own `minWidth`,
+`src-tauri/tauri.conf.json`), Turkish against an English control in the same mounted tree — 48 (route x width)
+runs, 0 crashes, 0 both-languages hits. **One real Turkish-only clip**, found and fixed: `files.pane.nothingOpen`
+("Nothing open" → "Hiçbir şey açık değil", +83%) clipped 10px in `.tc-path-text` (`src/pages/FileManager.tsx:4680`),
+**1024x768 only** — not 1280, and, non-monotonically, not 960 either (the pane has more room at 960 than at 1024;
+not investigated further, recorded as measured). Shortened to **"Açık bir şey yok"** (the owner's choice; `en.json`
+unchanged). **Re-run after the fix, same command:** 48 runs, 0 errors, 0 crashes, Turkish-only list empty at every
+route and width. This sweep only reaches screens and controls that render with no backend — most of the 2262 keys,
+and every row in the table above that needs a loaded disk image, a scanned drive or a running job, are outside what
+it could exercise.
+
+**What remains, for a person:** reading the Turkish catalogue itself (2262 keys, a handful read so far — see
+below) and the two rows above still marked unmeasured (`hardDisk.bootablePri`, job status "Done"/"Failed"), both
+of which need a real backend session rather than a plain browser.
+
+**First real evidence, 2026-08-21.** The owner drove the release build, chose
+an old title, and read the new WHDLoad refusal on screen **in Turkish**: *"…bu
+başlatma bir A1200 Kickstart 3.x istiyor. Başka bir model için olan Kickstart
+— örneğin A500/A600/A2000 için bir 3.1 — ne kadar yeni olursa olsun buna
+uymaz."* Their verdict: *"gayet makul bir çözüm olmuş"*, and the launch then
+worked.
+
+That is one sentence, not the catalogue — but it is the first time any
+Turkish string in ART has been read on screen by someone who speaks it, and
+it was one of the hardest kind: a refusal that has to leave the reader knowing
+what to do next. Essentially all of the rest remain unseen. (Since then the
+owner has also read the Workbench menus of a Turkish tree ART built, which is
+a different claim — that is AmigaOS rendering ART's *output*, not ART's own
+interface.)
+
+**ART-321** 🔵 **`mbr_slot_of` can name the wrong MBR slot when an earlier Amiga area is unreadable** — *found 2026-09-14 by the final whole-branch review of `art-debt-2-0914` (`.superpowers/sdd/2026-09-14-art-117-rdb-embed/final-review.md`, M12), by reading; not fixed*
+`src-tauri/src/core/preload/mod.rs::mbr_slot_of` · `mbr_slot_of(card, area_index)` indexes `mbr.amiga_areas()` —
+every `0x76` MBR entry — with an index into `card.areas`. But `read_card` (`src-tauri/src/core/card/mod.rs`) skips
+an area it cannot read, so `card.areas` can be shorter than `amiga_areas()`: when an earlier `0x76` area is
+unreadable, every later area's index shifts by one, and `mbr_slot_of` names the slot of the area before it.
+**What it reaches:** `plan()` puts that slot into the `FormatPartition` and `CopyIn` steps (the format path predates
+ART-117) and, since ART-117, into a replace's target slot. The RDB edit itself cannot write the wrong area:
+`core/preload/embed.rs::area_offset_for` accepts a slot only when its start is one of `card.areas`' own readable
+offsets, so a wrong slot there becomes a refusal — a wrong-slot plan note — never a wrong write (the reviewer's
+reading, re-read for this entry). How the format and copy steps resolve a wrong slot was **not** re-read for this
+entry. **Found by reading, not by a test or an experiment:** no card with an unreadable leading `0x76` area has been
+built to show it. Direction, not designed: carry each area's MBR slot on the area when `read_card` builds it,
+rather than re-deriving it by position.
+
+Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
+not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
+
+Every module with working logic has now been audited. The remaining `core`
+modules are stubs that only return `NotImplemented` (`recovery.rs`,
+`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
+(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
+
+Two areas were reviewed and found sound, and are recorded here so nobody
+re-audits them without reason:
+
+- `core/analysis.rs` — the hex reader clamps both offset and length, and the
+  signature scan guards its window.
+- `core/profile.rs` — preset data only, no parsing of untrusted input.
+
+---
+
+## Fixed
+
+**ART-320** 🔵 ✅ **`cargo test` forced `TMP`/`TEMP` onto `D:`, against the owner's own rule — moved to `E:`, CI overrides it with the runner's own temp directory** — *found 2026-09-14, Task 12 of `.superpowers/sdd/2026-09-14-art-117-rdb-embed/`, verifying ART-117's records; fixed 2026-09-14 on `art-debt-2-0914`, brief `.superpowers/sdd/2026-09-14-art-117-rdb-embed/tmp-fix-brief.md`*
+`src-tauri/.cargo/config.toml`'s `[env]` now forces `TMP`/`TEMP` to
+`E:/amiga/ProjeART/build/tmp` (still `force = true`); the comment there keeps
+ART-184's own history and records this decision and its date. **That file is
+machine-local and gitignored** (`.gitignore`, unchanged by this fix, already
+said so before ART-184 as well as after) — a CI checkout never has it, and CI
+has no `E:` drive either. `.github/workflows/ci.yml` and `release.yml`'s
+"Rust tests" steps point `cargo test` at the runner's own temp directory
+instead:
+
+    cargo test --config "env.TMP.value='${{ runner.temp }}'" --config "env.TMP.force=true" --config "env.TEMP.value='${{ runner.temp }}'" --config "env.TEMP.force=true"
+
+**Verified before relying on it, and a first attempt was wrong.** The Cargo
+reference (`https://doc.rust-lang.org/cargo/reference/config.html`) documents
+`--config` as TOML `KEY=VALUE` overrides merged left-to-right "using the same
+merging logic that is used when multiple configuration files apply", and
+`[env]`'s `force` key ("By default, the variables specified will not override
+values that already exist in the environment... This behavior can be changed
+by setting the `force` flag") separately from `value` — but does not spell
+out sub-key merging for a nested table like `env.TMP` in one place, so two
+controlled, one-variable experiments settled it rather than reading alone.
+**First** (config.toml present, matching only a developer's own machine): with
+the file's `env.TMP = { value = "D:/tmp/art-tests", force = true }` still in
+place, `$env:TMP` set to a third, distinct marker path and `--config
+"env.TMP.value='...cli-override-marker'"` given a fourth (no `force` on the
+command line), `cargo test --lib` printed `std::env::temp_dir()` as the
+**fourth** path: `--config` merges *into* an existing `env.TMP` table rather
+than replacing it, so a file's own `force = true` keeps applying to a `value`
+set on the command line. **This does not describe CI**, which never has the
+file — so a **second** experiment simulated CI exactly: `config.toml` moved
+aside (`git ls-files` confirms it was never tracked, so this matches a fresh
+checkout byte for byte), shell `$env:TMP` set to a marker directory, then
+`cargo test --lib --config "env.TMP.value='...'"` **without** `force`. Result:
+the *linker* (a real subprocess, not a mock) failed trying to write its own
+temp file into the shell's marker directory, not the `--config` value — proof
+the override was silently ignored, exactly as the reference predicts for an
+already-set variable with `force` defaulted to `false`. Adding `--config
+"env.TMP.force=true"` in the same scenario flipped the result: the linker
+(and `std::env::temp_dir()`) then used the `--config` value instead. **Both
+keys are required in the workflow files because CI has no config.toml for
+`force` to already be `true` in** — the single-line `--config
+env.TMP.value=...` form (this task's own brief's first suggestion) is
+confirmed wrong for CI and was not used. The workflow's shell is confirmed as
+`pwsh` (`windows-latest`'s default; neither file sets `defaults.run.shell`
+for these steps), matching the quoting form tested locally.
+
+**Shown in both configurations, real output**, via a throwaway `#[test]`
+printing `std::env::temp_dir()` (added, run, removed before commit each time
+— `git diff` confirmed clean): plain `cargo test --lib` under the new
+config.toml printed `"E:\\amiga\\ProjeART\\build\\tmp\\"`; the corrected CI
+form (`value` **and** `force`, config.toml moved aside, a pre-set shell `TMP`
+present to rule out a false pass) printed the pointed-at override path.
+`E:\amiga\ProjeART\build\tmp` already existed (it is also this project's
+general command-output scratch site) and received real test scratch directly
+during the full suite run (`art-card-build-*`, `art-cmd-write-*`,
+`art-osinstall-*`, `art-panel-many-*`, timestamped to the run).
+
+**`D:\tmp\art-tests` was left untouched, not deleted** (a separate,
+deliberate decision, per this project's own rule): measured at **1 559 047
+963 bytes (≈1.49 GiB), 5 594 items** before this fix's suite runs and
+**identical** after both — nothing new landed there once `TMP` pointed
+elsewhere.
+
+Task 11's own `#[ignore]`d hook
+(`replace_the_driver_on_a_copy_of_the_owners_card_when_asked`,
+`core/preload/embed.rs`) now passes its own TMP-on-`E:` pre-flight under a
+plain `cargo test --lib <name> -- --ignored` (refusing only for the missing
+`ART_CARD_IN`/`ART_RDB_EMBED_*` variables, as designed) — the compiled-binary
+workaround it needed while `TMP` forced onto `D:` is gone from its own doc
+comment and from `docs/STATUS.md`'s reproduce block.
+
+**CI itself is not proved by this entry** — the workflow override is only
+confirmed once CI actually runs it after the push that carries it, not by
+local reasoning or the local experiment alone.
+
+`cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean;
+`cargo test --lib` twice, identical: `test result: ok. 3398 passed; 0 failed;
+60 ignored; 0 measured; 0 filtered out` (both runs, `TMP`/`TEMP` on `E:`
+confirmed live by the throwaway test above);
+`scripts/scratch-root-sweep.py`, `scripts/scratch-guard-sweep.py` and
+`scripts/control-byte-sweep.py` all clean.
+
+**ART-117** 🟡 ✅ **`import_filesystem` refused a foreign card's existing RDB — ART now embeds and replaces a driver in place** — *found 2026-08-16 (Task 9), named for filing at Task 14; the 2026-08-21 "leave it" reopened by the owner on 2026-09-14; fixed 2026-09-14 on `art-debt-2-0914`*
 `src-tauri/src/core/preload/native.rs`, `core/card/build.rs` · `create_rdb_layout`
 builds an RDB **from scratch** on a fixed 16-head/63-sector LBA geometry; it
 cannot edit one already on disk. Real cards disagree with that geometry —
@@ -75,114 +241,80 @@ drivers, and FFS needs none because Kickstart carries it). The refusal names
 `hst-imager` by name, which is what makes this a signposted boundary rather
 than a dead end.
 
-Revisit only if someone actually meets the case and `hst-imager` cannot serve
-it — not before.
+**Corrected 2026-09-14 by the research** (`docs/superpowers/notes/2026-09-14-art-117-rdb-embed-research.md` §4.5). The 16-head/63-sector argument above is about **rebuilding** an RDB with `create_rdb_layout`, and it is right about that. It does not apply to an **append**: an in-place edit never writes a PART block or a cylinder number, and its only arithmetic is on block numbers inside the reserved range, with geometry entering only as a bound. The same read found what this entry did not know — an unlinked stale RDB copy at blocks 2048–2179 and old PFS3 structures from block 5120, both inside CaffeineOS's reserved range — so "not on a chain" is not "free", which is why the editor allocates above everything live and journals whatever it overwrites. The owner reopened the decision on 2026-09-14 (`.superpowers/sdd/2026-09-14-debt-2-round/progress.md:3-5`) and chose in-place append, replace-when-newer, and a user-chosen RDB backup; spec `docs/superpowers/specs/2026-09-14-art-117-rdb-embed-design.md`.
 
-**ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~1900 keys have not** (1916 leaf keys as of 2026-09-04 — count them, the figures written into this entry have been overtaken twice)
-`src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
-was verified by `pnpm test`'s key-parity check and by reading the JSON — never
-by opening the running application and looking at a screen. Several Turkish
-strings are substantially longer than their English originals and sit in tight
-controls, so the check that remains is visual, not automatable:
+**Fixed:** `core/rdbedit.rs` walks an RDB strictly, allocates above everything live and raises `RDBBlocksHi` over zero blocks when there is no room (decision 12); `core/preload/embed.rs` backs the range up to a file the user chooses, writes four synced journalled stages, reads every block back before committing, and ends in one of seven sentences (the seventh — written and verified, but the journal file could not be removed — added by the final review's fix wave, below). hst-imager no longer embeds: `VolumeFormatter::import_filesystem` and `ForeignRdbEmbedNotSupported` are gone. Tests: `core::rdbedit::walk_tests::{the_caffeine_shaped_rdb_is_accounted_for_block_by_block, each_strict_check_refuses_with_its_own_block_and_sentence}`, `core::rdb::tests::the_extracted_builders_write_the_bytes_the_layout_always_wrote`, `core::rdbedit::alloc_tests::{an_art_built_card_gets_room_by_raising_rdb_blocks_hi_to_exactly_the_last_block, a_raise_never_crosses_a_block_that_is_not_empty}` and the three partition-area bounds, `core::preload::embed::tests::{a_crash_after_any_append_stage_leaves_a_valid_rdb_and_a_journal_that_restores_it, a_crash_after_any_replace_stage_leaves_a_valid_rdb_and_a_journal_that_restores_it, a_replace_on_the_caffeine_shape_swaps_one_pointer_and_leaves_the_old_driver_where_it_was, a_write_that_does_not_verify_is_rolled_back_byte_for_byte, a_rollback_that_fails_leaves_the_journal_and_names_it_and_the_backup}`, one test per refusal code, `core::preload::tests::{a_newer_driver_replaces_the_cards_own_before_the_format, a_driver_that_is_not_newer_plans_no_edit_and_says_so, a_replace_across_different_drivers_is_a_note_naming_both, a_missing_remembered_driver_file_is_a_note_and_the_plan_still_formats}`, `core::rdbedit::driver_tests::an_sfs_driver_on_the_card_is_not_replaced_by_pfs3aio`, `core::preload::embed::tests::a_replace_across_different_drivers_is_refused_before_anything_is_written`, `commands::preload::tests::an_embed_step_runs_natively_and_reports_native`, and `VolumePreload.test.tsx`. Mutations, each seen failing: checksum enforcement off, the repeat check, DriveInit dropped from the used set, the partition bound `>=` made `>` (walk); PatchFlags changed and a non-zero tail (builders); the `RDBBlocksHi` bound, each of the three partition-area bounds, the zero check, the window (allocation); `>` made `>=`, the whole-longword check, the program-name check skipped, a case-sensitive comparison, an unnamed card driver let through, a version token taken for a name (driver); the same-driver check deleted or moved after the version comparison (prepare); link before data, `HighRDSKBlock` after the link, verification off (append); the head-of-list swap, a fresh header, `Next` dropped, the raise left out of S3 (replace); the VHD, journal and no-version refusals, and replacing when not newer (prepare); `create_new` made `create`, the backup after the first write, the rollback ending mislabelled (run); a replace refusal or a missing driver file failing the plan, the different-driver note dropped, the kept note dropped, `ready_to_run`'s exists check, `outcome.embedded` dropped, the raise missing from the log line (wiring); the backup blocker, the backup not sent, the replace's card version, the notes not rendered, a key renamed (screen). If any of these did not fail when its task ran, it is moved to the survivors below with the reason, not left in this list. Survivors, disclosed: a sync per stage (no in-process test can lose a page cache); the backup's read-back was one too, and since the fix wave's M10 seam (`write_backup_with`) it is caught — the compare dropped, `a_backup_that_reads_back_wrong_is_removed_and_the_sentence_says_so` failed (`1 passed; 1 failed`), restored `2 passed`; the driver's size checked before its bytes are read (the same refusal either way); `ready_to_run` inside `core::preload::run` (`embed::run` refuses first). **Accepted by the owner (spec decision 13):** a renamed driver, or a driver on either side — the card's or the chosen file's — whose `$VER:` names no program, cannot be replaced by ART; the plan note names hst-imager. **Task 11 already ran the ignored `replace_the_driver_on_a_copy_of_the_owners_card_when_asked`** against a byte copy of the owner's own 59.478 GiB `CaffeineOS_Storm_9317.img`, and checked the result two ways outside ART's own reader — `hst.imager rdb info` and amitools' `rdbtool info` — both agreeing with ART's own walk in every field; the original card's size and mtime are unchanged. **Owed by the owner:** mounting both PDS partitions of the edited copy in WinUAE or on a PiStorm and asking the loaded handler for `version full` — no Amiga or WinUAE session has run against the edit yet. **Unverified:** whether scsi.device, pi-scsi or HDToolBox read `RDBBlocksHi`/`HighRDSKBlock`, and whether an SD card writes a 512-byte sector atomically.
 
-| Key | English | Turkish | Growth |
-|---|---|---|---|
-| `pistorm.saveSync` | "Save & Sync PiStorm SD" | "PiStorm SD'yi Kaydet ve Eşitle" | +36% |
-| `hardDisk.bootablePri` | "Bootable (Pri {{n}})" | "Önyüklenebilir (Öncelik {{n}})" | +50% |
-| `pistorm.profile.classic.badge` | "Cycle-Exact & Demos" | "Çevrim Hassasiyetli ve Demolar" | +58% |
-| FileManager function-key label | "View" | "Görüntüle" | 4 → 9 characters |
-| FileManager function-key label | "Grid" | "Izgara" | +50% |
-| job status | "Done" | "Tamamlandı" | +150% |
-| job status | "Failed" | "Başarısız" | +50% |
+**Final whole-branch review fix wave, 2026-09-14** (review `.superpowers/sdd/2026-09-14-art-117-rdb-embed/final-review.md`, verdict "With fixes", 0 Critical, 3 Important, 12 Minor; report `fix-wave-report.md` beside it). Each new test was run red before its fix; each mutation below was backed up by absolute path into `D:\Projeler\Amiga\scratch-0913\`, seen red, restored with `shutil.copyfile` and seen green.
+- **I1 — decision 13 with no name.** `check_same_driver` returned `Ok` whenever the *file* named no program, before looking at the card, so a file whose `$VER:` states a version and no name (`$VER: 44.5 (1.1.26)`) reached the version comparison and could replace an `SFS\0` card's driver — the reviewer's probe. Now only a file with **no `$VER:` marker at all** is left to decision 1; a missing or unreadable name on either side is `DifferentDriver`, whose `file` (and `PlanNote::DifferentDriver.file_name`) became an `Option`, with two new sentences and two new note keys in both catalogues. Tests `core::rdbedit::driver_tests::{a_file_whose_ver_names_no_program_is_refused_against_a_named_card_driver, a_card_driver_whose_ver_names_no_program_is_refused_against_any_file}` and a third arm in `core::preload::embed::tests::a_replace_across_different_drivers_is_refused_before_anything_is_written` — red `0 passed; 3 failed`. Mutation, the old file-name guard put back: `0 passed; 3 failed`; restored `3 passed`.
+- **I2 — a verified edit whose journal cannot close.** It used to end as `ART-RDB-EDIT-ROLLBACK-FAILED`, "undo it in the File Manager", for an edit that was written, verified and never undone. The last sync is now its own step (`Journalled::close_after_sync` removes the journal without a second sync): a failed sync rolls back as before, and a journal file that will not go is `CoreError::RdbEditJournalLeft` (`ART-RDB-EDIT-JOURNAL-LEFT`) — the edit was written and verified, the card holds it, delete the named journal file and do not undo it, the backup is at *path*. Tests `core::preload::embed::tests::{a_verified_edit_whose_journal_cannot_be_removed_says_it_succeeded, a_last_sync_that_fails_after_verification_is_rolled_back}` (a device fault swaps the journal file for a folder at the fifth sync, or fails that sync) — red with M4/M9/M10's, `0 passed; 5 failed`. Mutation, the removal failure mapped back to `RollbackFailed`: `1 passed; 1 failed` (the journal-left test red, the sync test rightly unaffected); restored `2 passed`. **Not changed:** the next run's `JOURNAL-PENDING` refusal still says "undo it first" for whatever journal it finds, including this one.
+- **I3 — a finished edit survives a later failure or cancel.** `core::preload::run` returns `RunStopped { error, outcome }` and `commands/preload.rs::run_with_fallback` a stop with the outcome and step reports; `run_record` keeps the Driver, RDB backup and Volumes lines beside the failure; `stopped_result` sends the screen a `PreloadResult` with `stopped` (code and sentence) when the stop came after an RDB edit, and nothing otherwise, as before; `VolumePreload.tsx` renders "Stopped before it finished", the reason, and `preload.result.stoppedAfterEmbedded`/`stoppedAfterReplaced` with the backup path (three new keys in both catalogues). Tests `core::preload::tests::{a_format_that_fails_after_the_edit_still_reports_the_edit, a_cancel_after_the_edit_still_reports_the_edit}`, `commands::preload::tests::a_format_that_fails_after_the_embed_keeps_it_in_the_stop_the_log_and_the_screen`, the jsdom `VolumePreload.test.tsx` "says the RDB change stays when the run stops after it", and `preload.test.ts`'s stopped `embeddedPhrase` — Rust red `153 passed; 3 failed`, jsdom red `1 failed | 122 passed`. Mutations: the log record's failure arm without the RDB lines, `0 passed; 1 failed`; the stop carrying an empty outcome, `0 passed; 2 failed`; restored `3 passed`. The screen without the stopped flag, `1 failed | 2 passed`; restored `3 passed`.
+- **M1** — `plan()` plans every append before any replace, so an optional replace can no longer take the one edit a later partition needs: `core::preload::tests::an_optional_replace_never_fails_a_required_append_in_either_order` (both orders). **M2** — every RDB edit step goes before every format and copy: `every_rdb_edit_is_planned_before_the_first_format` and `an_rdb_edit_that_fails_at_run_time_erases_nothing` (a backup that cannot be written stops the run before `format 1 V1`). Red `2 passed; 3 failed` — the control crash tests green, the steps were `["format", "copy", "import", "format"]`.
+- **M4** — `with_long` returns `None` for an index outside the block or the checksum longword, where a `debug_assert!` stood; callers refuse through `set_long` by block: `with_long_refuses_an_index_outside_the_block_or_the_checksum`. **M6** — `load_driver` returns a `LoadedDriver`; the `#[allow(clippy::type_complexity)]` is gone. **M7** — `EmbedMode` merged into `rdbedit::EditKind` (no wire name: neither was serialised); S1's LSEG map is one `lseg_writes`. **M9** — `read_capped` reads a driver no further than one byte past the cap: `a_driver_is_read_no_further_than_one_byte_past_the_cap`. **M10** — a backup that reads back wrong, or cannot be read back, is removed — ART made it this run — and the sentence says so and names the path: `a_backup_that_reads_back_wrong_is_removed_and_the_sentence_says_so`.
+- **M8** — both crash tests now compare the old chain byte for byte before S4, and after S4 every chain block against the planned write or the card's own bytes (`assert_chain_bytes`). Mutation, S2 also rewriting the old FSHD's version (chain block list unchanged): `0 passed; 1 failed` at `crash-replace-head-Header: the chain before the link, byte for byte`; restored `1 passed`.
+- **M3 — a record, not a code change.** The spec's "about 46 replaces of room" on CaffeineOS counted every block to `RDBBlocksHi` 6143; with no zero check below `RDBBlocksHi`, 14 replaces of a 62 604-byte driver land on zero blocks, the 15th reaches the stale RDB copy at 2048 and the 39th the old PFS3 blocks from 5120. Those blocks are unlinked, journalled before they are written, in the backup, and checked unchanged outside the write set by verification, so no safety gap was found and none was added. Corrected in the spec's Accepted limits.
+- **M5 — disclosed, kept by the controller's ruling.** Three `$VER:` readers now exist: `rdbedit::program_name_from_ver_string` (the program name, `from_utf8_lossy`), `rdb::version_from_ver_string` (the `u16` numbers written to the FSHD) and `amigaver::read` (`u32` halves, Latin-1). They are not unified because `amigaver::read`'s control-byte filter rejects the NUL-prefixed `$VER:\0\0name` the name reader must accept, and merging them would change a reader the game index depends on. Cost: three readers to keep aligned.
+- **M11** — `docs/architecture.md` no longer lists `import_filesystem` on `VolumeFormatter`. **M12** — filed open as [ART-321](#open), found by reading.
 
-The function-key bar (`src/components/files/FunctionKeys.tsx`) was inspected
-in source rather than run: its container carries `flexWrap: "wrap"` and each
-button `flex: "1 1 90px"`, and `.btn` in `src/styles/global.css` carries no
-`text-overflow` rule (only `.file-row-name` does), so the bar should wrap
-rather than clip. That makes it the most likely of the rows above to look
-merely cramped rather than the most likely to break outright — but nobody has
-looked at it in Turkish. Needs an actual run of `pnpm tauri dev` with the
-language switched to Turkish, working through PiStorm, the hard disk screen,
-and the Files function-key bar at a few window widths.
+**Scoped re-review fix, 2026-09-15 — the journal I2 leaves behind said "undo it".** The re-review of the fix wave found I2 half-done: `Journalled::close_after_sync` only removed the journal, so a journal left after a written, synced and verified edit was byte-identical to a crash's. The next run's `open_rdb` refused with `JOURNAL-PENDING` ("Undo it first in the File Manager"), and the File Manager's `PendingJournal::roll_back` would have reverted the good edit — the confident wrong sentence `JOURNAL-LEFT` existed to prevent, one run later.
+- **Fix (option (a), the controller's ruling).** After the last sync, `embed::write_journalled_with` calls `Journalled::mark_finished`: the header's `u32` version field (offset 8) is overwritten with `FINISHED_MARK` `0x444F4E45` ("DONE"), `sync_all`ed and read back. Only then is the journal removed. A mark that will not write or sync rolls the edit back (`ART-RDB-EDIT-ROLLED-BACK`, "could not mark its journal finished"); `Journalled::roll_back` first puts version 1 back when a mark may have landed, and restores no block if it cannot. Mark written and removal refused is `JOURNAL-LEFT`. So a leftover journal is either unmarked (undo it) or marked (delete it, never undo).
+- **Honoured everywhere a journal is read.** `read_journal` accepts 1 or the mark, anything else refused as before; `PendingJournal::is_finished`; `refusal()` and `roll_back()` refuse a marked journal (`ART-SAFETY-REFUSED`, "ART will not undo it … Delete '*journal*' and carry on"); `discard()` still removes it. `open_rdb` refuses with the new `RdbEditRefusal::JournalFinished` (`ART-RDB-EDIT-JOURNAL-FINISHED`: the previous operation finished and was verified, only its journal was left at *path*, do not undo it, delete that file, then run this again). `commands/volume_write.rs`'s three write paths share one `refuse_while_journal` with a "finished … delete that journal … do not undo it" sentence, and `WriteCapability` carries `finished_journal` beside `pending_recovery`. `core/volume/mount.rs::look_for_recovery` goes through `refusal()`, so a marked journal is `can_apply: false` with that sentence. The File Manager shows a marked journal with its own title and body and one button, "Delete the journal" / "Günlüğü sil", no undo (`files.recovery.finishedTitle`, `finishedBody`, `deleteJournal`, both catalogues).
+- **Why the header and not a trailer record.** A trailer is shorter than an entry, and today's reader treats a short tail as `truncated` and still replays every whole entry, so an older build would undo the finished edit. An unknown version field makes an older build refuse the whole file (`this journal is version 1146048069; this ART writes version 1`). It neither undoes nor discards it: `volume_write_capability` and `volume_recover` return that error, `look_for_recovery` reports `can_apply: false`, and `open_rdb` still says `JOURNAL-PENDING`. The user deletes the file by hand. That is from reading `read_journal` at `ea111fd`; the same arm is pinned by `a_journal_whose_version_is_unknown_is_refused_and_left_alone`. **No older build was run.**
+- **Other users, unchanged.** `core/volume/write/mod.rs` calls only `begin`/`commit`/`roll_back` and never marks, so its journals stay version 1. `commands/volume_write.rs` tests and `journal.rs`'s crash tests are unchanged and green. `pfs3dev.rs` and `native.rs` only name `Journalled` in comments.
+- **Tests**, seen red on stubs with today's behaviour (no mark written, the mark not parsed, no mark step) — `7 failed` of 13, one of them a wrong negative check in the new control test (fixed): `the_next_edit_after_a_journal_left_says_the_last_one_finished_not_undo_it`, `a_journal_left_by_a_finished_edit_is_never_rolled_back_by_recovery`, `a_mark_that_cannot_be_written_rolls_the_edit_back` (mark fails before and after bytes land), `a_marked_journal_is_finished_and_is_never_rolled_back`, `the_mark_rewrites_only_the_version_field`, `a_finished_operations_journal_is_reported_as_finished_not_as_waiting_to_be_undone`. Green on the stubs, as guards of what must not change: the control `a_journal_left_by_a_crash_mid_stage_is_still_pending_and_rolls_back`, `a_roll_back_after_a_mark_restores_every_byte`, and the unknown-version test. After the fix `23 passed; 0 failed`. The I2 test now withholds the removal through an injected `JournalEnd`; the folder-swap fault it used would now fail the mark instead, and is gone.
+- **Mutations**, backed up to `D:\Projeler\Amiga\scratch-0913\{journal,embed}.rs.marker-bak`, restored with `shutil.copyfile`, bytes compared, each run over the nine marker tests: (1) `open_rdb` ignores the mark → `8 passed; 1 failed` (`the_next_edit_after_…`); (2) recovery ignores it, in `refusal()` and `roll_back()` → `7 passed; 2 failed` (`a_marked_journal_is_finished_…`, `a_journal_left_by_a_finished_edit_…`); (3) the mark is never written → `7 passed; 2 failed` (the same two embed tests); (4) a failed mark claimed as success → `8 passed; 1 failed` (`a_mark_that_cannot_be_written_…`). All four restored byte-identical and green again in both full runs: `cd src-tauri && cargo test --lib` `test result: ok. 3420 passed; 0 failed; 60 ignored; 0 measured; 0 filtered out` twice (390 s, 412 s); fmt and clippy clean; `pnpm test` `111` files / `1685` tests, `pnpm lint` clean; control-byte, scratch-guard and scratch-root sweeps clean. No survivors.
+- **Follow-up, same day: the mark fails and version 1 cannot be put back either.** `roll_back` then restores no block, so the card holds the verified edit — but the ending was `ROLLBACK-FAILED`, "undo it in the File Manager". Now `write_journalled_with` calls the new `Journalled::unmark` itself when the mark fails. If that fails too, it returns `JournalNotClosed`, i.e. the existing `ART-RDB-EDIT-JOURNAL-LEFT` ("could not mark it finished (…) nor put it back as it was (…), so no block was undone"). **No fifth ending:** "journal left behind" already carries this case's facts and next step (the edit stands and was verified; delete the file; never undo it), and the four-endings rule separates endings by next step. Its sentence now reads "its undo journal at '…' was left behind: *detail*" instead of "could not remove", and a removal failure's detail is "ART could not remove it: …". Test `a_mark_that_can_neither_be_written_nor_taken_out_leaves_the_verified_edit_and_says_so` (mark lands, then the journal is made read-only): red first `0 passed; 1 failed` (`ROLLBACK-FAILED`); mutation — `unmark` result ignored → `1 passed; 1 failed`; restored.
+- **The File Manager card, now tested:** `src/pages/FileManagerRecovery.test.tsx` renders the real screen, opens an ADF whose capability carries `finished_journal`, and checks the `finishedTitle`/`finishedBody` sentence and exactly one button, "Delete the journal", with no undo. Clicking it calls the mocked `volumeRecover(path, false)` and never `invoke("volume_recover")`. The unfinished card is the control and still shows "Undo it" and "Leave the image alone". The card has its own `aria-label`, `files.recovery.finishedAriaLabel` ("Journal left behind" / "Geride kalan günlük"). Mutation — the undo button rendered for a finished journal → `1 failed | 1 passed`; restored. Backups `D:\Projeler\Amiga\scratch-0913\embed.rs.unmark-bak`, `FileManager.tsx.finished-card-bak`. After both: `cargo test --lib` `test result: ok. 3421 passed; 0 failed; 60 ignored; 0 measured; 0 filtered out` twice (443 s, 412 s); fmt, clippy clean; `pnpm test` `112` files / `1687` tests, `pnpm lint` clean; control-byte, scratch-guard, scratch-root sweeps clean.
+- **Disclosed, kept by ruling:** a marked journal blocks volume writes until the user deletes it.
+- **Not covered by a test:** a crash *during* the four-byte mark, leaving a torn version field (the file is then refused as unknown, never applied). And in the double-failure case the mark may *not* have landed: the File Manager would then show the unfinished card with "Undo it" while the ending says do not undo — undoing would put the card back to its pre-edit state, not damage it.
 
-**First real evidence, 2026-08-21.** The owner drove the release build, chose
-an old title, and read the new WHDLoad refusal on screen **in Turkish**: *"…bu
-başlatma bir A1200 Kickstart 3.x istiyor. Başka bir model için olan Kickstart
-— örneğin A500/A600/A2000 için bir 3.1 — ne kadar yeni olursa olsun buna
-uymaz."* Their verdict: *"gayet makul bir çözüm olmuş"*, and the launch then
-worked.
-
-That is one sentence, not the catalogue — but it is the first time any
-Turkish string in ART has been read on screen by someone who speaks it, and
-it was one of the hardest kind: a refusal that has to leave the reader knowing
-what to do next. Essentially all of the rest remain unseen. (Since then the
-owner has also read the Workbench menus of a Turkish tree ART built, which is
-a different claim — that is AmigaOS rendering ART's *output*, not ART's own
-interface.)
-
-**ART-250** 🟡 **`tooltypes()`'s lossy UTF-8 decode cannot byte-for-byte
-round-trip a NewIcon `IM1=`/`IM2=` tool type** — *found 2026-09-06 by the
-drawer-icons round's icon-oracle run against the owner's own AmigaOS 3.9
-material*
-`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}`
-
-`tooltypes` decodes a `ToolTypes` entry with `String::from_utf8_lossy` rather
-than refusing on invalid UTF-8 — deliberately, because real AmigaDOS text is
-Latin-1, not UTF-8, and a non-ASCII tool type (a `PUBSCREEN` name, say) is
-exactly the case that choice is for. NewIcon's `IM1=`/`IM2=` tool types are a
-different case: their pixel-encoding bytes legitimately run past `0x7F` and
-are not accidental Latin-1 text at all, just bytes that happen not to be valid
-UTF-8 on their own. Decoding one replaces the offending byte(s) with
-`U+FFFD`, and re-encoding that back to UTF-8 does not reproduce the original
-bytes — the round-trip grows the file rather than reproducing it.
-
-**Measured, not theoretical**: 69 of the owner's own 798 real `.info` icons
-carry a NewIcon tool type that trips this. `scripts/icon-oracle-check.py`
-counts them in their own `lossy_tooltypes` bucket, never folded into
-`failed`, and holds them to a weaker but still real invariant — the *text*
-`tooltypes` reads back from a rewritten file must still equal the text that
-was written, even though the underlying bytes cannot be. Text identity holds
-for all 69; byte identity does not, and nothing here claims otherwise.
-
-Left open: fixing it means `tooltypes`/`set_tooltypes` carrying raw bytes
-instead of `String` for a NewIcon-shaped entry, which is a real change to a
-public shape three round's worth of code now depends on, not a one-line fix.
-No tree ART builds writes new NewIcon tool types today.
-
-**Corrected 2026-09-06, by the final whole-branch review**: an earlier version
-of this entry said the loss is felt when a NewIcon-carrying icon "is rewritten
-by `set_tooltypes`, `set_position`, `set_window` or `set_show_all_files`" —
-naming all four of this module's writers. Only one of them can trip it.
-`set_position`, `set_window` and `set_show_all_files` all `bytes.to_vec()` and
-overwrite a fixed, disjoint range of the file; none of them reads or rewrites
-the `ToolTypes` block at all, and the icon oracle proves this byte-for-byte
-across all 798 real icons, the 69 lossy ones included — `set_position` alone
-is what this round's `core/appearance::plan_icons_in_dir` actually calls on a
-NewIcon-carrying icon, and it changes eight bytes at offset 58, nowhere near
-`ToolTypes`. **Only `set_tooltypes` can lose bytes, and only when fed the
-output of `tooltypes()`** — the shape `merge_tooltypes`'s own callers use, not
-anything `plan_icons_in_dir` calls today. The warning now lives on
-`set_tooltypes`'s own doc comment (`core/amigaicon/mod.rs`) so a future caller
-reads it where it applies.
-
-Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
-not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
-
-Every module with working logic has now been audited. The remaining `core`
-modules are stubs that only return `NotImplemented` (`recovery.rs`,
-`conversion.rs`, `binary.rs`, `validation.rs`) or hold types with no logic
-(`compatibility.rs`) — see [FEATURES.md](FEATURES.md) for their planned state.
-
-Two areas were reviewed and found sound, and are recorded here so nobody
-re-audits them without reason:
-
-- `core/analysis.rs` — the hex reader clamps both offset and length, and the
-  signature scan guards its window.
-- `core/profile.rs` — preset data only, no parsing of untrusted input.
-
----
-
-## Fixed
+**ART-250** 🟡 ✅ **`tooltypes()`'s lossy UTF-8 decode could not byte-for-byte round-trip a NewIcon
+`IM1=`/`IM2=` tool type** — *found 2026-09-06 by the drawer-icons round's icon-oracle run against the owner's own
+AmigaOS 3.9 material; fixed 2026-09-14 on `art-debt-2-0914` (brief
+`.superpowers/sdd/2026-09-14-debt-2-round/art250-brief.md`, design approved in chat, no spec file)*
+`src-tauri/src/core/amigaicon/mod.rs::{tooltypes, set_tooltypes}` · `tooltypes` decoded a `ToolTypes` entry with
+`String::from_utf8_lossy` and `set_tooltypes` encoded with `tt.as_bytes()` (UTF-8) — real AmigaDOS ToolTypes text
+is ISO-8859-1 (Latin-1), not UTF-8 (confirmed against two secondary sources for the platform's own default
+charset and directly against a real third-party icon library, `bitplane/amigainfo`, which decodes/encodes every
+ToolTypes string, NewIcons included, as Latin-1; see
+`D:\Projeler\Amiga\scratch-0913\art250-research.md`). A NewIcon `IM1=`/`IM2=` pixel-encoding byte runs the full
+`0x20`-`0xFF`, one byte each, so a lone byte above `0x7F` is essentially never valid standalone UTF-8: decoding
+replaced it with `U+FFFD`, and re-encoding that to UTF-8 did not reproduce the original bytes. **Measured on 69 of
+the owner's own 798 real `.info` icons** (`docs/STATUS.md`'s `lossy_tooltypes=69`).
+**Fixed:** both ends now decode and encode as Latin-1 — a private `latin1_decode`/`latin1_encode` pair in
+`core/amigaicon/mod.rs`, the identity cast on code points `0..=255` `core/adf/bcpl.rs` already uses for BCPL
+strings (ART-074) and `core/osinstall/apply.rs::latin1_decode`/`latin1_encode` reimplements independently for
+`S/User-Startup` text — kept as a third, private copy here rather than importing `core::adf::bcpl`, matching
+`apply.rs`'s own choice, because each field's encode behaviour on a character with no Latin-1 byte differs.
+**`set_tooltypes` refuses a character above `U+00FF` by name** (index and text) rather than substituting `?`
+the way `bcpl.rs` does for names — the design point the owner approved, safe because `set_tooltypes` has no
+production caller today (research §1/§5), so no live write could be broken by a refusal, and a future in-tree
+caller composing Turkish (ISO-8859-9, not ISO-8859-1) tool-type text would otherwise get a silent `?` for `ş`,
+`ğ`, `ı`, `İ`. Uses `CoreError::InvalidInput`, the variant that already fits a refused caller input, not
+`CoreError::Malformed` (a *file* that doesn't parse). Three new unit tests in `core/amigaicon/mod.rs`:
+`a_newicon_tooltype_with_high_bytes_round_trips_byte_identical`, `a_latin1_high_byte_decodes_to_its_character`,
+`set_tooltypes_refuses_a_character_with_no_latin1_byte` — each run red before the fix (from_utf8_lossy substituted
+`U+FFFD`; `set_tooltypes` wrote UTF-8 and never refused) and green after. Three mutations, each backed up,
+grep-confirmed and restored (never `git checkout --`): reverting the decode to `from_utf8_lossy` turned the
+round-trip and `é` tests red; encoding with plain `as_bytes()` turned the round-trip and refusal tests red;
+substituting `?` instead of refusing turned only the refusal test red. `cargo fmt --check` and
+`cargo clippy --all-targets -- -D warnings` both clean; `cargo test --lib` run twice, `3326 passed; 0 failed; 59
+ignored` both times; `scripts/control-byte-sweep.py` clean.
+**Oracle, both directions, against the owner's own `E:\amiga\Amigatolon\os39`** (798 real `.info` files, read
+only — the script stages extracted copies under `ART_SCRATCH`, never writes into the source folder): **before**
+(original code, restored from `git show HEAD:...` for the measurement) — `checked=798 failed=0 no_tooltypes=464
+no_drawer_data=702 no_drawer_data2=0 lossy_tooltypes=69`, matching `docs/STATUS.md`'s prior figure exactly;
+**after** — `checked=798 failed=0 no_tooltypes=464 no_drawer_data=702 no_drawer_data2=0`, the `lossy_tooltypes`
+bucket gone because nothing falls into it any more: `set_tooltypes(bytes, tooltypes(bytes))` is now
+byte-identical for all 798 icons, the 69 formerly-lossy ones included. The oracle's own `#[ignore]`d Rust test
+(`round_trip_every_icon_in_a_folder_when_asked`) and `scripts/icon-oracle-check.py` (the `lossy_tooltypes`
+parsing and its explanatory paragraph removed, since the field the test used to print is gone) were both updated
+and both re-run. **Removed**, having nothing left to measure: the `tooltypes_round_trip_losslessly` helper and
+the oracle test's `lossy_tooltypes` counter/branch.
+**Not claimed:** no production code calls `set_tooltypes` today (confirmed in the research note), so this fix
+has no user-visible effect yet and `CHANGELOG.md` is not touched — the defect was real and measured, but nothing
+a user could see was wrong. Also not claimed: the AmigaOS ROM Kernel Reference Manual's own ToolTypes section and
+icon.library's source were not directly read (research note, "What was not independently verified").
 
 **ART-319** 🔵 ✅ **An error part-way through a PFS3 writer operation leaves pending writes and in-memory
 index/superindex/deldir state for the next commit** — *found 2026-09-14 while implementing ART-315; widened

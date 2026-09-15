@@ -48,6 +48,7 @@ pub mod pistorm;
 pub mod preload;
 pub mod profile;
 pub mod rdb;
+pub mod rdbedit;
 pub mod recovery;
 pub mod rom;
 pub mod safety;

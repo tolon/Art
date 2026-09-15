@@ -23,17 +23,21 @@
 // arrives here first is not sent to Settings and back.
 
 import { useEffect, useRef, useState } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { cardOpen, type CardReport } from "@/lib/card";
 import {
+  backupDefaultName,
+  embedDetailPhrases,
+  embeddedPhrase,
   fallbackPhrase,
   formatCount,
   onPreloadResult,
   pairingLines,
   picksFor,
   copiedPhrase,
+  planNotePhrase,
   plannedToolPhrase,
   preloadBlocker,
   preloadPlan,
@@ -99,6 +103,12 @@ export function VolumePreload() {
    * hazard. The card is remembered, what to destroy on it is not.
    */
   const [picks, setPicks] = useState<PartitionPick[]>([]);
+  /**
+   * Where the RDB area is copied before an edit (ART-117, decision 7).
+   * **Not remembered**, like `picks`: a remembered path would meet the file
+   * the previous run made and be refused as already existing.
+   */
+  const [rdbBackup, setRdbBackup] = useState<string | null>(null);
   const [plan, setPlan] = useState<PreloadPlan | null>(null);
   const [confirmed, setConfirmed] = useState(false);
   const [tool, setTool] = useState<FormatterReport | null>(null);
@@ -135,7 +145,7 @@ export function VolumePreload() {
     };
   }, [imagePath]);
 
-  const request = toRequest(imagePath ?? "", driver, picks);
+  const request = toRequest(imagePath ?? "", driver, picks, rdbBackup);
 
   // A plan describes the request that produced it. Change any of the request
   // and the plan on screen stops being true — so it goes, and the confirmation
@@ -212,9 +222,18 @@ export function VolumePreload() {
     const picked = await open({
       multiple: false,
       title: t("preload.driver.chooseTitle"),
-      filters: [{ name: "Filesystem driver", extensions: ["lha", "bin", ""] }],
+      filters: [{ name: "Filesystem driver", extensions: ["bin", ""] }],
     });
     if (typeof picked === "string") setDriver(picked);
+  }
+
+  async function chooseBackup() {
+    const picked = await save({
+      title: t("preload.backup.chooseTitle"),
+      defaultPath: backupDefaultName(imagePath ?? "card.img"),
+      filters: [{ name: "RDB backup", extensions: ["bin"] }],
+    });
+    if (typeof picked === "string") setRdbBackup(picked);
   }
 
   async function chooseContent(at: number) {
@@ -258,9 +277,9 @@ export function VolumePreload() {
   }
 
   async function apply() {
-    // `blocker` covers this too (including the conditional tool
-    // requirement), but the button already disables on it — this guards a
-    // direct call and keeps the two checks in one place.
+    // `blocker` covers this too (including the RDB backup an edit needs),
+    // but the button already disables on it — this guards a direct call and
+    // keeps the two checks in one place.
     if (blocker) return;
     setBusy(true);
     setError(null);
@@ -274,7 +293,7 @@ export function VolumePreload() {
     }
   }
 
-  const blocker = preloadBlocker({ image: imagePath, toolPath, picks, plan });
+  const blocker = preloadBlocker({ image: imagePath, rdbBackup, picks, plan });
   const erases = plan ? formatCount(plan) : 0;
 
   return (
@@ -367,6 +386,20 @@ export function VolumePreload() {
           onClear={driver ? () => setDriver(null) : undefined}
           clear={t("common.clear")}
         />
+
+        {driver && (
+          <Field
+            label={t("preload.backup.label")}
+            value={rdbBackup}
+            empty={t("preload.backup.none")}
+            onChoose={() => void chooseBackup()}
+            choose={t("common.browse")}
+            hint={t("preload.backup.hint")}
+            onClear={rdbBackup ? () => setRdbBackup(null) : undefined}
+            clear={t("common.clear")}
+            testId="preload-rdb-backup"
+          />
+        )}
       </section>
 
       <section className="card" style={{ marginBottom: 16 }}>
@@ -517,10 +550,28 @@ export function VolumePreload() {
                   <span className="faint" style={{ marginLeft: 6 }}>
                     — {t(toolPhrase.key, toolPhrase.params)}
                   </span>
+                  {embedDetailPhrases(step, plan).map((detail, line) => (
+                    <div key={line} className="faint" style={{ fontSize: 11, marginLeft: 12 }}>
+                      {t(detail.key, detail.params)}
+                    </div>
+                  ))}
                 </li>
               );
             })}
           </ol>
+
+          {plan.notes.map((note, index) => {
+            const phrase = planNotePhrase(note);
+            return (
+              <p
+                key={`note-${index}`}
+                className="badge badge-warn"
+                style={{ display: "block", fontSize: 12, margin: "8px 0 0" }}
+              >
+                {t(phrase.key, phrase.params)}
+              </p>
+            );
+          })}
 
           {/* One line per folder that has something to say, named by the
               drive it is going onto — a proper noun the card supplied, so it
@@ -572,23 +623,51 @@ export function VolumePreload() {
 
       {result && (
         <section className="card" style={{ marginBottom: 16 }}>
-          <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("preload.result.heading")}</h2>
-          <p style={{ fontSize: 12, margin: "4px 0 8px" }}>
-            {t("preload.result.formatted", {
-              volumes: result.outcome.formatted.join(", "),
-            })}
-          </p>
-          <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
-            {(() => {
-              const phrase = copiedPhrase(result.outcome.copied);
-              return t(phrase.key, phrase.params);
-            })()}
-          </p>
+          <h2 style={{ fontSize: 16, marginTop: 0 }}>
+            {result.stopped ? t("preload.result.stoppedHeading") : t("preload.result.heading")}
+          </h2>
+          {/* Final review I3: a run that stopped after changing the card's
+              RDB says it stopped, and why, before what it had done. */}
+          {result.stopped && (
+            <p
+              className="badge badge-err"
+              style={{ display: "block", padding: "6px 12px", fontSize: 12, margin: "4px 0 8px" }}
+            >
+              {errorText(t, new Error(`${result.stopped.message} (${result.stopped.code})`))}
+            </p>
+          )}
+          {(!result.stopped || result.outcome.formatted.length > 0) && (
+            <p style={{ fontSize: 12, margin: "4px 0 8px" }}>
+              {t("preload.result.formatted", {
+                volumes: result.outcome.formatted.join(", "),
+              })}
+            </p>
+          )}
+          {(!result.stopped || result.outcome.copied.files > 0) && (
+            <p className="muted" style={{ fontSize: 12, margin: "0 0 8px" }}>
+              {(() => {
+                const phrase = copiedPhrase(result.outcome.copied);
+                return t(phrase.key, phrase.params);
+              })()}
+            </p>
+          )}
           {result.outcome.tool && (
             <p className="faint" style={{ fontSize: 11, margin: "0 0 8px" }}>
               {t("preload.result.tool", { version: result.outcome.tool.raw })}
             </p>
           )}
+          {result.outcome.embedded &&
+            (() => {
+              const phrase = embeddedPhrase(result.outcome.embedded, result.stopped !== null);
+              return (
+                <p
+                  className={result.stopped ? "badge badge-warn" : undefined}
+                  style={{ display: "block", fontSize: 12, margin: "0 0 8px" }}
+                >
+                  {t(phrase.key, phrase.params)}
+                </p>
+              );
+            })()}
           {/* ART-120: which tool ran which step, and why, whenever it was
               not the default — never silent about a fallback. */}
           {result.steps.length > 0 && (

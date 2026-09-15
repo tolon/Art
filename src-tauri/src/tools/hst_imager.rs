@@ -152,26 +152,6 @@ pub fn partition_target(image: &Path, slot: Option<usize>, drive_name: &str) -> 
     )
 }
 
-pub fn import_args(
-    image: &Path,
-    slot: Option<usize>,
-    driver: &Path,
-    dostype: &str,
-    name: &str,
-) -> Vec<String> {
-    vec![
-        "rdb".into(),
-        "fs".into(),
-        "import".into(),
-        disk_target(image, slot),
-        driver.display().to_string(),
-        "--dos-type".into(),
-        dostype.into(),
-        "--name".into(),
-        name.into(),
-    ]
-}
-
 pub fn format_args(image: &Path, slot: Option<usize>, index: usize, volume: &str) -> Vec<String> {
     vec![
         "rdb".into(),
@@ -271,19 +251,6 @@ impl VolumeFormatter for HstImager {
         Ok(ToolVersion { raw })
     }
 
-    fn import_filesystem(
-        &self,
-        image: &Path,
-        slot: Option<usize>,
-        driver: &Path,
-        dostype: &str,
-        name: &str,
-        sink: &dyn ProgressSink,
-    ) -> CoreResult<()> {
-        self.run(&import_args(image, slot, driver, dostype, name), sink)?;
-        Ok(())
-    }
-
     fn format_partition(
         &self,
         image: &Path,
@@ -350,7 +317,7 @@ mod tests {
     /// tree stores as `_AUX` would reach the Amiga under that name.
     /// `NativeFormatter` reads the tree's manifest and puts `AUX` back; this
     /// one has no way to be told, which makes it a typed capability gap of
-    /// the same kind as `ForeignRdbEmbedNotSupported`, only with the default
+    /// the same kind as `NonAsciiPfs3Names`, only with the default
     /// and the fallback the other way round.
     #[test]
     fn a_tree_with_escaped_names_is_refused_before_the_tool_runs() {
@@ -381,21 +348,6 @@ mod tests {
     /// flag ART invented is the mistake ART-091 and ART-103 both were.
     #[test]
     fn the_arguments_are_the_ones_sd0_verified() {
-        let driver = PathBuf::from("pfs3aio.lha");
-        assert_eq!(
-            import_args(&img(), None, &driver, "PDS3", "pfs3aio"),
-            vec![
-                "rdb",
-                "fs",
-                "import",
-                &img().display().to_string(),
-                "pfs3aio.lha",
-                "--dos-type",
-                "PDS3",
-                "--name",
-                "pfs3aio",
-            ]
-        );
         assert_eq!(
             format_args(&img(), None, 1, "Work"),
             vec![

@@ -21,8 +21,8 @@
 //! cannot do the job, and when it cannot, ART falls back and says which tool
 //! did which step and why.
 //!
-//! **Two, and only two, known capability gaps make the native path fall
-//! back** — both filed, neither guessed at:
+//! **One known capability gap makes the native path fall back** — filed, not
+//! guessed at:
 //!
 //! - **ART-113**: `libpfs3` 0.1.3 writes a name as UTF-8 and reads it back as
 //!   Latin-1, so any non-ASCII AmigaDOS name cannot round-trip.
@@ -30,14 +30,16 @@
 //!   (`core::preload::native::non_ascii_entries`) refuses with
 //!   [`CoreError::NonAsciiPfs3Names`] before the PFS3 volume is even opened —
 //!   nothing is written by the failed attempt.
-//! - **ART-117**: embedding a filesystem driver into an existing card's RDB
-//!   in place needs to edit a partition table ART did not build.
-//!   `NativeFormatter::import_filesystem` refuses unconditionally, for every
-//!   card, with [`CoreError::ForeignRdbEmbedNotSupported`], before touching
-//!   the image at all.
 //!
-//! Both refusals are therefore safe to treat as "try the other tool": the
+//! That refusal is therefore safe to treat as "try the other tool": the
 //! attempt that failed left nothing behind to clean up or roll back.
+//!
+//! **Embedding a driver has no fallback (ART-117).** Appending or replacing a
+//! driver in a card's existing RDB is ART's own editor
+//! (`core::preload::embed`) and runs whatever tool is configured. hst-imager
+//! rewrites the whole RDB chain, RDSK first, with no backup — the approach the
+//! owner rejected — so a refusal names it and the user decides; ART never runs
+//! it on their behalf.
 //!
 //! ## ART-122 — the unit of that choice is a partition, not a step
 //!
@@ -70,9 +72,10 @@ use tauri::{AppHandle, Emitter, State};
 use crate::core::card::manifest::{manifest_path_for, read_manifest};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::{JobTitle, ProgressSink};
-use crate::core::oplog::{JsonlOperationLog, OperationOutcome};
+use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::MANIFEST_FILE_NAME;
 use crate::core::osinstall::PairedRom;
+use crate::core::preload::embed::EmbedReport;
 use crate::core::preload::native::NativeFormatter;
 use crate::core::preload::VolumeFormatter;
 use crate::core::preload::{
@@ -113,8 +116,8 @@ pub fn preload_probe(tool_path: String) -> AppResult<FormatterReport> {
 /// The request a screen sends, with where the tool is.
 ///
 /// `tool_path` is no longer required to be set (ART-120): it names where
-/// `hst-imager` is, needed only as a fallback for the two gaps
-/// [`FallbackReason`] enumerates. An empty or blank string means "not
+/// `hst-imager` is, needed only as a fallback for the one gap
+/// [`FallbackReason`] names (ART-113). An empty or blank string means "not
 /// configured", the same convention the rest of ART's `hst-imager` settings
 /// already use.
 #[derive(Debug, Clone, Deserialize)]
@@ -220,15 +223,14 @@ pub struct StepReport {
 /// Why one step ran on the fallback tool instead of natively. A value, never
 /// a sentence (ART-060) — `src/lib/preload.ts::fallbackPhrase` translates it.
 ///
-/// Exactly two variants, matching the two capability gaps this module's own
-/// doc comment names. Nothing else ever falls back: a real failure (out of
-/// space, a malformed image) is returned as-is rather than silently retried
-/// on another tool, which would risk running the same destructive step twice.
+/// One capability gap (ART-113) and the pairing it forces on a format
+/// (ART-122) — the only reasons this module names. Nothing else ever falls
+/// back: a real failure (out of space, a malformed image) is returned as-is
+/// rather than silently retried on another tool, which would risk running the
+/// same destructive step twice.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "reason", rename_all = "kebab-case")]
 pub enum FallbackReason {
-    /// ART-117.
-    ForeignRdbEmbed,
     /// ART-113. Carries the same detail the refused
     /// [`CoreError::NonAsciiPfs3Names`] did, so the screen can say which
     /// names without re-deriving them.
@@ -244,7 +246,7 @@ pub enum FallbackReason {
 }
 
 impl FallbackReason {
-    /// Whether a native failure is one of the two known capability gaps —
+    /// Whether a native failure is the known capability gap (ART-113) —
     /// and so safe to retry with the fallback tool — or a real failure that
     /// must not be silently retried.
     ///
@@ -258,7 +260,6 @@ impl FallbackReason {
     /// twice.
     fn from_native_error(err: &CoreError) -> Option<Self> {
         match err {
-            CoreError::ForeignRdbEmbedNotSupported => Some(Self::ForeignRdbEmbed),
             CoreError::NonAsciiPfs3Names { paths, more } => Some(Self::NonAsciiPfs3Names {
                 paths: paths.clone(),
                 more: *more,
@@ -271,12 +272,6 @@ impl FallbackReason {
     /// as-is; `src/lib/preload.ts::fallbackPhrase` is the translated form.
     fn detail(&self) -> String {
         match self {
-            Self::ForeignRdbEmbed => {
-                "embedding a filesystem driver into this card's existing RDB in place needs to \
-                 edit a partition table ART did not build, which ART's own writer cannot do \
-                 safely (ART-117)"
-                    .to_string()
-            }
             Self::NonAsciiPfs3Names { paths, more } => format!(
                 "{} non-ASCII name(s) cannot be written to a PFS3 volume by this version of \
                  libpfs3 (ART-113): {}{}",
@@ -305,6 +300,25 @@ pub struct PreloadResult {
     /// Which tool performed each step, and why, when it was not the default.
     /// See this module's own doc comment: never silent, for every step.
     pub steps: Vec<StepReport>,
+    /// Set when the run stopped after changing the card's RDB (final review
+    /// I3): the error it stopped with, so the result panel can say the run
+    /// did not finish while still saying what it did to the RDB.
+    pub stopped: Option<StopReport>,
+}
+
+/// Why a run stopped: the job's own error, its sentence and its id.
+#[derive(Debug, Clone, Serialize)]
+pub struct StopReport {
+    pub code: String,
+    pub message: String,
+}
+
+/// A run that stopped, with what it had done and which tool did each step.
+#[derive(Debug)]
+struct Stopped {
+    error: CoreError,
+    outcome: PreloadOutcome,
+    steps: Vec<StepReport>,
 }
 
 /// What one step changed, so [`run_with_fallback`] can fold it into a
@@ -313,6 +327,7 @@ enum StepEffect {
     None,
     Formatted(String),
     Copied(CopySummary),
+    Embedded(EmbedReport),
 }
 
 fn apply_effect(outcome: &mut PreloadOutcome, effect: StepEffect) {
@@ -320,6 +335,7 @@ fn apply_effect(outcome: &mut PreloadOutcome, effect: StepEffect) {
         StepEffect::None => {}
         StepEffect::Formatted(drive_name) => outcome.formatted.push(drive_name),
         StepEffect::Copied(summary) => outcome.copied.absorb(&summary),
+        StepEffect::Embedded(report) => outcome.embedded = Some(report),
     }
 }
 
@@ -327,28 +343,29 @@ fn apply_effect(outcome: &mut PreloadOutcome, effect: StepEffect) {
 /// turned into a [`VolumeFormatter`] call, so both the native attempt and a
 /// fallback attempt go through the identical mapping.
 fn run_step(
-    image: &Path,
+    made: &PreloadPlan,
     step: &PreloadStep,
     formatter: &dyn VolumeFormatter,
     sink: &dyn ProgressSink,
 ) -> CoreResult<StepEffect> {
+    // An RDB edit is ART's own, whichever formatter is asked (ART-117).
+    if let Some(target) = step.embed_target(&made.image) {
+        let report = crate::core::preload::embed::run(target, made.rdb_backup.as_deref(), sink)?;
+        return Ok(StepEffect::Embedded(report));
+    }
     match step {
-        PreloadStep::ImportFilesystem {
-            slot,
-            driver,
-            dostype,
-            name,
-        } => {
-            formatter.import_filesystem(image, *slot, driver, dostype, name, sink)?;
-            Ok(StepEffect::None)
-        }
+        // `embed_target` answers for both edit steps; this arm exists for the
+        // compiler, and panicking here would abort the process.
+        PreloadStep::ImportFilesystem { .. } | PreloadStep::ReplaceFilesystem { .. } => Err(
+            CoreError::InvalidInput("an RDB edit step ART could not read as an edit".into()),
+        ),
         PreloadStep::FormatPartition {
             slot,
             index,
             drive_name,
             volume_name,
         } => {
-            formatter.format_partition(image, *slot, *index, volume_name, sink)?;
+            formatter.format_partition(&made.image, *slot, *index, volume_name, sink)?;
             Ok(StepEffect::Formatted(drive_name.clone()))
         }
         PreloadStep::CopyIn {
@@ -356,7 +373,7 @@ fn run_step(
             drive_name,
             source,
         } => {
-            let summary = formatter.copy_in(image, *slot, drive_name, source, sink)?;
+            let summary = formatter.copy_in(&made.image, *slot, drive_name, source, sink)?;
             Ok(StepEffect::Copied(summary))
         }
     }
@@ -426,14 +443,13 @@ fn paired_copy_forces_fallback(
 }
 
 /// Run a plan, giving the native path first refusal on every step and
-/// falling back to `hst-imager` only for the two known capability gaps
-/// (ART-113, ART-117) — never for a real failure.
+/// falling back to `hst-imager` only for the one known capability gap
+/// (ART-113) — never for a real failure.
 ///
 /// **Per partition, chosen here rather than once for the whole run.** A
-/// preload's three kinds of step have different needs: `ImportFilesystem`
-/// always needs the fallback (`NativeFormatter` refuses it unconditionally,
-/// for every card — ART-117), while `FormatPartition` and almost every
-/// `CopyIn` run natively; only a `CopyIn` whose source tree carries a
+/// preload's kinds of step have different needs: the two RDB edits are ART's
+/// own and never fall back (ART-117), while `FormatPartition` and almost
+/// every `CopyIn` run natively; only a `CopyIn` whose source tree carries a
 /// non-ASCII AmigaDOS name onto a PFS3 partition needs the fallback too
 /// (ART-113), and that is a fact about *that partition's own content*, not
 /// about the run as a whole.
@@ -441,9 +457,8 @@ fn paired_copy_forces_fallback(
 /// A run-level choice — probe once, then use one formatter for every step —
 /// was the alternative, and it is simpler, but it is wrong in both
 /// directions: a single accented folder name anywhere in a large tree would
-/// force every other partition's steps onto `hst-imager` too; and a run that
-/// has to import one driver would waste the native path for every step after
-/// it, even though only that one step needed the fallback.
+/// force every other partition's steps onto `hst-imager` too; and a run with
+/// one such copy would waste the native path for every other partition.
 ///
 /// **The unit is a partition, not a step (ART-122).** Formatting a volume
 /// with one implementation and filling it with the other does not work:
@@ -459,21 +474,41 @@ fn paired_copy_forces_fallback(
 /// configured, the run refuses **before** the partition is erased rather
 /// than after.
 ///
-/// This is safe specifically because both known gaps are refused **before**
-/// any byte is written: `import_filesystem` never opens the image, and the
-/// ART-113 check runs before `FileRegionMut::open` (see
-/// `core::preload::native`'s own module docs) whether it is reached through
-/// `copy_in` or `can_copy_in`. So trying native first and reacting to exactly
-/// these two typed errors never leaves a half-written step behind — the
+/// This is safe specifically because the known gap is refused **before**
+/// any byte is written: the ART-113 check runs before `FileRegionMut::open`
+/// (see `core::preload::native`'s own module docs) whether it is reached
+/// through `copy_in` or `can_copy_in`. So trying native first and reacting
+/// to exactly this typed error never leaves a half-written step behind — the
 /// failed attempt touched nothing.
 fn run_with_fallback(
     made: &PreloadPlan,
     native: &dyn VolumeFormatter,
     fallback: Option<&dyn VolumeFormatter>,
     sink: &dyn ProgressSink,
-) -> CoreResult<(PreloadOutcome, Vec<StepReport>)> {
+) -> Result<(PreloadOutcome, Vec<StepReport>), Box<Stopped>> {
     let mut outcome = PreloadOutcome::default();
     let mut reports = Vec::new();
+    match run_steps_with_fallback(made, native, fallback, sink, &mut outcome, &mut reports) {
+        Ok(()) => Ok((outcome, reports)),
+        // Boxed, as `core::preload::RunStopped` is (clippy::result_large_err).
+        Err(error) => Err(Box::new(Stopped {
+            error,
+            outcome,
+            steps: reports,
+        })),
+    }
+}
+
+/// [`run_with_fallback`]'s loop, each finished step folded into `outcome`
+/// and `reports` as it goes, so a stop still has what was done.
+fn run_steps_with_fallback(
+    made: &PreloadPlan,
+    native: &dyn VolumeFormatter,
+    fallback: Option<&dyn VolumeFormatter>,
+    sink: &dyn ProgressSink,
+    outcome: &mut PreloadOutcome,
+    reports: &mut Vec<StepReport>,
+) -> CoreResult<()> {
     // Which tool(s) actually did work, so the summary line above the
     // per-step list can never claim a single tool when the steps disagree
     // (fix-wave finding 4: this used to be `native.probe().ok()`
@@ -497,18 +532,18 @@ fn run_with_fallback(
             let Some(fallback) = fallback else {
                 return Err(missing_tool_error(&reason, step));
             };
-            let effect = run_step(&made.image, step, fallback, sink)?;
+            let effect = run_step(made, step, fallback, sink)?;
             used_fallback = true;
             reports.push(StepReport {
                 step: step.clone(),
                 tool: tool_name_of(Some(fallback)),
                 fallback_reason: Some(reason),
             });
-            apply_effect(&mut outcome, effect);
+            apply_effect(outcome, effect);
             continue;
         }
 
-        let native_err = match run_step(&made.image, step, native, sink) {
+        let native_err = match run_step(made, step, native, sink) {
             Ok(effect) => {
                 reports.push(StepReport {
                     step: step.clone(),
@@ -516,7 +551,7 @@ fn run_with_fallback(
                     fallback_reason: None,
                 });
                 used_native = true;
-                apply_effect(&mut outcome, effect);
+                apply_effect(outcome, effect);
                 continue;
             }
             Err(err) => err,
@@ -533,14 +568,14 @@ fn run_with_fallback(
             return Err(missing_tool_error(&reason, step));
         };
 
-        let effect = run_step(&made.image, step, fallback, sink)?;
+        let effect = run_step(made, step, fallback, sink)?;
         used_fallback = true;
         reports.push(StepReport {
             step: step.clone(),
             tool: tool_name_of(Some(fallback)),
             fallback_reason: Some(reason),
         });
-        apply_effect(&mut outcome, effect);
+        apply_effect(outcome, effect);
     }
 
     // Only claim a tool here when every step that ran agreed on one — a
@@ -553,7 +588,7 @@ fn run_with_fallback(
     };
 
     sink.report(total, Some(total), "done");
-    Ok((outcome, reports))
+    Ok(())
 }
 
 /// One line per step where the fallback fired, for the operation log — the
@@ -577,11 +612,103 @@ fn fallback_summary(reports: &[StepReport]) -> Option<String> {
     }
 }
 
+/// The operation log's line for an RDB edit (§53).
+fn embed_summary(report: &EmbedReport) -> String {
+    let what = match report.card_version {
+        Some(card) => format!(
+            "{} {card} replaced by {}",
+            report.dostype, report.file_version
+        ),
+        None => format!("{} {} embedded", report.dostype, report.file_version),
+    };
+    let raised = report
+        .rdb_blocks_hi_raised
+        .map(|[from, to]| format!("; RDBBlocksHi raised from {from} to {to}"))
+        .unwrap_or_default();
+    format!(
+        "{what} in RDB blocks {}–{}{raised}",
+        report.first_block, report.last_block
+    )
+}
+
 /// Format the partitions and copy the content in. Returns a job id (§54).
 ///
 /// The plan is recomputed here rather than taken from the caller: a screen
 /// that previewed one thing must not be able to run another, and the card may
 /// have changed since.
+/// The operation log's record for a run (section 53): what was formatted and
+/// with which tool, which tool did which step when it was not the default,
+/// and the RDB edit.
+fn run_record(
+    image: &str,
+    made: &PreloadPlan,
+    result: &Result<(PreloadOutcome, Vec<StepReport>), Box<Stopped>>,
+) -> OperationRecord {
+    let record = user_operation("Format and fill Amiga volumes")
+        .source(image)
+        .destination(image)
+        .detail("Partitions formatted", made.formats().to_string());
+    match result {
+        Ok((done, reports)) => {
+            let record = record
+                .detail("Volumes", done.formatted.join(", "))
+                .detail("Files copied", done.copied.files.to_string())
+                .detail(
+                    "Tool",
+                    done.tool
+                        .as_ref()
+                        .map(|t| t.raw.clone())
+                        .unwrap_or_else(|| "unknown".into()),
+                );
+            let record = match fallback_summary(reports) {
+                Some(summary) => record.detail("Fallback", summary),
+                None => record,
+            };
+            // **Not verified, and it says so.** ART has no PFS3 reader here,
+            // so the files inside the volume cannot be read back.
+            with_embed(record, done.embedded.as_ref()).outcome(OperationOutcome::verified(false))
+        }
+        // Final review I3: a run that stopped still logs what it had changed
+        // — the volumes it erased and the RDB edit — beside the failure.
+        Err(stopped) => {
+            let record = match stopped.outcome.formatted.is_empty() {
+                true => record,
+                false => record.detail("Volumes", stopped.outcome.formatted.join(", ")),
+            };
+            let record = with_embed(record, stopped.outcome.embedded.as_ref());
+            record.failure(stopped.error.code(), stopped.error.to_string())
+        }
+    }
+}
+
+/// The driver and RDB-backup lines, when the run changed the card's RDB.
+fn with_embed(record: OperationRecord, embedded: Option<&EmbedReport>) -> OperationRecord {
+    match embedded {
+        Some(embedded) => record
+            .detail("Driver", embed_summary(embedded))
+            .detail("RDB backup", embedded.backup.display().to_string()),
+        None => record,
+    }
+}
+
+/// What the screen is sent for a run that stopped **after changing the
+/// card's RDB** (final review I3), so the result panel can say the change
+/// stays and where the backup is. A stop that changed no RDB sends nothing,
+/// as before: the job bar's failure is the whole story there.
+fn stopped_result(job_id: u64, image: String, stopped: &Stopped) -> Option<PreloadResult> {
+    stopped.outcome.embedded.as_ref()?;
+    Some(PreloadResult {
+        job_id,
+        image,
+        outcome: stopped.outcome.clone(),
+        steps: stopped.steps.clone(),
+        stopped: Some(StopReport {
+            code: stopped.error.code().to_string(),
+            message: stopped.error.to_string(),
+        }),
+    })
+}
+
 #[tauri::command]
 pub fn preload_run(
     command: PreloadCommand,
@@ -600,6 +727,7 @@ pub fn preload_run(
     // Refuse here, on the command thread, rather than inside the job: a bad
     // partition number is not something to discover after the first format.
     let made = plan(&command.request)?;
+    made.ready_to_run()?;
 
     let log_path = oplog.path().to_path_buf();
     let registry = Arc::clone(&registry);
@@ -621,47 +749,32 @@ pub fn preload_run(
         // §53. A format destroys what was there, so what was formatted and
         // with which tool are the two things the log has to carry — and now,
         // which tool did which step, when it was not the default.
-        let record = user_operation("Format and fill Amiga volumes")
-            .source(&for_log)
-            .destination(&for_log)
-            .detail("Partitions formatted", made.formats().to_string());
-        let record = match &run_result {
-            Ok((done, reports)) => {
-                let record = record
-                    .detail("Volumes", done.formatted.join(", "))
-                    .detail("Files copied", done.copied.files.to_string())
-                    .detail(
-                        "Tool",
-                        done.tool
-                            .as_ref()
-                            .map(|t| t.raw.clone())
-                            .unwrap_or_else(|| "unknown".into()),
-                    );
-                let record = match fallback_summary(reports) {
-                    Some(summary) => record.detail("Fallback", summary),
-                    None => record,
-                };
-                // **Not verified, and it says so.** ART has no PFS3 reader
-                // here, so the files inside the volume cannot be read back.
-                // Claiming verification here would be the one thing §89
-                // forbids.
-                record.outcome(OperationOutcome::verified(false))
-            }
-            Err(err) => record.failure(err.code(), err.to_string()),
-        };
-        write_to_path(&log_path, &record);
+        write_to_path(&log_path, &run_record(&for_log, &made, &run_result));
 
-        let (outcome, steps) = run_result?;
-        let _ = emit_app.emit(
-            PRELOAD_EVENT,
-            PreloadResult {
-                job_id,
-                image: for_log,
-                outcome,
-                steps,
-            },
-        );
-        Ok(())
+        match run_result {
+            Ok((outcome, steps)) => {
+                let _ = emit_app.emit(
+                    PRELOAD_EVENT,
+                    PreloadResult {
+                        job_id,
+                        image: for_log,
+                        outcome,
+                        steps,
+                        stopped: None,
+                    },
+                );
+                Ok(())
+            }
+            // Final review I3: a run that stopped after changing the card's
+            // RDB still tells the screen so; the job itself fails with the
+            // stop's own error, which the job bar shows.
+            Err(stopped) => {
+                if let Some(result) = stopped_result(job_id, for_log, &stopped) {
+                    let _ = emit_app.emit(PRELOAD_EVENT, result);
+                }
+                Err(stopped.error)
+            }
+        }
     });
 
     Ok(id)
@@ -904,6 +1017,7 @@ mod tests {
         assert_eq!(command.request.partitions[0].area, 1);
         assert_eq!(command.request.partitions[0].volume_name, "Work");
         assert_eq!(command.request.partitions[0].content, None);
+        assert_eq!(command.request.rdb_backup, None, "absent is None");
 
         // And the two the screen fills in when the user does: a driver to
         // embed, and a folder whose tree goes in.
@@ -911,6 +1025,7 @@ mod tests {
             r#"{"image":"card.img",
                 "driver":"E:\\amiga\\pfs3aio.lha",
                 "partitions":[{"area":2,"index":3,"volume_name":"Games","content":"E:\\tree"}],
+                "rdb_backup":"E:\\amiga\\card-rdb-backup.bin",
                 "tool_path":"hst.imager.exe"}"#,
         )
         .expect("the same shape with every optional filled");
@@ -923,6 +1038,10 @@ mod tests {
         assert_eq!(
             filled.request.partitions[0].content,
             Some(std::path::PathBuf::from("E:\\tree"))
+        );
+        assert_eq!(
+            filled.request.rdb_backup,
+            Some(std::path::PathBuf::from("E:\\amiga\\card-rdb-backup.bin"))
         );
 
         // **ART-120**: an empty `tool_path` deserialises fine — the field is
@@ -972,6 +1091,7 @@ mod tests {
                     volume_name: "Work".into(),
                     content: None,
                 }],
+                rdb_backup: None,
             },
             tool_path: "hst.imager".into(),
         })
@@ -998,39 +1118,27 @@ mod tests {
     /// everything, and can be told to fail one call in a specific,
     /// [`CoreError`]-typed way. The same shape `core::preload::mod`'s own
     /// `Recorder` uses, kept local here because this module's tests need to
-    /// fail with *specific* variants (`ForeignRdbEmbedNotSupported`,
-    /// `NonAsciiPfs3Names`) that one does not need to produce.
+    /// fail with *specific* variants (`NonAsciiPfs3Names`,
+    /// `Io`) that one does not need to produce.
     #[derive(Default)]
     struct Recorder {
         calls: std::cell::RefCell<Vec<String>>,
-        import_fails_with: Option<fn() -> CoreError>,
+        /// What `probe` reports itself as; `None` defaults to `"recorder-tool"`.
+        probe_as: Option<&'static str>,
         /// What this formatter says it cannot copy — answered by both
         /// `can_copy_in` (asked before the format, ART-122) and `copy_in`
         /// itself, from one field, so a double cannot claim it could do a
         /// copy it then refuses.
         copy_fails_with: Option<fn() -> CoreError>,
+        /// What `format_partition` fails with, after recording the call.
+        format_fails_with: Option<fn() -> CoreError>,
     }
 
     impl VolumeFormatter for Recorder {
         fn probe(&self) -> CoreResult<ToolVersion> {
             Ok(ToolVersion {
-                raw: "recorder-tool".into(),
+                raw: self.probe_as.unwrap_or("recorder-tool").into(),
             })
-        }
-        fn import_filesystem(
-            &self,
-            _i: &Path,
-            _slot: Option<usize>,
-            _d: &Path,
-            _dostype: &str,
-            name: &str,
-            _s: &dyn ProgressSink,
-        ) -> CoreResult<()> {
-            self.calls.borrow_mut().push(format!("import {name}"));
-            match self.import_fails_with {
-                Some(make_err) => Err(make_err()),
-                None => Ok(()),
-            }
         }
         fn format_partition(
             &self,
@@ -1043,7 +1151,10 @@ mod tests {
             self.calls
                 .borrow_mut()
                 .push(format!("format {index} {volume}"));
-            Ok(())
+            match self.format_fails_with {
+                Some(make_err) => Err(make_err()),
+                None => Ok(()),
+            }
         }
         fn copy_in(
             &self,
@@ -1080,6 +1191,8 @@ mod tests {
         PreloadPlan {
             image: std::path::PathBuf::from("card.img"),
             steps,
+            notes: Vec::new(),
+            rdb_backup: None,
         }
     }
 
@@ -1090,8 +1203,8 @@ mod tests {
     /// this test fails with an I/O error rather than passing. A version of
     /// `preload_run`/`run_with_fallback` that constructs `HstImager`
     /// unconditionally (ART-120's original bug) fails this test; one that
-    /// tries native first and only reaches the fallback for the two known
-    /// gaps passes it.
+    /// tries native first and only reaches the fallback for the known gap
+    /// passes it.
     #[test]
     fn native_is_chosen_by_default_over_a_configured_but_unreachable_tool() {
         use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
@@ -1126,6 +1239,7 @@ mod tests {
                 volume_name: "Work".into(),
                 content: Some(tree),
             }],
+            rdb_backup: None,
         })
         .unwrap();
 
@@ -1206,6 +1320,8 @@ mod tests {
                     source: tree,
                 },
             ],
+            notes: Vec::new(),
+            rdb_backup: None,
         };
 
         let recorder = Recorder::default();
@@ -1316,6 +1432,8 @@ mod tests {
                     source: accented,
                 },
             ],
+            notes: Vec::new(),
+            rdb_backup: None,
         };
 
         let recorder = Recorder::default();
@@ -1374,8 +1492,9 @@ mod tests {
             ..Default::default()
         };
 
-        let err =
-            run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress).unwrap_err();
+        let err = run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress)
+            .unwrap_err()
+            .error;
 
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
         assert!(
@@ -1423,6 +1542,8 @@ mod tests {
                 drive_name: "DH0".into(),
                 source: tree,
             }],
+            notes: Vec::new(),
+            rdb_backup: None,
         };
 
         let native = NativeFormatter::UTC;
@@ -1458,46 +1579,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// **The summary line follows the fallback, not the default —
-    /// mutation-checked for fix-wave finding 4.** A plan where *every* step
-    /// needs the fallback (two `ImportFilesystem` steps; `NativeFormatter`
-    /// refuses this unconditionally, for every card — ART-117) must report
-    /// `outcome.tool` as the fallback's own probed version, never
-    /// `native`'s. The bug this guards: `run_with_fallback` used to set
-    /// `outcome.tool = native.probe().ok()` before the loop even ran, so the
-    /// result panel printed "By libpfs3 … (native)" for a run where every
-    /// single step actually went through `hst-imager` — contradicting the
-    /// per-step list rendered right beneath it.
+    /// **The summary line follows the fallback, not the default** (fix-wave
+    /// finding 4). Every step here needs the fallback: both copies carry a
+    /// name the native double refuses as ART-113.
     #[test]
     fn every_step_falling_back_makes_the_summary_follow_the_fallback_tool() {
         let made = plan_of(vec![
-            PreloadStep::ImportFilesystem {
+            PreloadStep::CopyIn {
                 slot: None,
-                driver: std::path::PathBuf::from("pfs3aio.lha"),
-                dostype: "PDS3".into(),
-                name: "pfs3aio".into(),
+                drive_name: "DH0".into(),
+                source: std::path::PathBuf::from("a"),
             },
-            PreloadStep::ImportFilesystem {
+            PreloadStep::CopyIn {
                 slot: None,
-                driver: std::path::PathBuf::from("pfs3aio.lha"),
-                dostype: "PDS3".into(),
-                name: "pfs3aio-2".into(),
+                drive_name: "DH1".into(),
+                source: std::path::PathBuf::from("b"),
             },
         ]);
-
-        // The real formatter: it refuses `import_filesystem` unconditionally,
-        // for every card (see its own module doc comment), so both steps are
-        // genuinely known capability gaps rather than a canned failure.
-        let native = NativeFormatter::UTC;
-        let recorder = Recorder::default();
+        let native = Recorder {
+            probe_as: Some("native-double"),
+            copy_fails_with: Some(|| CoreError::NonAsciiPfs3Names {
+                paths: vec!["español".into()],
+                more: 0,
+            }),
+            ..Default::default()
+        };
+        let fallback = Recorder::default();
         let (outcome, reports) = run_with_fallback(
             &made,
             &native,
-            Some(&recorder as &dyn VolumeFormatter),
+            Some(&fallback as &dyn VolumeFormatter),
             &crate::core::jobs::NoProgress,
         )
         .unwrap();
-
         assert_eq!(reports.len(), 2, "{reports:?}");
         assert!(
             reports.iter().all(|r| r.tool == "recorder-tool"),
@@ -1510,82 +1624,271 @@ mod tests {
         assert_eq!(
             outcome.tool.as_ref().map(|v| v.raw.as_str()),
             Some("recorder-tool"),
-            "the summary line must follow the tool that actually did the \
-             work, not the default that never ran a single step, {outcome:?}"
+            "the summary line must follow the tool that did the work, {outcome:?}"
         );
     }
 
-    /// **A missing tool refuses, rather than half-running.** The plan needs
-    /// `ImportFilesystem` (native always refuses it — ART-117), no fallback
-    /// is configured, and the recorder proves the steps after it — a
-    /// destructive format, then a copy — never ran.
+    /// **A missing tool refuses, rather than half-running.** The first copy
+    /// needs the fallback (ART-113), none is configured, and nothing after it runs.
     #[test]
     fn a_missing_fallback_tool_refuses_before_the_rest_of_the_plan_runs() {
-        let recorder = Recorder {
-            import_fails_with: Some(|| CoreError::ForeignRdbEmbedNotSupported),
+        let native = Recorder {
+            copy_fails_with: Some(|| CoreError::NonAsciiPfs3Names {
+                paths: vec!["español".into()],
+                more: 0,
+            }),
             ..Default::default()
         };
         let made = plan_of(vec![
-            PreloadStep::ImportFilesystem {
-                slot: None,
-                driver: std::path::PathBuf::from("pfs3aio.lha"),
-                dostype: "PDS3".into(),
-                name: "pfs3aio".into(),
-            },
-            PreloadStep::FormatPartition {
-                slot: None,
-                index: 1,
-                drive_name: "DH0".into(),
-                volume_name: "Work".into(),
-            },
             PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH0".into(),
                 source: std::path::PathBuf::from("tree"),
             },
+            PreloadStep::FormatPartition {
+                slot: None,
+                index: 2,
+                drive_name: "DH1".into(),
+                volume_name: "Games".into(),
+            },
         ]);
-
-        let err =
-            run_with_fallback(&made, &recorder, None, &crate::core::jobs::NoProgress).unwrap_err();
-
+        let err = run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress)
+            .unwrap_err()
+            .error;
         assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
         assert!(err.to_string().contains("hst-imager"), "{err}");
-        assert!(err.to_string().contains("ART-117"), "{err}");
+        assert!(err.to_string().contains("ART-113"), "{err}");
         assert_eq!(
-            *recorder.calls.borrow(),
-            vec!["import pfs3aio"],
-            "format and copy must not run after the refusal"
+            *native.calls.borrow(),
+            vec!["copy DH0"],
+            "the format after the refusal must not run"
         );
     }
 
-    /// A real failure — not one of the two known gaps — is surfaced as-is,
-    /// never silently retried on the fallback tool.
     #[test]
     fn a_real_failure_is_not_treated_as_a_reason_to_fall_back() {
-        let recorder = Recorder {
-            import_fails_with: Some(|| CoreError::Io(std::io::Error::other("disk yanked"))),
+        let native = Recorder {
+            copy_fails_with: Some(|| CoreError::Io(std::io::Error::other("disk yanked"))),
             ..Default::default()
         };
         let other = Recorder::default();
-        let made = plan_of(vec![PreloadStep::ImportFilesystem {
+        let made = plan_of(vec![PreloadStep::CopyIn {
             slot: None,
-            driver: std::path::PathBuf::from("pfs3aio.lha"),
-            dostype: "PDS3".into(),
-            name: "pfs3aio".into(),
+            drive_name: "DH0".into(),
+            source: std::path::PathBuf::from("tree"),
         }]);
-
         let err = run_with_fallback(
             &made,
-            &recorder,
+            &native,
             Some(&other as &dyn VolumeFormatter),
             &crate::core::jobs::NoProgress,
         )
         .unwrap_err();
-
+        assert!(
+            stopped_result(1, "card.img".into(), &err).is_none(),
+            "a stop that changed no RDB sends the screen nothing"
+        );
+        let err = err.error;
         assert_eq!(err.code(), "ART-IO", "{err}");
         assert!(
             other.calls.borrow().is_empty(),
             "the fallback must not run for a real failure"
+        );
+    }
+
+    /// **ART-117: embedding runs natively, with or without a tool, and the
+    /// report says so.** A configured-but-unreachable hst-imager is never
+    /// touched, and no fallback reason is given.
+    #[test]
+    fn an_embed_step_runs_natively_and_reports_native() {
+        use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+        let (_guard, dir) = scratch("embed-native");
+        let image = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &image,
+            32 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3Standard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        let driver = dir.join("pfs3aio");
+        std::fs::write(
+            &driver,
+            crate::core::rdbedit::fixtures::hunk_driver(62_604, "19.3"),
+        )
+        .unwrap();
+        let backup = dir.join("rdb.bin");
+        let made = plan(&PreloadRequest {
+            image: image.clone(),
+            driver: Some(driver),
+            partitions: vec![PreloadPartition {
+                area: 1,
+                index: 1,
+                volume_name: "Work".into(),
+                content: None,
+            }],
+            rdb_backup: Some(backup.clone()),
+        })
+        .unwrap();
+        made.ready_to_run().unwrap();
+
+        let unreachable = HstImager::at(dir.join("does-not-exist.exe"));
+        let (outcome, reports) = run_with_fallback(
+            &made,
+            &NativeFormatter::UTC,
+            Some(&unreachable as &dyn VolumeFormatter),
+            &crate::core::jobs::NoProgress,
+        )
+        .unwrap();
+
+        assert!(
+            matches!(reports[0].step, PreloadStep::ImportFilesystem { .. }),
+            "{reports:?}"
+        );
+        assert_eq!(reports[0].tool, "native");
+        assert!(reports[0].fallback_reason.is_none());
+        assert_eq!(
+            outcome.embedded.as_ref().map(|e| e.backup.clone()),
+            Some(backup)
+        );
+        assert_eq!(outcome.formatted, vec!["DH0"]);
+    }
+
+    /// **Final review I3, through the command layer.** An embed, then a
+    /// format the native path fails: the stop still carries the edit, the log
+    /// record names the driver and the backup beside the failure, and the
+    /// screen is sent a result that says so.
+    #[test]
+    fn a_format_that_fails_after_the_embed_keeps_it_in_the_stop_the_log_and_the_screen() {
+        use crate::core::rdb::{AmigaHardDiskFs, PartitionSpec};
+
+        let (_guard, dir) = scratch("embed-then-fail");
+        let image = dir.join("card.hdf");
+        crate::core::hdf::create_hdf(
+            &image,
+            32 * 1024 * 1024,
+            true,
+            &[PartitionSpec {
+                drive_name: "DH0".into(),
+                fs_type: AmigaHardDiskFs::Pfs3Standard,
+                size_mb: 10,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            &[],
+        )
+        .unwrap();
+        let driver = dir.join("pfs3aio");
+        std::fs::write(
+            &driver,
+            crate::core::rdbedit::fixtures::hunk_driver(62_604, "19.3"),
+        )
+        .unwrap();
+        let backup = dir.join("rdb.bin");
+        let made = plan(&PreloadRequest {
+            image: image.clone(),
+            driver: Some(driver),
+            partitions: vec![PreloadPartition {
+                area: 1,
+                index: 1,
+                volume_name: "Work".into(),
+                content: None,
+            }],
+            rdb_backup: Some(backup.clone()),
+        })
+        .unwrap();
+        let native = Recorder {
+            format_fails_with: Some(|| CoreError::Io(std::io::Error::other("the card was pulled"))),
+            ..Default::default()
+        };
+
+        let result = run_with_fallback(&made, &native, None, &crate::core::jobs::NoProgress);
+        let record = run_record("card.hdf", &made, &result);
+        let Err(stopped) = result else {
+            panic!("the format failed, so the run stopped")
+        };
+
+        assert_eq!(stopped.error.code(), "ART-IO", "{}", stopped.error);
+        assert_eq!(
+            stopped.outcome.embedded.as_ref().map(|e| e.backup.clone()),
+            Some(backup.clone()),
+            "the stop carries the edit the card holds"
+        );
+
+        assert!(
+            matches!(&record.outcome, OperationOutcome::Failure { error_code, .. } if error_code == "ART-IO"),
+            "{record:?}"
+        );
+        let detail = |key: &str| {
+            record
+                .details
+                .iter()
+                .find(|(name, _)| name == key)
+                .map(|(_, value)| value.clone())
+        };
+        assert_eq!(
+            detail("Driver").as_deref(),
+            Some("PFS3 19.3 embedded in RDB blocks 2–130; RDBBlocksHi raised from 1 to 130"),
+            "{record:?}"
+        );
+        assert_eq!(detail("RDB backup"), Some(backup.display().to_string()));
+
+        let sent = stopped_result(7, "card.hdf".into(), &stopped)
+            .expect("a stop after an RDB edit is sent to the screen");
+        let stop = sent
+            .stopped
+            .as_ref()
+            .expect("the result says the run stopped");
+        assert_eq!(stop.code, "ART-IO");
+        assert!(
+            stop.message.contains("the card was pulled"),
+            "{}",
+            stop.message
+        );
+        assert_eq!(sent.outcome.embedded, stopped.outcome.embedded);
+    }
+
+    #[test]
+    fn the_log_line_names_the_driver_the_versions_the_blocks_and_a_raise() {
+        use crate::core::preload::embed::{DriverVersion, EmbedReport};
+        let report = EmbedReport {
+            slot: Some(2),
+            dostype: "PDS3".into(),
+            card_version: Some(DriverVersion {
+                version: 19,
+                revision: 2,
+            }),
+            file_version: DriverVersion {
+                version: 19,
+                revision: 3,
+            },
+            first_block: 131,
+            last_block: 259,
+            rdb_blocks_hi_raised: Some([130, 259]),
+            backup: "E:\\rdb.bin".into(),
+        };
+        assert_eq!(
+            embed_summary(&report),
+            "PDS3 19.2 replaced by 19.3 in RDB blocks 131–259; RDBBlocksHi raised from 130 to 259"
+        );
+        let append = EmbedReport {
+            card_version: None,
+            rdb_blocks_hi_raised: None,
+            ..report
+        };
+        assert_eq!(
+            embed_summary(&append),
+            "PDS3 19.3 embedded in RDB blocks 131–259"
         );
     }
 
@@ -1596,8 +1899,9 @@ mod tests {
     ///   cargo test preload_a_real_card_when_asked -- --nocapture
     /// ```
     ///
-    /// `ART_PFS3` may name a `pfs3aio.lha` to embed first; without it the card
-    /// is built with FFS, which Kickstart carries.
+    /// `ART_PFS3` may name the `pfs3aio` executable to embed first (not its
+    /// `.lha`, which the plan refuses as `NOT-EXECUTABLE`); without it the
+    /// card is built with FFS, which Kickstart carries.
     #[test]
     fn preload_a_real_card_when_asked() {
         use crate::core::card::build::{build_card, AreaSpec, CardSpec};
@@ -1662,6 +1966,7 @@ mod tests {
                 volume_name: "Work".into(),
                 content: Some(tree),
             }],
+            rdb_backup: Some(dir.join("card-rdb-backup.bin")),
         };
 
         let made = plan(&request).unwrap();
@@ -2102,6 +2407,7 @@ mod tests {
                 volume_name: "Workbench".into(),
                 content: Some(tree.clone()),
             }],
+            rdb_backup: None,
         };
         let made = plan(&request).expect("a plan for the real tree");
         for step in &made.steps {
@@ -2154,7 +2460,8 @@ mod tests {
                 );
                 println!("source files={source_files} directories={source_dirs}");
             }
-            Err(err) => {
+            Err(stopped) => {
+                let err = stopped.error;
                 // Not a panic: a refusal *is* a result here. Without
                 // `hst-imager` configured this is the expected end of the run
                 // for any tree carrying a non-ASCII AmigaDOS name, and it is
@@ -2206,10 +2513,6 @@ mod tests {
 
         #[test]
         fn fallback_reason_serializes_with_the_tags_the_frontend_declares() {
-            let embed = serde_json::to_value(FallbackReason::ForeignRdbEmbed).unwrap();
-            expect_keys(&embed, &["reason"]);
-            assert_eq!(embed["reason"], "foreign-rdb-embed");
-
             let names = serde_json::to_value(FallbackReason::NonAsciiPfs3Names {
                 paths: vec!["Locale/español".into()],
                 more: 3,
@@ -2230,6 +2533,78 @@ mod tests {
         }
 
         #[test]
+        fn a_replace_step_and_a_plan_note_serialize_with_the_tags_the_frontend_declares() {
+            use crate::core::preload::embed::DriverVersion;
+            use crate::core::preload::PlanNote;
+            let step = serde_json::to_value(PreloadStep::ReplaceFilesystem {
+                slot: Some(2),
+                driver: "pfs3aio".into(),
+                dostype: "PDS3".into(),
+                name: "pfs3aio".into(),
+                card_version: DriverVersion {
+                    version: 19,
+                    revision: 2,
+                },
+                file_version: DriverVersion {
+                    version: 19,
+                    revision: 3,
+                },
+                blocks: [132, 260],
+                rdb_blocks_hi_raised: None,
+            })
+            .unwrap();
+            expect_keys(
+                &step,
+                &[
+                    "step",
+                    "slot",
+                    "driver",
+                    "dostype",
+                    "name",
+                    "card_version",
+                    "file_version",
+                    "blocks",
+                    "rdb_blocks_hi_raised",
+                ],
+            );
+            assert_eq!(step["step"], "replace-filesystem");
+            assert_eq!(step["card_version"]["revision"], 2);
+            assert_eq!(step["blocks"][1], 260);
+
+            let note = serde_json::to_value(PlanNote::DriverKept {
+                dostype: "PDS3".into(),
+                card_version: DriverVersion {
+                    version: 19,
+                    revision: 2,
+                },
+                file_version: None,
+            })
+            .unwrap();
+            expect_keys(&note, &["note", "dostype", "card_version", "file_version"]);
+            assert_eq!(note["note"], "driver-kept");
+
+            let different = serde_json::to_value(PlanNote::DifferentDriver {
+                dostype: "SFS0".into(),
+                card_version: DriverVersion {
+                    version: 1,
+                    revision: 293,
+                },
+                card_name: None,
+                file_name: Some("pfs3aio".into()),
+            })
+            .unwrap();
+            expect_keys(
+                &different,
+                &["note", "dostype", "card_version", "card_name", "file_name"],
+            );
+            assert_eq!(different["note"], "different-driver");
+            assert_eq!(different["card_name"], serde_json::Value::Null);
+
+            let outcome = serde_json::to_value(PreloadOutcome::default()).unwrap();
+            assert_eq!(outcome["embedded"], serde_json::Value::Null);
+        }
+
+        #[test]
         fn preload_result_carries_a_steps_array_alongside_its_siblings() {
             let result = PreloadResult {
                 job_id: 7,
@@ -2245,11 +2620,19 @@ mod tests {
                     tool: "native".into(),
                     fallback_reason: None,
                 }],
+                stopped: None,
             };
             let value = serde_json::to_value(&result).unwrap();
             // Deliberately not camelCased — `job_id` matches `LayoutResult`
             // and `OsInstallResult`, which do the same.
-            expect_keys(&value, &["job_id", "image", "outcome", "steps"]);
+            expect_keys(&value, &["job_id", "image", "outcome", "steps", "stopped"]);
+            assert_eq!(value["stopped"], serde_json::Value::Null);
+            let stop = serde_json::to_value(StopReport {
+                code: "ART-IO".into(),
+                message: "x".into(),
+            })
+            .unwrap();
+            expect_keys(&stop, &["code", "message"]);
             assert_eq!(value["steps"].as_array().unwrap().len(), 1);
         }
     }

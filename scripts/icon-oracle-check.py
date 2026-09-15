@@ -311,7 +311,6 @@ def main() -> int:
         no_tooltypes = None
         no_drawer_data = None
         no_drawer_data2 = None
-        lossy_tooltypes = None
         fail_lines: list[str] = []
         for line in result.stdout.splitlines():
             if line.startswith("ART_ICON_RESULT "):
@@ -323,7 +322,6 @@ def main() -> int:
                 no_tooltypes = int(parts.get("no_tooltypes", "0"))
                 no_drawer_data = int(parts.get("no_drawer_data", "0"))
                 no_drawer_data2 = int(parts.get("no_drawer_data2", "0"))
-                lossy_tooltypes = int(parts.get("lossy_tooltypes", "0"))
             elif line.startswith("ART_ICON_FAIL "):
                 fail_lines.append(line[len("ART_ICON_FAIL ") :])
 
@@ -336,8 +334,7 @@ def main() -> int:
 
         print(
             f"\nchecked={checked} failed={failed_count} no_tooltypes={no_tooltypes} "
-            f"no_drawer_data={no_drawer_data} no_drawer_data2={no_drawer_data2} "
-            f"lossy_tooltypes={lossy_tooltypes}"
+            f"no_drawer_data={no_drawer_data} no_drawer_data2={no_drawer_data2}"
         )
         if no_tooltypes:
             print(
@@ -360,15 +357,6 @@ def main() -> int:
                 "has nothing to toggle either. Not a failure, but still checked: "
                 "set_show_all_files must refuse these by name, not silently write "
                 "into bytes that are not DrawerData2 at all.)"
-            )
-        if lossy_tooltypes:
-            print(
-                f"({lossy_tooltypes} of them carry a tool type (a NewIcon IM1=/IM2= "
-                "pixel encoding, typically) whose raw bytes are not valid UTF-8, so "
-                "tooltypes()'s lossy decode cannot be re-encoded byte-identically — "
-                "documented in core/amigaicon's own doc comment. Not a failure: the "
-                "tool-type *text* is still checked to round-trip exactly, only the "
-                "underlying bytes cannot be.)"
             )
         if fail_lines:
             print(f"\n{len(fail_lines)} icon(s) did not round-trip:")

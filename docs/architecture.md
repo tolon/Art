@@ -164,12 +164,14 @@ between the decision to open the emulator and the process spawn that carried it 
 `launch_winuae_process`, `WinUaeProcess`) into `tools/winuae_launcher.rs` and leaving only
 config generation and install-location detection in `core/winuae.rs`.
 
-`core/preload::VolumeFormatter` (`probe`, `import_filesystem`, `format_partition`, `copy_in`)
+`core/preload::VolumeFormatter` (`probe`, `format_partition`, `can_copy_in`, `copy_in`)
 is the largest of them: `src-tauri/src/tools/hst_imager.rs` launches `hst.imager.exe` and lives
 outside `core/` for exactly this reason, while `core/preload/native.rs` — PFS3 through
 `libpfs3`, FFS through `core/volume/write` — launches nothing and lives inside it. Native is the
 product's default; `hst-imager` is a fallback the caller in `commands/` chooses per operation,
-never a decision `core/` makes for itself.
+never a decision `core/` makes for itself. Embedding or replacing a filesystem driver in a card's
+RDB is **not** on the trait: it is ART's own editor, `core/preload/embed.rs` over
+`core/rdbedit.rs`, whichever formatter runs the other steps, and it never falls back (ART-117).
 
 ### The same rule pointing inwards: `core/` modules do not depend upwards
 
@@ -370,6 +372,22 @@ time. The recorded mtime is from *before* the operation, and a crash mid-write
 is precisely the case where the file has changed since; gating on it would
 reject every journal worth replaying. Size is the strong invariant instead —
 these writes are in place and never resize the file.
+
+**A leftover journal is one of two kinds, and the header says which.** The
+format is `ARTJRNL\0`, a `u32` version, the geometry and names, then
+self-checksummed entries. ART-117's RDB edit can end written, verified and
+synced with a journal file that will not go; left unmarked, that file would be
+byte-identical to a crash's and the File Manager would offer to undo a finished
+edit. So that path overwrites the version field with `FINISHED_MARK` (`"DONE"`)
+and syncs it **before** it removes the file, and rolls the edit back if the
+mark will not write. `PendingJournal::roll_back` refuses a marked journal,
+`discard` still removes it, `open_rdb` refuses with
+`ART-RDB-EDIT-JOURNAL-FINISHED`, and the capability report carries it as
+`finished_journal` instead of `pending_recovery`. The mark is in the header,
+not a record, so a truncated or damaged entry cannot look like it; an ART build
+from before it reads an unknown version and refuses the file whole — never
+undoes it. The volume writer never marks, so its journals are version 1 as
+before.
 
 ## Workflow Engine design
 
@@ -621,28 +639,24 @@ same shape as `core/rom/pairing.rs` above.
 
 ## Two ways to write a PiStorm volume
 
-`core/preload::VolumeFormatter` (`probe`, `import_filesystem`,
-`format_partition`, `copy_in`) has two implementations: `tools/hst_imager.rs`,
-which launches `hst.imager.exe` and therefore lives outside `core/`, and
-`core/preload/native.rs`, which launches nothing — PFS3 through `libpfs3`, FFS
-through ART's own `core/volume/write`.
+`core/preload::VolumeFormatter` (`probe`, `format_partition`, `can_copy_in`, `copy_in`) has two implementations:
+`tools/hst_imager.rs`, which launches `hst.imager.exe` and therefore lives outside `core/`, and
+`core/preload/native.rs`, which launches nothing — PFS3 through `libpfs3`, FFS through ART's own `core/volume/write`.
 
-**Native is the default and `hst-imager` is a named fallback, chosen per
-operation, never per run.** `commands/preload.rs::run_with_fallback` tries the
-native path first for every step of a plan and only reaches a configured
-`hst-imager` for two known, typed capability gaps:
+**Native is the default and `hst-imager` is a named fallback, chosen per operation, never per run.**
+`commands/preload.rs::run_with_fallback` tries the native path first for every step of a plan and reaches a configured
+`hst-imager` for one known, typed capability gap: non-ASCII AmigaDOS names on a PFS3 volume, which `libpfs3` 0.1.3
+cannot round-trip (`CoreError::NonAsciiPfs3Names`, ART-113). It is refused **before a single byte is written**, which
+is what makes retrying on the other tool safe. The fallback is never silent: every step's result carries which tool
+ran it and, when it was not the default, why — logged and shown on the confirmation screen before the destructive step
+runs, not only afterwards in the result panel.
 
-- non-ASCII AmigaDOS names on a PFS3 volume, which `libpfs3` 0.1.3 cannot
-  round-trip (`CoreError::NonAsciiPfs3Names`, ART-113);
-- embedding a filesystem driver into a *foreign* card's existing RDB in place,
-  which ART's own RDB writer cannot do without risking silently shifting every
-  partition after the first (`CoreError::ForeignRdbEmbedNotSupported`, ART-117).
-
-Both are refused **before a single byte is written**, which is what makes
-retrying on the other tool safe. The fallback is never silent: every step's
-result carries which tool ran it and, when it was not the default, why — logged
-and shown on the confirmation screen before the destructive step runs, not only
-afterwards in the result panel.
+**Editing a card's RDB is not a formatter's job, and it has no fallback (ART-117).** Embedding or replacing a
+filesystem driver in an existing RDB is `core/preload/embed.rs` over the pure `core/rdbedit.rs`: a strict walk that
+refuses any block it cannot account for, allocation above everything live (raising `RDBBlocksHi` only over zero blocks
+and below the partitionable area), a backup of the RDB area to a file the user chose, four synced journalled stages in
+which the one-sector link is last, and a read-back before commit. hst-imager rewrites the whole RDB chain, RDSK first,
+with no backup; a refusal names it, and the user decides.
 
 ## AmigaDOS compatibility
 

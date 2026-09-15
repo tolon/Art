@@ -721,6 +721,13 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `src/i18n/job-title-keys.test.ts` resolves every one in both catalogues
     // and holds the list to the Rust sources, which is the check this scan
     // cannot make.
-    expect(dynamicCalls).toBe(188);
+    // 188 → 191 (ART-117): `VolumePreload.tsx` renders three `Phrase`s from
+    // `@/lib/preload` — the lines under an RDB edit step (`embedDetailPhrases`:
+    // its blocks and where the backup goes), the plan's notes (`planNotePhrase`,
+    // six keys that must each say why a driver was not replaced) and the
+    // finished edit (`embeddedPhrase`). `preload.test.ts` and
+    // `phrase-keys.test.ts` resolve every key each can return, which is the
+    // check this scan cannot make.
+    expect(dynamicCalls).toBe(191);
   });
 });
