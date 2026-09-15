@@ -51,6 +51,7 @@ function cardReport(): CardReport {
         {
           offset_bytes: 0,
           length_bytes: 0,
+          mbr_slot: null,
           rdb: { partitions: [], file_systems: [], checksum_valid: true },
         },
       ],

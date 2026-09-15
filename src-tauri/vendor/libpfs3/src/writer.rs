@@ -20,6 +20,32 @@
 //! on 2026-09-14 (ART-319): every public mutator discards back to the last
 //! successful commit on error, and a commit that fails part-way locks the
 //! writer;
+//! Modified by ART on 2026-09-15 (ART-319's disclosed gaps, third debt round):
+//! `overwrite_file_in` is copy-on-write, and `rename_in` over an existing
+//! destination is one commit;
+//! Modified by ART on 2026-09-15 (ART-322): a `rename_in` destination that is
+//! the source entry itself — a case-only rename in the same directory — is
+//! renamed in place rather than deleted and recreated;
+//! Modified by ART on 2026-09-15 (the third debt round's final review fix
+//! wave): `rename_in`'s same-entry check compares the name too, and a hard
+//! link found as the destination is refused (I1); the in-place rename writes
+//! Latin-1 (M1); copy-on-write refuses a bitmap that offers the old file's
+//! own block (M2);
+//! Modified by ART on 2026-09-15 (ART-323): deleting a hard link removes only
+//! its entry, a link pfs3aio made is refused, an object a link still names is
+//! refused, and `create_hardlink` is refused;
+//! Modified by ART on 2026-09-15 (ART-325/326/327): extra fields are read and
+//! written in pfs3aio's layout through `ondisk::ExtraFields` (ART-325); a
+//! creating call refuses a name its directory already holds (ART-326);
+//! `rename_in` moves the source entry's own bytes and updates a moved link's
+//! chain as pfs3aio's `MoveLink` does (ART-327); a directory-block walk is
+//! bounded and refuses a malformed entry, and the delete-time link check
+//! names what stopped it (the scoped re-review's items 5 and 4);
+//! Modified by ART on 2026-09-15 (the scoped re-review's follow-ups 1 and 6,
+//! ART-324 and ART-330): a file of 4 GiB or more is refused on a volume that
+//! is not largefile, and `fsizex` is written and patched only on one that is;
+//! `rename_in` and `delete_in` look their names up through the writer's own
+//! bounded walk, whose rule `ondisk::entry_bounds` now shares with the reader;
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -182,13 +208,35 @@ impl Writer {
         Ok(())
     }
 
+    /// ART (2026-09-15, the scoped re-review's follow-up 1, ART-324): refuse
+    /// `size` bytes under `name` when this volume cannot record that size.
+    /// pfs3aio refuses to write a file past `MAXFILESIZE32` (0xffffffff,
+    /// `blocks.h:627`) unless `g->largefile` (`WriteToFile`, `disk.c:797`,
+    /// `ERROR_DISK_FULL`; `SetEOF`, `disk.c:1130`), and without it
+    /// `SetDEFileSize` keeps only `fsize` (`directory.c:3668-3671`;
+    /// `tonioni/pfs3aio` `211f7f0`). Every call that writes a file's or a soft
+    /// link's data asks this before anything is allocated; public, so a caller
+    /// can ask before it reads a file into memory. 0.1.3 wrote the low 32 bits
+    /// and a `fsizex` pfs3aio does not read there.
+    pub fn check_file_size(&self, name: &str, size: u64) -> Result<()> {
+        if size > u64::from(u32::MAX) && !self.vol.rootblock.has_largefile() {
+            return Err(Error::FileTooLarge {
+                name: name.to_string(),
+                size,
+                why: "this PFS3 volume holds files of at most 4294967295 bytes: it is not \
+                      formatted for large files (MODE_LARGEFILE with MODE_DIR_EXTENSION)",
+            });
+        }
+        Ok(())
+    }
+
     /// ART-319: entry point for every public mutator, `op`. On `Err`, unless
     /// the failure already locked the writer (`self.poisoned` — set by
     /// `update_rootblock`/`set_volume_name`'s own commit write, because the
     /// device may already be half-written), this discards back to the last
     /// successful commit and returns the original error unchanged. Calling
     /// this from within an already-guarded call (a path wrapper calling its
-    /// `_in` twin, `rename_in` calling `delete_in`) is harmless: a reload
+    /// `_in` twin, `write_file_in` calling `overwrite_file_in`) is harmless: a reload
     /// twice reads the identical, still-current state a second time, and an
     /// inner call that already committed (its own `update_rootblock` ran) is
     /// simply what "the last commit" now is for the outer discard to reload.
@@ -331,14 +379,29 @@ impl Writer {
 
     fn write_file_in_impl(&mut self, parent_anode: u32, name: &str, data: &[u8]) -> Result<()> {
         self.check_name_len(name)?;
-        // Check if file already exists — if so, overwrite it
-        if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
-            let entry_type = entry_data[pos + 1] as i8;
-            if entry_type == ST_FILE || entry_type == ST_ROLLOVERFILE {
-                let file_anode =
-                    u32::from_be_bytes(entry_data[pos + 2..pos + 6].try_into().unwrap());
-                return self.overwrite_file_in(parent_anode, name, file_anode, data);
+        // Check if file already exists — if so, overwrite it.
+        //
+        // ART (ART-326): any other entry under the name — a directory, a soft
+        // link, a hard link — is refused `AlreadyExists` before anything is
+        // written, as pfs3aio refuses to create over a name its directory
+        // holds (`directory.c:1666-1671,2552-2557,2665-2670`). 0.1.3 added a
+        // second entry. pfs3aio's `NewFile` follows a hard link to its object
+        // (`directory.c:1513-1514`); this writer refuses one instead. A lookup
+        // that fails is returned, not taken for "not there".
+        match self.find_dir_entry(parent_anode, name) {
+            Ok((_, entry_data, pos)) => {
+                // `find_dir_entry` returns an entry whose header lies in the block.
+                let entry_type = entry_data.get(pos + 1).map_or(0, |&t| t as i8);
+                if entry_type == ST_FILE || entry_type == ST_ROLLOVERFILE {
+                    let file_anode = entry_data
+                        .get(pos + 2..pos + 6)
+                        .map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+                    return self.overwrite_file_in(parent_anode, name, file_anode, data);
+                }
+                return Err(Error::AlreadyExists(name.to_string()));
             }
+            Err(Error::NotFound(_)) => {}
+            Err(e) => return Err(e),
         }
         self.write_file_in_no_commit(parent_anode, name, data)?;
         self.update_rootblock()
@@ -352,6 +415,7 @@ impl Writer {
         data: &[u8],
     ) -> Result<()> {
         self.check_name_len(name)?;
+        self.check_file_size(name, data.len() as u64)?;
         let bs = self.vol.block_size() as usize;
         let num_blocks = data.len().div_ceil(bs).max(1);
 
@@ -378,6 +442,7 @@ impl Writer {
 
     fn create_dir_in_impl(&mut self, parent_anode: u32, name: &str) -> Result<()> {
         self.check_name_len(name)?;
+        self.refuse_existing(parent_anode, name)?;
         let dir_blk = self.alloc_reserved_block()?;
         let anodenr = self.alloc_anode(1, dir_blk, 0)?;
 
@@ -419,6 +484,8 @@ impl Writer {
         target: &str,
     ) -> Result<()> {
         self.check_name_len(name)?;
+        self.refuse_existing(parent_anode, name)?;
+        self.check_file_size(name, target.len() as u64)?;
         let data = target.as_bytes();
         let bs = self.vol.block_size() as usize;
         let num_blocks = data.len().div_ceil(bs).max(1);
@@ -446,15 +513,23 @@ impl Writer {
     }
 
     /// Create a hardlink in a parent directory.
+    ///
+    /// ART (2026-09-15, ART-323): **refused**, with
+    /// `Error::HardLinkNotWritten`, before anything is read or written.
+    /// 0.1.3 added an `ST_LINKFILE` entry holding the linked object's anode.
+    /// pfs3aio's `CreateLink` gives the link an anode of its own — a link
+    /// node whose clustersize is the object's directory and blocknr the
+    /// link's — puts the object's anode in the link's `link` extra field, and
+    /// adds the node to the chain of links headed by the object's own `link`
+    /// field (`directory.c:2672-2748`, `tonioni/pfs3aio` `211f7f0`). This
+    /// writer does not write that, and a link that is not pfs3aio's is not a
+    /// link under pfs3aio.
     pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
         self.guarded(|w| w.create_hardlink_impl(path, target_anode))
     }
 
-    fn create_hardlink_impl(&mut self, path: &str, target_anode: u32) -> Result<()> {
-        let (parent_anode, name) = self.split_path(path)?;
-        self.check_name_len(&name)?;
-        self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
-        self.update_rootblock()
+    fn create_hardlink_impl(&mut self, path: &str, _target_anode: u32) -> Result<()> {
+        Err(Error::HardLinkNotWritten(path.to_string()))
     }
 
     /// Undelete a file from the deldir by index. Writes it to `dest_path`.
@@ -573,8 +648,21 @@ impl Writer {
         self.update_rootblock()
     }
 
-    /// Overwrite an existing file's data in-place, reusing its anode.
+    /// Overwrite an existing file's data, reusing its anode.
     /// The anode number stays stable — safe for FUSE inode caching.
+    ///
+    /// ART (2026-09-15, ART-319's first disclosed gap): **copy-on-write.**
+    /// The new content goes only into newly allocated free blocks; the file's
+    /// head anode is rewritten to describe them, the old chain's other
+    /// anodes are cleared and its data blocks freed, and the directory
+    /// entry's size is set — all staged, all made true by the one
+    /// `update_rootblock` commit. Until that commit nothing of the old file
+    /// has been written, so an error anywhere before it is discarded by
+    /// `guarded` and the device still holds the old file. **The cost:** the
+    /// whole new content needs free space of its own. An overwrite that would
+    /// fit only by reusing the file's own blocks is refused with
+    /// `Error::DiskFull`, before any block is written, and the file keeps its
+    /// old content. 0.1.3 wrote the new data over the old blocks first.
     pub fn overwrite_file_in(
         &mut self,
         parent_anode: u32,
@@ -592,114 +680,72 @@ impl Writer {
         file_anode: u32,
         data: &[u8],
     ) -> Result<()> {
+        self.check_file_size(name, data.len() as u64)?;
         let bs = self.vol.block_size() as usize;
         let new_blocks_needed = data.len().div_ceil(bs).max(1) as u32;
 
-        // Get existing chain
+        // The old chain, as the last commit left it.
         let old_chain =
             self.vol
                 .anodes
                 .get_chain(file_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
-        let old_total: u32 = old_chain.iter().map(|a| a.clustersize).sum();
 
-        // Write data to existing blocks (reuse as many as possible)
-        let mut written = 0usize;
-        let mut blocks_used = 0u32;
+        // ART (ART-319's first gap): copy-on-write. The old file's blocks are
+        // still allocated here, so none of them can be handed out; a volume
+        // without room for the whole new content is refused now, before any
+        // block is written.
+        let new_blocks = self.alloc_data_blocks(new_blocks_needed)?;
+        // Final review fix wave (M2): that holds only for a consistent
+        // bitmap. One that marks an old block free hands it out here, and the
+        // write below would overwrite the old file before any commit, then
+        // the commit would free a block the new chain uses. Refused as
+        // corruption before the first write; `guarded` discards the
+        // allocation.
+        if let Some(&shared) = new_blocks.iter().find(|&&blk| {
+            old_chain
+                .iter()
+                .any(|an| blk >= an.blocknr && blk - an.blocknr < an.clustersize)
+        }) {
+            return Err(Error::Corrupt(format!(
+                "the data bitmap marks block {shared} free, but file anode {file_anode} still uses it"
+            )));
+        }
         let mut sector = vec![0u8; bs];
+        for (i, &blk) in new_blocks.iter().enumerate() {
+            sector.fill(0);
+            let start = i * bs;
+            if start < data.len() {
+                let end = (start + bs).min(data.len());
+                sector[..end - start].copy_from_slice(&data[start..end]);
+            }
+            self.vol.dev.write_block(blk as u64, &sector)?;
+        }
+        self.vol.dev.flush()?; // data durable before metadata
+
+        // The new chain under the same head anode: the extents after the first
+        // get anodes of their own, allocated while the old chain's are still
+        // taken, so none of them can be one this commit is about to clear.
+        let extents = block_extents(&new_blocks);
+        let mut next = ANODE_EOF;
+        for &(start, count) in extents.iter().skip(1).rev() {
+            next = self.alloc_anode(count, start, next)?;
+        }
+        // Only now, after the allocation, are the old blocks freed — freed
+        // first, this very call could have taken them back for the new data.
         for an in &old_chain {
             for i in 0..an.clustersize {
-                if blocks_used >= new_blocks_needed {
-                    break;
-                }
-                sector.fill(0);
-                let start = written;
-                let end = (start + bs).min(data.len());
-                if start < data.len() {
-                    sector[..end - start].copy_from_slice(&data[start..end]);
-                }
-                self.vol
-                    .dev
-                    .write_block(an.blocknr as u64 + i as u64, &sector)?;
-                written += bs;
-                blocks_used += 1;
-            }
-            if blocks_used >= new_blocks_needed {
-                break;
+                self.free_data_block(an.blocknr + i)?;
             }
         }
-        self.vol.dev.flush()?;
-
-        if new_blocks_needed <= old_total {
-            // Shrink: free excess blocks and truncate the anode chain
-            self.truncate_anode_chain(file_anode, new_blocks_needed)?;
-        } else {
-            // Grow: allocate additional blocks and extend the chain
-            let extra = new_blocks_needed - old_total;
-            let new_blocks = self.alloc_data_blocks(extra)?;
-            for &blk in &new_blocks {
-                sector.fill(0);
-                let start = written;
-                let end = (start + bs).min(data.len());
-                if start < data.len() {
-                    sector[..end - start].copy_from_slice(&data[start..end]);
-                }
-                self.vol.dev.write_block(blk as u64, &sector)?;
-                written += bs;
-            }
-            self.vol.dev.flush()?;
-            // Extend the existing chain with new blocks
-            let new_chain_head = self.create_anode_chain(&new_blocks)?;
-            self.append_to_anode_chain(file_anode, new_chain_head)?;
+        for an in old_chain.iter().skip(1) {
+            self.clear_single_anode(an.nr)?;
         }
+        let (start, count) = extents[0];
+        self.write_anode_fields(file_anode, count, start, next)?;
 
         // Update file size in the directory entry
         self.update_dir_entry_size(parent_anode, name, data.len() as u64)?;
         self.update_rootblock()
-    }
-
-    /// Truncate an anode chain to `keep_blocks` total blocks.
-    /// Frees excess data blocks and anode slots.
-    fn truncate_anode_chain(&mut self, head: u32, keep_blocks: u32) -> Result<()> {
-        let chain = self
-            .vol
-            .anodes
-            .get_chain(head, self.vol.dev.as_ref(), &mut self.vol.cache)?;
-        let mut remaining = keep_blocks;
-
-        for (idx, an) in chain.iter().enumerate() {
-            if remaining == 0 {
-                self.free_and_clear_anodes(&chain[idx..])?;
-                return Ok(());
-            } else if remaining < an.clustersize {
-                // Partial: free tail blocks, shrink clustersize, set next=EOF
-                for i in remaining..an.clustersize {
-                    self.free_data_block(an.blocknr + i)?;
-                }
-                self.write_anode_fields(an.nr, remaining, an.blocknr, ANODE_EOF)?;
-                self.free_and_clear_anodes(&chain[idx + 1..])?;
-                return Ok(());
-            } else {
-                remaining -= an.clustersize;
-                if remaining == 0 {
-                    // This anode is the new tail — set next=EOF
-                    self.write_anode_fields(an.nr, an.clustersize, an.blocknr, ANODE_EOF)?;
-                    self.free_and_clear_anodes(&chain[idx + 1..])?;
-                    return Ok(());
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Free all data blocks and clear anode slots for a slice of anodes.
-    fn free_and_clear_anodes(&mut self, anodes: &[crate::ondisk::Anode]) -> Result<()> {
-        for an in anodes {
-            for i in 0..an.clustersize {
-                self.free_data_block(an.blocknr + i)?;
-            }
-            self.clear_single_anode(an.nr)?;
-        }
-        Ok(())
     }
 
     /// Append a sub-chain to the tail of an existing anode chain.
@@ -757,6 +803,12 @@ impl Writer {
 
     /// Find a directory entry by name, returning (block_number, block_data, entry_offset).
     /// Returns Error::NotFound if the entry doesn't exist.
+    ///
+    /// ART (the scoped re-review's item 5): every entry is walked through
+    /// `dir_entry_at`, so the entry returned holds its whole header and name
+    /// inside the block (`pos + size <= data.len()`, `18 + nlen <= size`),
+    /// and a malformed entry before it is refused. 0.1.3 indexed `pos + 17`
+    /// and the name without a bound.
     fn find_dir_entry(&mut self, dir_anode: u32, name: &str) -> Result<(u32, Vec<u8>, usize)> {
         let chain =
             self.vol
@@ -766,17 +818,14 @@ impl Writer {
             for i in 0..an.clustersize {
                 let blk = an.blocknr + i;
                 let data = self.read_reserved_raw(blk)?;
-                if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
+                if data.get(0..2) != Some(&DBLKID.to_be_bytes()[..]) {
                     continue;
                 }
                 let mut pos = DIR_BLOCK_HEADER_SIZE;
-                while pos < self.resblocksize as usize {
-                    let esize = data[pos] as usize;
-                    if esize == 0 {
-                        break;
-                    }
-                    let nlen = data[pos + 17] as usize;
-                    let ename = crate::util::latin1_to_string(&data[pos + 18..pos + 18 + nlen]);
+                while let Some((esize, nlen)) = Self::dir_entry_at(&data, blk, pos)? {
+                    let ename = crate::util::latin1_to_string(
+                        data.get(pos + 18..pos + 18 + nlen).unwrap_or(&[]),
+                    );
                     if crate::util::name_eq_ci(&ename, name) {
                         return Ok((blk, data, pos));
                     }
@@ -787,69 +836,128 @@ impl Writer {
         Err(Error::NotFound(name.to_string()))
     }
 
+    /// ART (the scoped re-review's item 5): the entry at `pos` of directory
+    /// block `blk`, bounded. `Ok(None)` at the end of the block's entries — a
+    /// size byte of 0, or the end of the block. `Ok(Some((size, nlen)))` for
+    /// an entry whose header and name lie inside it and inside the block.
+    /// Anything else is refused as corruption, naming the block and the
+    /// offset: an entry smaller than its own header, one that runs past the
+    /// block, or one whose name runs past the entry.
+    ///
+    /// ART (2026-09-15, the scoped re-review's follow-up 6): the rule is
+    /// `ondisk::entry_bounds`, which the reader's `DirEntry::parse` shares.
+    fn dir_entry_at(data: &[u8], blk: u32, pos: usize) -> Result<Option<(usize, usize)>> {
+        entry_bounds(data, pos).map_err(|m| Self::malformed_entry(blk, m))
+    }
+
+    /// The refusal for a malformed entry `m` in directory block `blk`.
+    fn malformed_entry(blk: u32, m: MalformedDirEntry) -> Error {
+        Error::Corrupt(format!(
+            "directory block {blk} holds a malformed entry at offset {} (size {}) — check this \
+             volume with a PFS3 repair tool before writing to it",
+            m.offset, m.size
+        ))
+    }
+
+    /// ART (2026-09-15, the scoped re-review's follow-up 6): the entry at
+    /// `pos` of directory block `blk` — one `find_dir_entry` returned — parsed
+    /// as the reader parses it, `fsizex` gated as the volume's mode says.
+    fn entry_in(&self, block: &[u8], blk: u32, pos: usize) -> Result<DirEntry> {
+        match DirEntry::parse(block, pos, self.vol.rootblock.has_largefile()) {
+            Ok(Some((entry, _))) => Ok(entry),
+            Ok(None) => Err(Error::Corrupt(format!(
+                "directory block {blk} holds no entry at offset {pos}"
+            ))),
+            Err(m) => Err(Self::malformed_entry(blk, m)),
+        }
+    }
+
+    /// ART (ART-326): `AlreadyExists` when `dir` holds an entry under `name`,
+    /// compared as pfs3aio compares names (`util::name_eq_ci`) — pfs3aio's
+    /// `SearchInDir`, then `ERROR_OBJECT_EXISTS`, in `NewDir`
+    /// (`directory.c:1666-1671`), `CreateSoftLink` (`:2552-2557`),
+    /// `CreateLink` (`:2665-2670`) and `CreateRollover` (`:2873-2878`) —
+    /// before anything is allocated or written. 0.1.3 looked no name up.
+    fn refuse_existing(&mut self, dir: u32, name: &str) -> Result<()> {
+        match self.find_dir_entry(dir, name) {
+            Ok(_) => Err(Error::AlreadyExists(name.to_string())),
+            Err(Error::NotFound(_)) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// ART (ART-327): anode `anodenr`'s three fields `(clustersize, blocknr,
+    /// next)`, read through this writer's pending writes at the address
+    /// `write_anode_fields` writes, and bounded: a slot that is not there is
+    /// `Error::AnodeNotFound`.
+    fn read_anode_fields(&mut self, anodenr: u32) -> Result<(u32, u32, u32)> {
+        let (seqnr, offset) = if self.vol.rootblock.is_splitted_anodes() {
+            (anodenr >> 16, anodenr & 0xFFFF)
+        } else {
+            (
+                anodenr / self.anodes_per_block,
+                anodenr % self.anodes_per_block,
+            )
+        };
+        let blk_num = self.get_anode_block_nr(seqnr)?;
+        if blk_num == 0 {
+            return Err(Error::AnodeNotFound(anodenr));
+        }
+        let data = self.read_reserved_raw(blk_num)?;
+        let base = ANODE_BLOCK_HEADER_SIZE + offset as usize * ANODE_SIZE;
+        let field = |at: usize| {
+            data.get(at..at + 4)
+                .map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+                .ok_or(Error::AnodeNotFound(anodenr))
+        };
+        Ok((field(base)?, field(base + 4)?, field(base + 8)?))
+    }
+
     /// Update the fsize (and fsizex) of an existing directory entry in-place.
     fn update_dir_entry_size(&mut self, dir_anode: u32, name: &str, new_size: u64) -> Result<()> {
         let (blk, mut data, pos) = self.find_dir_entry(dir_anode, name)?;
-        let esize = data[pos] as usize;
-        let nlen = data[pos + 17] as usize;
+        let esize = usize::from(data.get(pos).copied().unwrap_or(0));
+
+        // ART (ART-325): `fsizex` is found where pfs3aio's `GetExtraFields`
+        // finds it (`directory.c:3719-3731`), and an entry whose extra fields
+        // do not fit is refused before anything is patched. It is patched only
+        // where the entry already carries it: adding it grows the entry
+        // ([ART-324], not fixed). 0.1.3 walked a layout of its own.
+        let fsizex_at = ExtraFields::word_offsets(data.get(pos..pos + esize).unwrap_or(&[]))
+            .map_err(|m| {
+                Error::Corrupt(format!(
+                    "the directory entry for '{name}' has extra fields that do not fit it (flags \
+                     0x{:04x}) — check this volume with a PFS3 repair tool before writing to it",
+                    m.flags
+                ))
+            })?[EXTRA_FSIZEX_WORD];
+
+        // ART (2026-09-15, the scoped re-review's follow-up 1): pfs3aio's
+        // `SetDEFileSize` (`directory.c:3668-3684`) writes `fsizex` only on a
+        // largefile volume; elsewhere it sets `fsize` and nothing else, and
+        // `check_file_size` has already refused a size that needs more. On a
+        // largefile volume an entry without the word cannot take high bits
+        // here — adding the word grows the entry — so that is refused rather
+        // than cut to its low 32 bits (ART-324).
+        let high = (new_size >> 32) as u16;
+        let fsizex_at = if self.vol.rootblock.has_largefile() {
+            if fsizex_at.is_none() && high != 0 {
+                return Err(Error::FileTooLarge {
+                    name: name.to_string(),
+                    size: new_size,
+                    why: "its directory entry has no room for the size's upper bits, and this \
+                          writer cannot grow an entry in place",
+                });
+            }
+            fsizex_at
+        } else {
+            None
+        };
 
         // Patch fsize (low 32 bits)
         put_u32(&mut data, pos + 6, new_size as u32);
-
-        // Walk extra fields to patch fsizex if present
-        let coff = pos + 18 + nlen;
-        if coff < pos + esize {
-            let clen = data[coff] as usize;
-            let mut fp = coff + 1 + clen;
-            if fp & 1 != 0 {
-                fp += 1;
-            }
-            let end = pos + esize;
-            if fp + 2 <= end {
-                let flags = u16::from_be_bytes(data[fp..fp + 2].try_into().unwrap());
-                fp += 2;
-                'extra: {
-                    if flags & 0x0001 != 0 {
-                        fp += 4;
-                        if fp > end {
-                            break 'extra;
-                        }
-                    }
-                    if flags & 0x0002 != 0 {
-                        fp += 2;
-                        if fp > end {
-                            break 'extra;
-                        }
-                    }
-                    if flags & 0x0004 != 0 {
-                        fp += 2;
-                        if fp > end {
-                            break 'extra;
-                        }
-                    }
-                    if flags & 0x0008 != 0 {
-                        fp += 4;
-                        if fp > end {
-                            break 'extra;
-                        }
-                    }
-                    if flags & 0x0010 != 0 {
-                        fp += 4;
-                        if fp > end {
-                            break 'extra;
-                        }
-                    }
-                    if flags & 0x0020 != 0 {
-                        fp += 4;
-                        if fp > end {
-                            break 'extra;
-                        }
-                    }
-                    if flags & 0x0040 != 0 && fp + 2 <= end {
-                        put_u16(&mut data, fp, (new_size >> 32) as u16);
-                    }
-                }
-            }
+        if let Some(at) = fsizex_at {
+            put_u16(&mut data, pos + at, high);
         }
 
         // Update datestamp
@@ -885,6 +993,47 @@ impl Writer {
         self.update_rootblock()
     }
 
+    /// Move and/or rename an entry; an existing destination is deleted first
+    /// — unless that destination is the entry being renamed (ART-322).
+    ///
+    /// ART (2026-09-15, ART-319's second disclosed gap): **one commit.** The
+    /// destination's delete — to the deldir, exactly as `delete_in` sends a
+    /// file there — the new entry and the old entry's removal are staged
+    /// together and made true by one `update_rootblock`, so an error anywhere
+    /// is discarded by `guarded` and the destination is still there. 0.1.3
+    /// deleted the destination with `delete_in`, its own commit, first.
+    ///
+    /// ART (2026-09-15, ART-322): a destination that is the source itself —
+    /// found in the same parent, under a name `name_eq_ci` matches to the
+    /// source entry's own, with the same anode, which is true of a case-only
+    /// rename in the same directory — is renamed in place instead of deleted
+    /// and recreated: its anode, size, protection, dates and comment
+    /// survive, and only the name bytes change. The identical name, same
+    /// case too, is a no-op success.
+    ///
+    /// ART (2026-09-15, the third debt round's final review fix wave, I1):
+    /// the name is part of that identity. A hard link stores its target's
+    /// anode, so with the anode alone a link in the same directory was taken
+    /// for the source. A found destination that is a hard link, or that
+    /// shares the source's anode without being the source, is refused with
+    /// `Error::AlreadyExists` before anything is staged: this writer's delete
+    /// of a hard link frees the file it names (ART-323), and pfs3aio's
+    /// `RenameAndMove` refuses every found destination that is not the
+    /// source's own direntry (`ERROR_OBJECT_EXISTS`, `directory.c:2064-2076`,
+    /// `tonioni/pfs3aio` `211f7f0`).
+    ///
+    /// ART (2026-09-15, ART-327): the entry that moves is **the source entry's
+    /// own bytes with only the name changed**, as `RenameAndMove` builds it
+    /// (`directory.c:2097-2124`): its type, anode, size, dates, protection,
+    /// comment and every extra field — `link`, `uid`/`gid`, protection bits
+    /// 8-31, rollover fields, `fsizex` — are the source's. Moved to another
+    /// directory, a hard link's own node is pointed at its new directory
+    /// (`blocknr`) and every node of a linked object's chain at the object's
+    /// (`clustersize`), as `MoveLink` does (`directory.c:2136-2142,3993-4028`).
+    /// The source entry and the chain are read first, and a chain that cannot
+    /// be walked to its end is refused `Error::EntryNotMoved` before anything
+    /// is staged. 0.1.3 rebuilt the entry with no comment, "now" as its date
+    /// and no extra fields.
     pub fn rename_in(
         &mut self,
         src_parent: u32,
@@ -903,48 +1052,298 @@ impl Writer {
         dst_name: &str,
     ) -> Result<()> {
         self.check_name_len(dst_name)?;
-        let entries = self.vol.list_dir_by_anode(src_parent)?;
-        let entry = entries
-            .iter()
-            .find(|e| crate::util::name_eq_ci(&e.name, src_name))
-            .ok_or_else(|| Error::NotFound(src_name.to_string()))?
-            .clone();
+        // ART (2026-09-15, the scoped re-review's follow-up 6, ART-330): both
+        // names are looked up through this writer's own bounded walk, which
+        // refuses a malformed entry before the name. 0.1.3 listed the
+        // directory through the reader, which ended at a malformed entry, so a
+        // name behind it was "not found"; and a destination directory that
+        // could not be listed was taken for one without the name.
+        let (src_blk, src_block, src_pos) = self.find_dir_entry(src_parent, src_name)?;
+        let entry = self.entry_in(&src_block, src_blk, src_pos)?;
+        let dst_found = match self.find_dir_entry(dst_parent, dst_name) {
+            Ok((blk, block, pos)) => Some(self.entry_in(&block, blk, pos)?),
+            Err(Error::NotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
 
-        // If destination exists, delete it first
-        if let Ok(dst_entries) = self.vol.list_dir_by_anode(dst_parent)
-            && dst_entries
-                .iter()
-                .any(|e| crate::util::name_eq_ci(&e.name, dst_name))
-        {
-            self.delete_in(dst_parent, dst_name)?;
+        // ART-322: a destination that names the very entry being renamed is
+        // not "an existing destination" to delete. `name_eq_ci` makes a
+        // case-only rename in the same directory find the source itself this
+        // way; deleting it deleted the file and reported `Ok`. Rename it in
+        // place instead, so its anode, size, protection, dates and comment
+        // all survive and only the name bytes change. An identical name (the
+        // same case too) is a no-op success.
+        //
+        // Final review fix wave (I1): "the very entry" is the same parent, a
+        // found name `name_eq_ci` matches to the source entry's own — names
+        // in one directory are unique under that compare — and the same
+        // anode. The anode alone took a hard link in the same directory for
+        // the source, since a link stores its target's anode.
+        let mut replace_dst = false;
+        if let Some(dst_entry) = dst_found {
+            if dst_parent == src_parent
+                && crate::util::name_eq_ci(&dst_entry.name, &entry.name)
+                && dst_entry.anode == entry.anode
+            {
+                if entry.name == dst_name {
+                    return Ok(());
+                }
+                return self.rename_dir_entry_in_place(src_parent, src_name, dst_name);
+            }
+            // Final review fix wave (I1): a hard link cannot be replaced —
+            // `delete_in_no_commit` on one frees the file it names (ART-323) —
+            // and neither can a different entry sharing the source's anode (a
+            // link and the file it names are one file). Refused before
+            // anything is staged. pfs3aio refuses every found destination
+            // that is not the source's own direntry (`RenameAndMove`,
+            // `directory.c:2064-2076`).
+            if dst_entry.is_hardlink() || dst_entry.anode == entry.anode {
+                return Err(Error::AlreadyExists(dst_name.to_string()));
+            }
+            replace_dst = true;
         }
 
-        // Add entry in new location with new name
-        self.add_dir_entry(
-            dst_parent,
-            dst_name,
-            entry.entry_type,
-            entry.anode,
-            entry.file_size(),
-            entry.protection,
-        )?;
-        // Remove from old location
+        // ART (ART-327): what moves, and the link nodes it updates, are read
+        // — and refused if they cannot be — before anything is staged.
+        let moved = self.moved_entry(&src_block, src_blk, src_pos, dst_name)?;
+        let link_moves = if dst_parent == src_parent {
+            Vec::new()
+        } else {
+            self.link_moves(&moved, &entry.name, dst_parent)?
+        };
+
+        if replace_dst {
+            // ART (ART-319's second gap): staged, not committed on its own.
+            self.delete_in_no_commit(dst_parent, dst_name)?;
+        }
+        // The new entry is added before the old one is removed, as pfs3aio's
+        // `RenameAcrossDirs` does (`directory.c:3028-3044`).
+        self.add_dir_entry_bytes(dst_parent, &moved)?;
         self.remove_dir_entry(src_parent, src_name)?;
+        for (nr, clustersize, blocknr, next) in link_moves {
+            self.write_anode_fields(nr, clustersize, blocknr, next)?;
+        }
+        self.update_rootblock()
+    }
+
+    /// ART (ART-327): the entry pfs3aio's `RenameAndMove` builds for a rename
+    /// (`directory.c:2097-2124`, `tonioni/pfs3aio` `211f7f0`) from the entry
+    /// at `pos` of directory block `blk`: its header through `protection`
+    /// copied, `new_name`, its comment copied, and — on a
+    /// `MODE_DIR_EXTENSION` volume, as `g->dirextension` gates it there — its
+    /// extra fields copied to the offset the new name puts them at. The name
+    /// is written as Latin-1, what the reader decodes and an Amiga writes; a
+    /// name holding a character above U+00FF is written as its UTF-8 bytes,
+    /// the way `build_dir_entry` writes every name (ART-328).
+    fn moved_entry(&self, block: &[u8], blk: u32, pos: usize, new_name: &str) -> Result<Vec<u8>> {
+        let malformed = || {
+            Error::Corrupt(format!(
+                "directory block {blk} holds a malformed entry at offset {pos} (its comment runs \
+                 past it) — check this volume with a PFS3 repair tool before writing to it"
+            ))
+        };
+        let (size, nlen) = Self::dir_entry_at(block, blk, pos)?.ok_or_else(malformed)?;
+        let src = block.get(pos..pos + size).ok_or_else(malformed)?;
+        let clen = usize::from(*src.get(18 + nlen).ok_or_else(malformed)?);
+        let comment = src.get(19 + nlen..19 + nlen + clen).ok_or_else(malformed)?;
+        let name: Vec<u8> = new_name
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).ok())
+            .collect::<Option<Vec<u8>>>()
+            .unwrap_or_else(|| new_name.as_bytes().to_vec());
+        let mut entry = Vec::with_capacity(size + name.len());
+        entry.extend_from_slice(src.get(..17).ok_or_else(malformed)?);
+        entry.push(name.len() as u8);
+        entry.extend_from_slice(&name);
+        entry.push(clen as u8);
+        entry.extend_from_slice(comment);
+        entry.resize(extra_fields_offset(name.len(), clen), 0);
+        if self.vol.rootblock.has_flag(MODE_DIR_EXTENSION) {
+            entry.extend_from_slice(src.get(extra_fields_offset(nlen, clen)..).unwrap_or(&[]));
+        }
+        let fixed = entry.len() - name.len();
+        entry[0] = u8::try_from(entry.len()).map_err(|_| Error::NameTooLong {
+            name: new_name.to_string(),
+            len: name.len(),
+            max: 255usize.saturating_sub(fixed),
+        })?;
+        Ok(entry)
+    }
+
+    /// ART (ART-327): the anode writes `(anode, clustersize, blocknr, next)`
+    /// that pfs3aio's `MoveLink` makes when `entry` — the entry `moved_entry`
+    /// built — moves to directory `new_dir` (`directory.c:3993-4028`): none
+    /// without a `link` field; for a hard link, its own node (the entry's
+    /// anode) with `blocknr` set to `new_dir`; for a linked object, each node
+    /// of the chain its `link` field heads with `clustersize` set to
+    /// `new_dir`. Read now, written after the entry has moved. A node that
+    /// cannot be read, or a chain that loops, is refused
+    /// `Error::EntryNotMoved` naming the anode.
+    fn link_moves(
+        &mut self,
+        entry: &[u8],
+        name: &str,
+        new_dir: u32,
+    ) -> Result<Vec<(u32, u32, u32, u32)>> {
+        let refuse = |reason: String| Error::EntryNotMoved {
+            name: name.to_string(),
+            reason,
+        };
+        let link = self.entry_link_field(entry).map_err(|m| {
+            refuse(format!(
+                "its directory entry has extra fields that do not fit it (flags 0x{:04x})",
+                m.flags
+            ))
+        })?;
+        if link == 0 {
+            return Ok(Vec::new());
+        }
+        let entry_type = entry.get(1).map_or(0, |&t| t as i8);
+        if entry_type == ST_LINKFILE || entry_type == ST_LINKDIR {
+            let node = entry
+                .get(2..6)
+                .map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+            let (clustersize, _, next) = self.read_anode_fields(node).map_err(|e| {
+                refuse(format!("its hard-link node, anode {node}, could not be read ({e})"))
+            })?;
+            return Ok(vec![(node, clustersize, new_dir, next)]);
+        }
+        let mut moves = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut nr = link;
+        while nr != 0 {
+            if !seen.insert(nr) {
+                return Err(refuse(format!(
+                    "its chain of hard links loops back to anode {nr}"
+                )));
+            }
+            let (_, blocknr, next) = self.read_anode_fields(nr).map_err(|e| {
+                refuse(format!(
+                    "its chain of hard links names anode {nr}, which could not be read ({e})"
+                ))
+            })?;
+            moves.push((nr, new_dir, blocknr, next));
+            nr = next;
+        }
+        Ok(moves)
+    }
+
+    /// ART-322: rewrite a directory entry's name bytes in place, leaving its
+    /// anode, size, protection, dates, comment and every extra field
+    /// untouched. Only reached for a destination that is the source entry
+    /// itself — same parent, a `name_eq_ci` match to the entry's own name,
+    /// same anode.
+    ///
+    /// Final review fix wave (M1): the name is written as **Latin-1**, one
+    /// byte a character, the encoding `find_dir_entry` and the reader decode
+    /// it with (`util::latin1_to_string`) and the one an Amiga writes. It
+    /// used to be the new name's UTF-8 bytes, so a case-only rename of a
+    /// non-ASCII name ("Äa", `C4 61`, to "ÄA") measured three bytes against
+    /// two and refused a healthy volume as corrupt. `name_eq_ci` folds only
+    /// characters at or below U+00FF onto others there (ASCII, and since
+    /// ART-326 Latin-1 letters too), over names decoded from those same
+    /// bytes, so the new name always has one character at or below U+00FF
+    /// for each stored byte; `Error::Corrupt` is a safety net for the entry no longer
+    /// holding what was just found in it, never expected to fire, rather
+    /// than indexing past the entry.
+    fn rename_dir_entry_in_place(
+        &mut self,
+        dir_anode: u32,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<()> {
+        let (blk, mut data, pos) = self.find_dir_entry(dir_anode, old_name)?;
+        let old_nlen = data[pos + 17] as usize;
+        let new_name_bytes: Option<Vec<u8>> = new_name
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).ok())
+            .collect();
+        let new_name_bytes = match new_name_bytes {
+            Some(bytes) if bytes.len() == old_nlen => bytes,
+            _ => {
+                return Err(Error::Corrupt(format!(
+                    "the directory entry found for '{old_name}' does not hold a name that \
+                     '{new_name}' differs from only in letter case"
+                )));
+            }
+        };
+        let new_nlen = new_name_bytes.len();
+        data[pos + 18..pos + 18 + new_nlen].copy_from_slice(&new_name_bytes);
+        put_u32(&mut data, 4, self.next_datestamp());
+        self.write_reserved(blk, &data)?;
         self.update_rootblock()
     }
 
     /// Delete a file or empty directory by name in a parent directory.
+    ///
+    /// ART (2026-09-15, ART-323), hard links, before anything is staged:
+    /// - **A hard link in 0.1.3's shape** (`ST_LINKFILE`/`ST_LINKDIR`, no
+    ///   `link` extra field, the linked object's anode in its entry) loses its
+    ///   entry and nothing else. 0.1.3 freed the data blocks and anodes of the
+    ///   object the link names, which stayed listed and read back empty.
+    ///   pfs3aio's `DeleteObject` likewise sends a link to `DeleteLink`, which
+    ///   never frees the object (`directory.c:1778-1783`).
+    /// - **A hard link pfs3aio made** (its `link` field set) is refused with
+    ///   `Error::Pfs3aioLinkNotDeleted`: `DeleteLink` also takes the link's
+    ///   node out of the object's chain of links, rewriting the object's entry
+    ///   when the link is the head or the previous node otherwise
+    ///   (`directory.c:3835-3895`), and this writer does not.
+    /// - **An object hard links name** is refused with `Error::HasHardLinks`:
+    ///   a link entry anywhere on the volume naming its anode, in either
+    ///   shape, or its own `link` field (the head of its chain). pfs3aio
+    ///   promotes the first link to be the object instead (`RemapLinks`,
+    ///   `directory.c:1795-1799,3903-3965`), and this writer does not. **The
+    ///   cost:** every directory on the volume is read on each delete of
+    ///   anything that is not a link.
+    ///
+    /// Each refusal goes through `guarded`, so it discards back to the last
+    /// commit.
     pub fn delete_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
         self.guarded(|w| w.delete_in_impl(parent_anode, name))
     }
 
     fn delete_in_impl(&mut self, parent_anode: u32, name: &str) -> Result<()> {
-        let entries = self.vol.list_dir_by_anode(parent_anode)?;
-        let target = entries
-            .iter()
-            .find(|e| crate::util::name_eq_ci(&e.name, name))
-            .ok_or_else(|| Error::NotFound(name.to_string()))?
-            .clone();
+        self.delete_in_no_commit(parent_anode, name)?;
+        self.update_rootblock()
+    }
+
+    /// Delete without committing — caller must call update_rootblock(). ART
+    /// (ART-319's second gap): shared by `delete_in` and `rename_in`, so a
+    /// rename's destination goes exactly where a delete sends it.
+    fn delete_in_no_commit(&mut self, parent_anode: u32, name: &str) -> Result<()> {
+        // ART (2026-09-15, the scoped re-review's follow-up 6, ART-330): the
+        // name is looked up through this writer's own bounded walk, which
+        // refuses a malformed entry before it. 0.1.3 listed the directory
+        // through the reader, which ended there, and said "not found".
+        let (blk, block, pos) = self.find_dir_entry(parent_anode, name)?;
+        let target = self.entry_in(&block, blk, pos)?;
+
+        // ART-323: a hard link is only its entry; an object links name is not
+        // deleted. See `delete_in`.
+        let size = usize::from(block.get(pos).copied().unwrap_or(0));
+        // The scoped re-review's item 4: an entry whose own extra fields do
+        // not fit it is refused naming it, not with an offset.
+        let link_field = self
+            .entry_link_field(block.get(pos..pos + size).unwrap_or(&[]))
+            .map_err(|m| Error::EntryNotDeleted {
+                name: target.name.clone(),
+                reason: format!(
+                    "its directory entry has extra fields that do not fit it (flags 0x{:04x})",
+                    m.flags
+                ),
+            })?;
+        if target.is_hardlink() {
+            if link_field != 0 {
+                return Err(Error::Pfs3aioLinkNotDeleted(target.name));
+            }
+            return self.remove_dir_entry(parent_anode, name);
+        }
+        if let Some(links) = self.links_naming(&target.name, target.anode, link_field)? {
+            return Err(Error::HasHardLinks {
+                name: target.name,
+                links,
+            });
+        }
 
         if target.is_dir() {
             let sub = self.vol.list_dir_by_anode(target.anode)?;
@@ -964,8 +1363,121 @@ impl Writer {
                 self.clear_anode_chain(target.anode)?;
             }
         }
-        self.remove_dir_entry(parent_anode, name)?;
-        self.update_rootblock()
+        self.remove_dir_entry(parent_anode, name)
+    }
+
+    /// ART-323: the `link` extra field of `entry` — one whole entry — as
+    /// pfs3aio's `GetExtraFields` reads it (`directory.c:3719-3731`).
+    /// ART (ART-325): through `ExtraFields::read`, the one reading of that
+    /// layout `DirEntry::parse` now shares; this used to be a reading of its
+    /// own. Only a `MODE_DIR_EXTENSION` volume has extra fields (pfs3aio's
+    /// `CreateLink` refuses without them, `directory.c:2628-2632`). An entry
+    /// whose extra fields do not fit it is returned as such, for the caller
+    /// to refuse naming it.
+    fn entry_link_field(&self, entry: &[u8]) -> std::result::Result<u32, MalformedExtraFields> {
+        if !self.vol.rootblock.has_flag(MODE_DIR_EXTENSION) {
+            return Ok(0);
+        }
+        ExtraFields::read(entry).map(|x| x.link)
+    }
+
+    /// ART-323: what names `anode` as a hard link's object, or `None`. Every
+    /// directory reachable from the root is read, each once: a link in
+    /// 0.1.3's shape names it by its entry's anode, a link pfs3aio made by
+    /// its `link` field (`CreateLink`, `directory.c:2686`). `head`, the
+    /// object's own `link` field, is the head of its chain of links
+    /// (`directory.c:2720-2726`); when no link entry is found it still names
+    /// links — pfs3aio would discard nodes whose entries are gone
+    /// (`directory.c:3922-3934`), but walking a chain this writer cannot
+    /// check is not safe.
+    ///
+    /// ART (the scoped re-review's item 4): a check that cannot finish is
+    /// refused `Error::EntryNotDeleted`, naming `object`, what stopped it and
+    /// where — a directory that cannot be read, an entry that cannot be
+    /// walked (by block and offset), a link whose extra fields do not fit.
+    /// It used to return the bare error, or stop walking a block at a
+    /// malformed entry and let the delete go ahead.
+    fn links_naming(&mut self, object: &str, anode: u32, head: u32) -> Result<Option<String>> {
+        let refuse = |reason: String| Error::EntryNotDeleted {
+            name: object.to_string(),
+            reason: format!("ART could not check that no hard link names it, because {reason}"),
+        };
+        let dir_phrase = |path: &str| {
+            if path.is_empty() {
+                "the root directory".to_string()
+            } else {
+                format!("the directory '{path}'")
+            }
+        };
+        let mut dirs = vec![(String::new(), ANODE_ROOTDIR)];
+        let mut seen = std::collections::HashSet::new();
+        while let Some((path, dir)) = dirs.pop() {
+            if !seen.insert(dir) {
+                continue;
+            }
+            let unreadable = |e: Error| refuse(format!("{} could not be read ({e})", dir_phrase(&path)));
+            let chain = self
+                .vol
+                .anodes
+                .get_chain(dir, self.vol.dev.as_ref(), &mut self.vol.cache)
+                .map_err(unreadable)?;
+            for an in &chain {
+                for i in 0..an.clustersize {
+                    let blk = an.blocknr + i;
+                    let data = self.read_reserved_raw(blk).map_err(unreadable)?;
+                    if data.get(0..2) != Some(&DBLKID.to_be_bytes()[..]) {
+                        continue;
+                    }
+                    let mut pos = DIR_BLOCK_HEADER_SIZE;
+                    loop {
+                        let (esize, nlen) = match Self::dir_entry_at(&data, blk, pos) {
+                            Ok(Some(found)) => found,
+                            Ok(None) => break,
+                            Err(_) => {
+                                return Err(refuse(format!(
+                                    "{} holds a malformed entry at offset {pos} of block {blk} \
+                                     (size {})",
+                                    dir_phrase(&path),
+                                    data.get(pos).copied().unwrap_or(0)
+                                )));
+                            }
+                        };
+                        // `dir_entry_at` bounds the entry and its name.
+                        let entry = data.get(pos..pos + esize).unwrap_or(&[]);
+                        let etype = entry.get(1).map_or(0, |&t| t as i8);
+                        let eanode = entry
+                            .get(2..6)
+                            .map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+                        let name =
+                            crate::util::latin1_to_string(entry.get(18..18 + nlen).unwrap_or(&[]));
+                        let full = if path.is_empty() {
+                            name
+                        } else {
+                            format!("{path}/{name}")
+                        };
+                        if etype == ST_USERDIR {
+                            dirs.push((full, eanode));
+                        } else if etype == ST_LINKFILE || etype == ST_LINKDIR {
+                            let link = self.entry_link_field(entry).map_err(|m| {
+                                refuse(format!(
+                                    "the hard link '{full}' has extra fields that do not fit its \
+                                     entry (flags 0x{:04x})",
+                                    m.flags
+                                ))
+                            })?;
+                            if link == anode || (link == 0 && eanode == anode) {
+                                return Ok(Some(format!("'{full}'")));
+                            }
+                        }
+                        pos += esize;
+                    }
+                }
+            }
+        }
+        if head != 0 {
+            return Ok(Some(format!("a pfs3aio link chain from anode {head}")));
+        }
+        Ok(None)
     }
 
     /// ART-318: put a deleted file into the deldir as pfs3aio's `AllocDeldirSlot`
@@ -1470,18 +1982,7 @@ impl Writer {
     }
 
     fn create_anode_chain(&mut self, blocks: &[u32]) -> Result<u32> {
-        let mut clusters = Vec::new();
-        let mut i = 0usize;
-        while i < blocks.len() {
-            let start = blocks[i];
-            let mut count = 1u32;
-            while i + (count as usize) < blocks.len() && blocks[i + count as usize] == start + count
-            {
-                count += 1;
-            }
-            clusters.push((start, count));
-            i += count as usize;
-        }
+        let clusters = block_extents(blocks);
         // Allocate in reverse so we can set next pointers
         let mut next_nr = 0u32;
         for &(start, count) in clusters.iter().rev() {
@@ -1526,6 +2027,14 @@ impl Writer {
         protection: u8,
     ) -> Result<()> {
         let entry_bytes = self.build_dir_entry(name, entry_type, anode, fsize, protection);
+        self.add_dir_entry_bytes(dir_anode, &entry_bytes)
+    }
+
+    /// ART (ART-327): `add_dir_entry`'s body, for an entry already built —
+    /// `rename_in`'s moved entry. ART (the scoped re-review's item 5): the
+    /// walk to the end of a block's entries goes through `dir_entry_at`, so a
+    /// malformed entry is refused rather than stepped over.
+    fn add_dir_entry_bytes(&mut self, dir_anode: u32, entry_bytes: &[u8]) -> Result<()> {
         let chain =
             self.vol
                 .anodes
@@ -1546,14 +2055,11 @@ impl Writer {
                 }
                 // Find end of entries
                 let mut pos = DIR_BLOCK_HEADER_SIZE;
-                while pos < self.resblocksize as usize {
-                    if data[pos] == 0 {
-                        break;
-                    }
-                    pos += data[pos] as usize;
+                while let Some((esize, _)) = Self::dir_entry_at(&data, blk, pos)? {
+                    pos += esize;
                 }
                 if pos + entry_bytes.len() < self.resblocksize as usize {
-                    data[pos..pos + entry_bytes.len()].copy_from_slice(&entry_bytes);
+                    data[pos..pos + entry_bytes.len()].copy_from_slice(entry_bytes);
                     if pos + entry_bytes.len() < self.resblocksize as usize {
                         data[pos + entry_bytes.len()] = 0;
                     }
@@ -1575,20 +2081,21 @@ impl Writer {
         put_u32(&mut new_data, 0x0C, dir_anode);
         put_u32(&mut new_data, 0x10, parent);
         new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
-            .copy_from_slice(&entry_bytes);
+            .copy_from_slice(entry_bytes);
         self.write_reserved(new_blk, &new_data)?;
         self.extend_anode_chain(dir_anode, new_blk)
     }
 
     fn remove_dir_entry(&mut self, dir_anode: u32, name: &str) -> Result<()> {
         let (blk, mut data, pos) = self.find_dir_entry(dir_anode, name)?;
-        let esize = data[pos] as usize;
-        let end = pos + esize;
-        let remaining = self.resblocksize as usize - end;
-        data.copy_within(end..end + remaining, pos);
-        for b in &mut data[pos + remaining..pos + remaining + esize] {
-            *b = 0;
-        }
+        // ART (the scoped re-review's item 5): bounded by the block itself —
+        // `find_dir_entry` returns an entry with `pos + esize <= data.len()`.
+        // 0.1.3 took the block's length from `resblocksize`.
+        let len = data.len();
+        let esize = usize::from(data.get(pos).copied().unwrap_or(0));
+        let end = (pos + esize).min(len);
+        data.copy_within(end..len, pos);
+        data[len - (end - pos)..].fill(0);
         put_u32(&mut data, 4, self.next_datestamp());
         self.write_reserved(blk, &data)?;
         Ok(())
@@ -1604,15 +2111,31 @@ impl Writer {
     ) -> Vec<u8> {
         let name_bytes = name.as_bytes();
         let nlen = name_bytes.len().min(107);
-        let fsizex = (fsize >> 32) as u16;
-        let has_fsizex = fsizex > 0;
-        let extra_bytes = if has_fsizex { 4 } else { 2 }; // flags(2) + optional fsizex(2)
-        let mut base_size = 18 + nlen + 1 + extra_bytes;
-        if base_size & 1 != 0 {
-            base_size += 1;
+        // ART (ART-325): the extra fields in pfs3aio's layout
+        // (`AddExtraFields`, `directory.c:3764-3800`) — `fsizex`, when there
+        // are high bits, then the flags word — through `ExtraFields::encode`.
+        // Below 4 GiB this is 0.1.3's entry byte for byte (a zero flags word
+        // at the same offset); 0.1.3 put a set `fsizex` after the flags word,
+        // behind bit 0x40.
+        //
+        // ART (2026-09-15, the scoped re-review's follow-up 1): only on a
+        // largefile volume, as pfs3aio's `SetDEFileSize` writes it
+        // (`directory.c:3668-3684`); every caller has asked `check_file_size`,
+        // so elsewhere there are no high bits to write.
+        let fsizex = if self.vol.rootblock.has_largefile() {
+            (fsize >> 32) as u16
+        } else {
+            0
+        };
+        let extra = ExtraFields {
+            fsizex,
+            ..ExtraFields::default()
         }
-        let mut entry = vec![0u8; base_size];
-        entry[0] = base_size as u8;
+        .encode();
+        let fields = extra_fields_offset(nlen, 0);
+        let mut entry = vec![0u8; fields];
+        entry.extend_from_slice(&extra);
+        entry[0] = entry.len() as u8;
         entry[1] = entry_type as u8;
         put_u32(&mut entry, 2, anode);
         put_u32(&mut entry, 6, fsize as u32);
@@ -1624,16 +2147,6 @@ impl Writer {
         entry[17] = nlen as u8;
         entry[18..18 + nlen].copy_from_slice(&name_bytes[..nlen]);
         entry[18 + nlen] = 0; // comment length
-        let ef_off = if (18 + nlen + 1) & 1 != 0 {
-            18 + nlen + 2
-        } else {
-            18 + nlen + 1
-        };
-        let flags: u16 = if has_fsizex { 0x0040 } else { 0 };
-        put_u16(&mut entry, ef_off, flags);
-        if has_fsizex {
-            put_u16(&mut entry, ef_off + 2, fsizex);
-        }
         entry
     }
 
@@ -1853,4 +2366,22 @@ impl Writer {
         }
         Ok((parent, filename))
     }
+}
+
+/// `blocks` as runs of consecutive block numbers, `(first, count)` each —
+/// one anode per run. Shared by `create_anode_chain` and ART's copy-on-write
+/// `overwrite_file_in` (2026-09-15); the same loop 0.1.3 had inline.
+fn block_extents(blocks: &[u32]) -> Vec<(u32, u32)> {
+    let mut clusters = Vec::new();
+    let mut i = 0usize;
+    while i < blocks.len() {
+        let start = blocks[i];
+        let mut count = 1u32;
+        while i + (count as usize) < blocks.len() && blocks[i + count as usize] == start + count {
+            count += 1;
+        }
+        clusters.push((start, count));
+        i += count as usize;
+    }
+    clusters
 }

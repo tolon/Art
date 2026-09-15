@@ -4,7 +4,17 @@
 //! name the volume cannot store and find again; (ART-319) the `CommitFailed`
 //! variant, for a writer that has locked itself; on 2026-09-14, the final
 //! review (M1): `CommitFailed`'s sentence covers both causes that reach it,
-//! not only a failed commit. `ART-PATCH.md` in this crate's root says what
+//! not only a failed commit.
+//! Modified by ART on 2026-09-15 (ART-323): the `HardLinkNotWritten`,
+//! `Pfs3aioLinkNotDeleted` and `HasHardLinks` variants, the writer's refusals
+//! around hard links.
+//! Modified by ART on 2026-09-15 (ART-325/326/327): the `EntryNotDeleted`
+//! and `EntryNotMoved` variants, a delete or a move refused with what stopped
+//! it and what the user can do.
+//! Modified by ART on 2026-09-15 (the scoped re-review's follow-ups 1 and 6,
+//! ART-324 and ART-330): the `FileTooLarge` variant, a file the volume cannot
+//! record the size of, and the `DamagedDirectory` variant, a directory walk
+//! stopped by a malformed entry. `ART-PATCH.md` in this crate's root says what
 //! and why.
 
 /// Result type alias using the PFS3 [`Error`].
@@ -47,6 +57,86 @@ pub enum Error {
 
     #[error("disk full: {0}")]
     DiskFull(String),
+
+    /// ART-323: `Writer::create_hardlink` is refused. 0.1.3 wrote the
+    /// linked object's anode into the link's own entry; pfs3aio's link has a
+    /// link node of its own and sits in the object's chain of links
+    /// (`CreateLink`, `directory.c:2672-2748`, `tonioni/pfs3aio` `211f7f0`).
+    #[error(
+        "hard link '{0}' was not created: this writer cannot write pfs3aio's hard-link format \
+         (a link anode and the linked object's chain of links)"
+    )]
+    HardLinkNotWritten(String),
+
+    /// ART-323: deleting a hard link pfs3aio made means taking its node out
+    /// of the object's chain of links (`DeleteLink`, `directory.c:3835-3895`),
+    /// which the writer does not do.
+    #[error(
+        "'{0}' is a hard link pfs3aio made, and this writer cannot take it out of its object's \
+         chain of links, so it did not delete it — delete it on the Amiga"
+    )]
+    Pfs3aioLinkNotDeleted(String),
+
+    /// ART-323: an object that hard links still name is not deleted. pfs3aio
+    /// promotes a link to be the object instead (`RemapLinks`,
+    /// `directory.c:3903-3965`); the writer does not. `links` names the link
+    /// found, or the object's own chain of links when no link entry was.
+    #[error(
+        "'{name}' has hard links ({links}): this writer cannot hand it over to one of them as \
+         pfs3aio does, so it did not delete it — delete the links first"
+    )]
+    HasHardLinks { name: String, links: String },
+
+    /// ART (2026-09-15, the scoped re-review's item 4): a delete refused
+    /// because something it must check first could not be checked — its own
+    /// entry's extra fields, or the hard-link check, stopped by a directory
+    /// it could not read, an entry it could not walk or a link whose extra
+    /// fields do not fit. `reason` names what stopped it and where.
+    #[error(
+        "'{name}' was not deleted: {reason} — delete it on the Amiga, or check this volume with \
+         a PFS3 repair tool and try again"
+    )]
+    EntryNotDeleted { name: String, reason: String },
+
+    /// ART (2026-09-15, ART-327): a move to another directory refused because
+    /// the chain of hard links pfs3aio's `MoveLink` updates
+    /// (`directory.c:3993-4028`) could not be read to its end. `reason` names
+    /// the anode.
+    #[error(
+        "'{name}' was not moved: {reason} — move it on the Amiga, or check this volume with a \
+         PFS3 repair tool and try again"
+    )]
+    EntryNotMoved { name: String, reason: String },
+
+    /// ART (2026-09-15, the scoped re-review's follow-up 1, ART-324): a file
+    /// this volume cannot record the size of. pfs3aio refuses to write past
+    /// `MAXFILESIZE32` (0xffffffff, `blocks.h:627`) unless the volume is
+    /// largefile (`WriteToFile`, `disk.c:797`, `ERROR_DISK_FULL`; `SetEOF`,
+    /// `disk.c:1130`; `tonioni/pfs3aio` `211f7f0`). `why` says which limit.
+    #[error("'{name}' was not written: it is {size} bytes, and {why}")]
+    FileTooLarge {
+        name: String,
+        size: u64,
+        why: &'static str,
+    },
+
+    /// ART (2026-09-15, the scoped re-review's follow-up 6, ART-330): a
+    /// directory whose walk stopped at a malformed entry, so a name behind it
+    /// can be neither found nor ruled out, and a listing of it would be short.
+    /// `dir` names the directory ("the root directory", "the directory 'S'"),
+    /// `block` and `offset` where the entry is. 0.1.3's reader ended the walk
+    /// there silently and said "not found".
+    #[error(
+        "{dir} is damaged: its block {block} holds a malformed entry at offset {offset} (size \
+         {size}), so the entries after it cannot be read — check this volume with a PFS3 repair \
+         tool"
+    )]
+    DamagedDirectory {
+        dir: String,
+        block: u64,
+        offset: usize,
+        size: u8,
+    },
 
     /// ART-319: the writer has locked itself, and every later mutating call
     /// refuses immediately with this, before touching anything. Two causes

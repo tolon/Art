@@ -57,6 +57,7 @@ function area(offset: number, names: string[]) {
   return {
     offset_bytes: offset,
     length_bytes: 1_000_000,
+    mbr_slot: null,
     rdb: {
       partitions: names.map(part),
       file_systems: [],

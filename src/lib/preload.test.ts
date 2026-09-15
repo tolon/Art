@@ -55,6 +55,7 @@ const CARD: CardReport = {
       {
         offset_bytes: 1_178_599_424,
         length_bytes: 32 * 1024 * 1024 * 1024,
+        mbr_slot: 2,
         rdb: {
           partitions: [partition("DH0", "PDS\\3"), partition("DH1", "PDS\\3")],
           file_systems: [],
@@ -64,6 +65,7 @@ const CARD: CardReport = {
       {
         offset_bytes: 34_000_000_000,
         length_bytes: 30 * 1024 * 1024 * 1024,
+        mbr_slot: 3,
         rdb: {
           partitions: [partition("DH2", "PDS\\3")],
           file_systems: [],

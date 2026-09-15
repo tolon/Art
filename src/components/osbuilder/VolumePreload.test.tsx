@@ -81,6 +81,7 @@ const CARD: CardReport = {
       {
         offset_bytes: 1_178_599_424,
         length_bytes: 60 * 1024 * 1024 * 1024,
+        mbr_slot: 2,
         rdb: { partitions: [PARTITION], file_systems: [], checksum_valid: true },
       },
     ],

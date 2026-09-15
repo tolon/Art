@@ -833,6 +833,86 @@ mod tests {
         );
     }
 
+    /// Damages, raw on the image, the entry just before `name` in the PFS3
+    /// directory `dir` of the image's one partition: its size byte becomes
+    /// 12, smaller than an entry's own header. Returns the directory block and
+    /// the damaged entry's offset in it.
+    fn damage_the_pfs3_entry_before(
+        image: &std::path::Path,
+        dir: &str,
+        name: &str,
+    ) -> (u32, usize) {
+        let card = read_card(image).unwrap();
+        let area = &card.areas[0];
+        let (offset, _, _) = partition_region(area, &area.rdb.partitions[0]).unwrap();
+        let blk = {
+            let mut vol = libpfs3::volume::Volume::open(image, offset).unwrap();
+            let anode = vol.lookup(dir).unwrap().unwrap().anode;
+            vol.get_anode_chain(anode).unwrap()[0].blocknr
+        };
+        let at = offset + u64::from(blk) * 512;
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(image)
+            .unwrap();
+        let mut block = vec![0u8; 1024];
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(at)).unwrap();
+        std::io::Read::read_exact(&mut file, &mut block).unwrap();
+        let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+        let mut before = None;
+        loop {
+            let size = usize::from(block[pos]);
+            assert_ne!(size, 0, "'{name}' is not in the first block of '{dir}'");
+            let nlen = usize::from(block[pos + 17]);
+            if &block[pos + 18..pos + 18 + nlen] == name.as_bytes() {
+                break;
+            }
+            before = Some(pos);
+            pos += size;
+        }
+        let damaged = before.unwrap_or_else(|| panic!("no entry lies before '{name}' in '{dir}'"));
+        block[damaged] = 12;
+        std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(at)).unwrap();
+        std::io::Write::write_all(&mut file, &block).unwrap();
+        (blk, damaged)
+    }
+
+    /// **The scoped re-review's follow-up 6 (ART-330), at the first-boot
+    /// report.** libpfs3's reader stopped at a malformed directory entry and
+    /// answered "not there" for every name behind it, so a card whose `S`
+    /// drawer was damaged before `FirstBoot.log` read as "not booted" — the
+    /// ending for a card that never ran the block. It must be "could not be
+    /// checked", naming the damage.
+    #[test]
+    fn a_pfs3_report_behind_a_damaged_directory_entry_is_could_not_be_checked_not_not_booted() {
+        let dir = ScratchDir::new("art-firstboot-cardread", "pfs3-damaged-directory");
+        let image = card_with_partition(dir.path(), AmigaHardDiskFs::Pfs3DirectScsi, 8);
+        NativeFormatter::UTC
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let tree = tree_with_report(dir.path(), b"art-firstboot 1\ndone all\n");
+        std::fs::write(tree.join("S/Aaa"), b"before the report").unwrap();
+        NativeFormatter::UTC
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+        let (blk, pos) = damage_the_pfs3_entry_before(&image, "S", "FirstBoot.log");
+
+        let got = match read_card_report(&image) {
+            Ok(found) => format!("Ok({:?}, {:?})", found.source, found.report.ending),
+            Err(err) => err.to_string(),
+        };
+        assert_eq!(
+            got,
+            format!(
+                "malformed card: the Amiga volume's own first-boot report could not be checked: \
+                 area 1 partition 'DH0': malformed pfs3: the directory 'S' is damaged: its block \
+                 {blk} holds a malformed entry at offset {pos} (size 12), so the entries after it \
+                 cannot be read — check this volume with a PFS3 repair tool"
+            )
+        );
+    }
+
     /// The other half: a failure on one partition must not stop the search.
     /// `DH0` is corrupt; `DH1` carries the real report, and it still wins.
     #[test]

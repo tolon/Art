@@ -624,31 +624,23 @@ pub fn dostype_from_label(label: &str) -> Option<u32> {
     Some((value << 8) | u32::from(last))
 }
 
-/// How far past `$VER:` a name is looked for — the same window
-/// `core::rdb::version_from_ver_string` reads.
-const VER_NAME_SCAN_BYTES: usize = 200;
-
 /// The program a driver's `$VER:` string names — `pfs3aio` in
 /// `$VER: pfs3aio 19.2 (2.10.18)` (spec decision 13). The first token after
 /// the marker, split on whitespace and NUL. A token that starts with a digit
 /// and holds a dot is a version, so a string that names no program answers
 /// `None`, as does a file with no marker.
+///
+/// A thin call into [`crate::core::amigaver::read_loose`] (item 4 of the
+/// third debt round, replacing this function's own former scan, ART-117 M5)
+/// — its own `Option<String>` return type is kept so callers here never
+/// need to learn about `AmigaVersion`. `read_loose` tolerates the NUL run
+/// this function's own tests pin
+/// (`driver_tests::the_program_name_is_the_first_token_after_ver`'s
+/// `$VER:\0\0pfs3aio.device 4.1` case) and, unlike
+/// `crate::core::amigaver::read`, does not reject a control byte in the name
+/// (`driver_tests::control_bytes_in_the_name_are_returned_verbatim_not_rejected`).
 pub fn program_name_from_ver_string(data: &[u8]) -> Option<String> {
-    const MARKER: &[u8] = b"$VER:";
-    let at = data
-        .windows(MARKER.len())
-        .position(|window| window == MARKER)?;
-    let start = at + MARKER.len();
-    let end = start.saturating_add(VER_NAME_SCAN_BYTES).min(data.len());
-    let token = data
-        .get(start..end)?
-        .split(|b| b.is_ascii_whitespace() || *b == 0)
-        .find(|token| !token.is_empty())?;
-    let is_version = token.first().is_some_and(u8::is_ascii_digit) && token.contains(&b'.');
-    if is_version {
-        return None;
-    }
-    Some(String::from_utf8_lossy(token).into_owned())
+    crate::core::amigaver::read_loose(data).name
 }
 
 /// Whether two program names are one program. ASCII case is not identity.
@@ -1979,6 +1971,37 @@ mod driver_tests {
         assert_eq!(program_name_from_ver_string(b"$VER: 19.2 (1.1.26)"), None);
         assert_eq!(program_name_from_ver_string(b"$VER:    "), None);
         assert_eq!(program_name_from_ver_string(&[0u8; 512]), None);
+    }
+
+    // ---- characterization, item 4 of the third debt round -----------------
+    //
+    // Pinned on today's code before `program_name_from_ver_string` became a
+    // thin call into `core::amigaver::read_loose` (ART item 4, `.superpowers/
+    // sdd/2026-09-15-debt-3-round/item4-brief.md`): the shapes that differ
+    // from `amigaver::read`'s own strict parsing, so the unification cannot
+    // change what this function answers.
+
+    /// Control bytes in the first token are returned verbatim, `from_utf8_lossy`
+    /// — unlike `amigaver::read`, which rejects a name containing one. `\x01`
+    /// through `\x03` are valid standalone UTF-8 bytes, so nothing here is
+    /// replaced; the point is that nothing here is *rejected* either.
+    #[test]
+    fn control_bytes_in_the_name_are_returned_verbatim_not_rejected() {
+        let bytes = b"$VER: \x01\x02\x03 12.34 (1.1.99)";
+        assert_eq!(
+            program_name_from_ver_string(bytes).as_deref(),
+            Some("\u{1}\u{2}\u{3}")
+        );
+    }
+
+    /// Extra whitespace between the marker and the name is not a malformed
+    /// marker.
+    #[test]
+    fn extra_whitespace_between_the_marker_and_the_name_is_tolerated() {
+        assert_eq!(
+            program_name_from_ver_string(b"$VER:    pfs3aio    19.2   (2.10.18)").as_deref(),
+            Some("pfs3aio")
+        );
     }
 
     /// **The case the ruling exists for.** SmartFilesystem 1.293 is "older"

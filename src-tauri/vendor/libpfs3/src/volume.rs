@@ -1,10 +1,15 @@
 //! PFS3 volume: top-level read-only access to a PFS3 partition.
 //!
 //! Modified by ART on 2026-09-14, the final review (M2): `list_deldir` passes
-//! the volume's own `MODE_LARGEFILE` flag into `DelDirEntry::parse`; on
+//! the volume's largefile mode into `DelDirEntry::parse` — since the scoped
+//! re-review's follow-up 1 `Rootblock::has_largefile`, `MODE_LARGEFILE` with
+//! `MODE_DIR_EXTENSION`, where it was `MODE_LARGEFILE` alone; on
 //! 2026-09-14 (ART-319): `from_device`'s own parse is shared with `reload`,
-//! which `writer::Writer` uses to discard back to the last successful commit.
-//! `ART-PATCH.md` in this crate's root says what and why.
+//! which `writer::Writer` uses to discard back to the last successful commit;
+//! on 2026-09-15 (the scoped re-review's follow-ups 1 and 6): `list_dir`,
+//! `list_dir_by_anode` and `lookup` pass the volume's largefile mode to the
+//! directory reader, and a directory stopped by a malformed entry is refused
+//! naming it. `ART-PATCH.md` in this crate's root says what and why.
 
 use std::path::Path;
 
@@ -251,15 +256,29 @@ impl Volume {
     // --- Directory operations ---
 
     /// List directory entries at the given path.
+    ///
+    /// ART (2026-09-15, the scoped re-review's follow-up 6): a directory that
+    /// stops at a malformed entry is `Error::DamagedDirectory`, never a
+    /// shorter list.
     pub fn list_dir(&mut self, path: &str) -> Result<Vec<DirEntry>> {
+        let largefile = self.rootblock.has_largefile();
         let dir_anode = dir::resolve_dir_path(
             path,
             &self.anodes,
             self.dev.as_ref(),
             &mut self.cache,
             self.rootblock.reserved_blksize,
+            largefile,
         )?;
-        self.list_dir_by_anode(dir_anode)
+        dir::list_entries_named(
+            dir_anode,
+            &dir::path_phrase(path),
+            &self.anodes,
+            self.dev.as_ref(),
+            &mut self.cache,
+            self.rootblock.reserved_blksize,
+            largefile,
+        )
     }
 
     /// List directory entries by anode number.
@@ -270,10 +289,15 @@ impl Volume {
             self.dev.as_ref(),
             &mut self.cache,
             self.rootblock.reserved_blksize,
+            self.rootblock.has_largefile(),
         )
     }
 
     /// Look up a directory entry by path. Returns `None` for root.
+    ///
+    /// ART (2026-09-15, the scoped re-review's follow-up 6): `Ok(None)` only
+    /// when the directory was read to its end; a directory on the way that
+    /// stops at a malformed entry first is `Error::DamagedDirectory`.
     pub fn lookup(&mut self, path: &str) -> Result<Option<DirEntry>> {
         dir::resolve_path(
             path,
@@ -281,6 +305,7 @@ impl Volume {
             self.dev.as_ref(),
             &mut self.cache,
             self.rootblock.reserved_blksize,
+            self.rootblock.has_largefile(),
         )
     }
 

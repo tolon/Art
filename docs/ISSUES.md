@@ -79,19 +79,132 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-321** 🔵 **`mbr_slot_of` can name the wrong MBR slot when an earlier Amiga area is unreadable** — *found 2026-09-14 by the final whole-branch review of `art-debt-2-0914` (`.superpowers/sdd/2026-09-14-art-117-rdb-embed/final-review.md`, M12), by reading; not fixed*
-`src-tauri/src/core/preload/mod.rs::mbr_slot_of` · `mbr_slot_of(card, area_index)` indexes `mbr.amiga_areas()` —
-every `0x76` MBR entry — with an index into `card.areas`. But `read_card` (`src-tauri/src/core/card/mod.rs`) skips
-an area it cannot read, so `card.areas` can be shorter than `amiga_areas()`: when an earlier `0x76` area is
-unreadable, every later area's index shifts by one, and `mbr_slot_of` names the slot of the area before it.
-**What it reaches:** `plan()` puts that slot into the `FormatPartition` and `CopyIn` steps (the format path predates
-ART-117) and, since ART-117, into a replace's target slot. The RDB edit itself cannot write the wrong area:
-`core/preload/embed.rs::area_offset_for` accepts a slot only when its start is one of `card.areas`' own readable
-offsets, so a wrong slot there becomes a refusal — a wrong-slot plan note — never a wrong write (the reviewer's
-reading, re-read for this entry). How the format and copy steps resolve a wrong slot was **not** re-read for this
-entry. **Found by reading, not by a test or an experiment:** no card with an unreadable leading `0x76` area has been
-built to show it. Direction, not designed: carry each area's MBR slot on the area when `read_card` builds it,
-rather than re-deriving it by position.
+**ART-324** 🔵 **libpfs3's writer drops the high bits of a file size of 4 GiB or more on a largefile volume —
+narrowed 2026-09-15: on every other volume, the kind ART formats, such a size is refused by name and `fsizex` is
+neither read nor written, as pfs3aio does** — *found 2026-09-15 by the third debt round's final whole-branch review
+(M6), by reading; filed, not fixed, by its fix wave; narrowed by the scoped re-review's follow-up 1, libpfs3
+`0.1.3+art.11`, ART-PATCH item 26*
+`src-tauri/vendor/libpfs3/src/writer.rs`, `src/ondisk/direntry.rs`, `src/ondisk/rootblock.rs` · **Done on
+2026-09-15 (follow-up 1).** pfs3aio's `g->largefile` is `MODE_LARGEFILE` **and** `MODE_DIR_EXTENSION` (`init.c:648`,
+`tonioni/pfs3aio` `211f7f0`); `Rootblock::has_largefile` looked at `MODE_LARGEFILE` alone and is that now. Without
+it, `GetDEFileSize` ignores `fsizex` (`directory.c:3641-3652`), and `DirEntry::parse` now reads it as 0 — where
+`file_size()` added it on any volume, the scoped re-review's concern (a), which `core/firstboot/cardread.rs` and
+`core/osinstall/verify.rs` reach. `SetDEFileSize` sets `fsize` and nothing else there (`:3668-3671`), and
+`update_dir_entry_size` no longer patches a `fsizex` word, nor `build_dir_entry` write one. pfs3aio refuses to write a
+file past `MAXFILESIZE32` (0xffffffff, `blocks.h:627`; `WriteToFile`, `disk.c:797`; `SetEOF`, `disk.c:1130`); the
+new public `Writer::check_file_size`, asked by `write_file_in_no_commit`, `create_softlink_in` and
+`overwrite_file_in` before they allocate, refuses `'<name>' was not written: it is <n> bytes, and this PFS3 volume
+holds files of at most 4294967295 bytes: it is not formatted for large files (MODE_LARGEFILE with
+MODE_DIR_EXTENSION)`, and ART's `from_pfs3` hands it on as `ART-INPUT-INVALID`, not "malformed pfs3". **ART's copy
+asks first (the third scoped re-review's Minor 1, 2026-09-15).** `copy_in_pfs3` read each host file whole
+(`std::fs::read`) and only then did `write_file_in` refuse, so a file of 4 GiB or more was loaded into memory before
+the refusal, which did not say what to do. It now opens the writer (which reads the bitmaps and writes nothing) before
+its fit check and asks `check_file_size` of every file, from the size `collect_entries` took from the file's metadata,
+before the fit check and before any host file is read; the refusal names each file and its size (up to 20, then a
+count) and says what to do: `'<file>' (<n> bytes) in '<folder>' cannot be copied to '<drive>': a file on it can be at
+most 4294967295 bytes, because this PFS3 partition is not formatted for large files, and ART's own PFS3 format does not
+make large-file partitions. Nothing was copied. Leave that file out of '<folder>' and run the copy again.` —
+`libpfs3::format` never sets `MODE_LARGEFILE` (`src/format.rs`, the option word and `FormatOptions`, checked), so
+formatting again cannot help. It reaches the screen through `errors.verbatim`: no `ART-INPUT-INVALID` pattern in
+`src/lib/errorText.ts` matches it, and no catalogue key changed. A file under 4 GiB is still read whole before it is
+written. **Tests**
+(`core::preload::native`): `a_pfs3_copy_refuses_a_file_of_4_gib_or_more_by_name_before_reading_it` (the seam is
+`CopyEntry::size`, with a host file that does not exist, so a read before the refusal ends in "not found"; a small
+volume, a 5 100 MiB volume, a byte under the limit as the control, and two files),
+`a_pfs3_entrys_fsizex_is_part_of_its_size_only_on_a_largefile_volume` (one raw entry,
+`fsize` 700 and `fsizex` 1, under three modes), `a_pfs3_overwrite_writes_no_fsizex_on_a_volume_that_is_not_largefile`,
+`a_pfs3_file_of_4_gib_or_more_is_refused_by_name_on_a_volume_that_is_not_largefile`,
+`a_pfs3_file_too_large_reaches_the_user_as_invalid_input_not_a_malformed_volume`;
+`a_pfs3aio_entrys_extra_fields_read_back_as_pfs3aio_writes_them` now reads its `fsizex` entry on a largefile volume.
+**Red first**, on the unchanged library: `left: [("LARGEFILE and DIR_EXTENSION", 4294967996, Some(4294967996)),
+("DIR_EXTENSION only, as ART formats", 4294967996, Some(4294967996)), ("LARGEFILE without DIR_EXTENSION", 4294967996,
+Some(4294967996))]`; the overwrite `left: Some([26, 253, …, 66, 105, 103, 0, 0, 0, 4, 0])` against `right: …, 0, 0, 1,
+4, 0]` (the stray word patched to 0); and, against a `check_file_size` that returned `Ok(())` and a `from_pfs3`
+without the arm, `left: [("ART's mode, 4 GiB", "Ok(())"), …]` and `left: ("ART-FORMAT-MALFORMED", "malformed pfs3:
+'Huge' was not written: …")`. **Mutations** (`D:\Projeler\Amiga\scratch-0913\fu-mutate.py`; the files backed up to
+`scratch-0913\*.fu-fixed`, grep-confirmed, each restored with `shutil.copyfile` and hash-identical): **M1a** (the
+reader's gate off) → the reader test red on the two modes that are not largefile; **M1b** (`has_largefile` on
+`MODE_LARGEFILE` alone) → its third mode alone; **M1c** (`update_dir_entry_size` patches on any volume) → the
+overwrite test; **M1d** (the limit ignores the mode) → the "largefile, 4 GiB" arm alone; **M1e** (`>=`) → the "a
+byte less" arm alone. **Survived, as predicted, judged:** **M1g** (`build_dir_entry`'s gate off), **M1h**
+(`write_file_in_no_commit` no longer asks the limit) and **M1i** (a largefile entry without the word cut to 32 bits),
+each green over all 131 PFS3 tests — no test can hand the writer 4 GiB. The limit itself is pinned through
+`check_file_size`; each call site is one line, read, not tested. **Minor 1, red first** on the unchanged copy: `left:
+[("small volume, 4 GiB", "ART-INPUT-INVALID: invalid input: '…copy-in-too-large-…' needs 4294967296 bytes but 'DH0'
+only has 8018944 bytes free; 0 listed"), ("5 100 MiB volume, 4 GiB", "io NotFound; 0 listed"), ("5 100 MiB volume, a
+byte less", "io NotFound; 0 listed")]` — the fit check answered with a byte count on the small volume, and on the large
+one the copy read the file before anything refused it; the control was the same before and after. **Its mutations**
+(`D:\Projeler\Amiga\scratch-0913\minors-mutate.py`; `native.rs` backed up to `scratch-0913\native.rs.minors-fixed`,
+restored with `shutil.copyfile`, SHA-256 identical, green again): **m1** (the early check removed) → every size arm red,
+the two small-volume arms with the fit check's sentence and the 5 100 MiB arm `io NotFound`; **m2** (the check moved
+after the fit check, before the loop) → the two small-volume arms alone; **m3** (the plural wording made singular) →
+the two-file arm alone. None survived. **Still open, on a largefile volume only** (ART
+formats none): an entry without `fsizex` that must take high bits is refused `FileTooLarge` rather than grown and
+moved, as `AddExtraFields` would (`:3764-3800`); the block counts are cast `as u32` (`write_file_in_no_commit`,
+`create_softlink_in_impl`, `overwrite_file_in_impl`); and an overwrite that clears the high bits leaves a zero
+`fsizex` word where `AddExtraFields` drops the word — the same size read back, not the same bytes. **Fix direction:**
+grow and move the entry when `fsizex` must be added, and count blocks in `u64`.
+
+*The entry as filed on 2026-09-15, before follow-up 1:*
+`src-tauri/vendor/libpfs3/src/writer.rs` · Pre-existing since 0.1.3; nothing this round changed. A PFS3 directory
+entry holds a size's low 32 bits in `fsize` and bits 32–47 in the optional `fsizex` extra field, which is size only
+on a `MODE_LARGEFILE` volume (ART-PATCH item 11). Read on the tree of 2026-09-15: **`update_dir_entry_size`** (used
+by `overwrite_file_in`) writes the low 32 bits and patches `fsizex` only when the entry already carries that field
+(`put_u32(&mut data, pos + 6, new_size as u32)`, then the extra-field walk), so a file grown past 4 GiB keeps only
+its low 32 bits — the entry would have to grow, which that in-place patch cannot do; **`build_dir_entry`** writes
+`fsizex` whenever the high bits are non-zero, **without** checking `MODE_LARGEFILE`, where pfs3aio refuses the write
+instead (`WriteToFile`, `disk.c:797`: `newfileoffset > MAXFILESIZE32 && !g->largefile` → `ERROR_DISK_FULL`,
+`tonioni/pfs3aio` `211f7f0`); the block counts are cast with `as u32` (`write_file_in_no_commit`,
+`create_softlink_in_impl`, `overwrite_file_in_impl`); and `write_deldir_entry` keeps the high bits only on a
+`MODE_LARGEFILE` volume. **Why it is not fixed in the fix wave:** the fix is not contained to the entry-size paths —
+a missing `fsizex` needs the entry rebuilt and moved, not patched — and a test that is red first needs a file of
+more than 4 GiB as an in-memory `&[u8]`, which the writer's API takes. **Unreachable from ART today:**
+`copy_in_pfs3` reads each host file whole into memory and checks the volume's free space first, and ART formats no
+`MODE_LARGEFILE` PFS3 volume. **Fix direction:** refuse a size above `u32::MAX` on a volume without
+`MODE_LARGEFILE`, as pfs3aio does, and rebuild the entry when `fsizex` must be added.
+
+**ART-328** 🔵 **libpfs3's writer stores a new entry's name as its UTF-8 bytes, and its reader decodes a name as
+Latin-1** — *found 2026-09-15 while fixing ART-327, by reading; not measured*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`build_dir_entry`, `check_name_len`) · Pre-existing since 0.1.3.
+`build_dir_entry` copies `name.as_bytes()` and `check_name_len` measures `name.len()`, both UTF-8, while
+`util::latin1_to_string` decodes a stored name one byte a character, as an Amiga writes it. A name "ä" created through
+the writer is stored `C3 A4` and lists as "Ã¤", on the Amiga too. The two rename paths now write Latin-1
+(`rename_dir_entry_in_place` since the final review fix wave, M1; `moved_entry` since ART-327). Only `moved_entry`
+falls back to the name's UTF-8 bytes for a character above U+00FF; `rename_dir_entry_in_place` refuses such a name
+instead, `Error::Corrupt` (`writer.rs`, its `new_name_bytes` match). So a name ART-327 moves and one `create_dir_in`
+makes are not written alike. *(Corrected 2026-09-15 by the scoped re-review's follow-up 5: this said both rename
+paths fall back.)*
+**Unreachable from ART:** `copy_in_pfs3` refuses a non-ASCII name before libpfs3 sees it
+(`core/preload/native.rs`, "A non-ASCII name is refused before `libpfs3` ever sees it (ART-113)"), and for an ASCII
+name the two encodings are the same bytes. **Fix direction:** encode Latin-1 in `build_dir_entry`, measure
+`check_name_len` in those bytes, and refuse a character above U+00FF by name.
+
+**ART-329** 🔵 **libpfs3's `rename_in` moves a directory without updating its directory blocks' parent, and does not
+refuse a move into its own subtree** — *found 2026-09-15 reading pfs3aio's `RenameAndMove` for ART-327; not
+measured*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`rename_in_impl`) · Pre-existing since 0.1.3. pfs3aio refuses a directory
+renamed into a child of itself (`IsChildOf`, `ERROR_OBJECT_IN_USE`, `directory.c:2079-2095`) and, when a directory
+changes parent, sets every one of its directory blocks' `parent` to the destination (`directory.c:2148-2169`,
+`tonioni/pfs3aio` `211f7f0`). `rename_in_impl` does neither: ART-313 made each block of a directory carry the
+directory that holds it, and a moved directory's blocks keep the old one; `rename_in(root, "A", a_b, "A")`, with
+`a_b` the anode of "A/B", would put A's entry inside A's own subtree and leave nothing reachable from the root
+naming it. libpfs3's own reader never reads `parent` (ART-PATCH item 4). **Unreachable from ART:** ART's product code
+never renames on PFS3. **Fix direction:** refuse a move into the directory's own subtree before anything is staged,
+and rewrite each directory block's `parent` in the rename's commit.
+
+**ART-331** 🟡 **libpfs3 steps over a directory block that does not carry the `DB` id, silently, when it reads or
+writes a directory** — *found 2026-09-15 while fixing ART-330, by reading; not measured*
+`src-tauri/vendor/libpfs3/src/dir.rs` (`walk_entries`), `src/writer.rs` (`find_dir_entry`, `add_dir_entry_bytes`, the
+delete-time link scan) · Pre-existing since 0.1.3; ART-330's fix kept it. A block in a directory's anode chain whose
+id is not `DB` is skipped: its entries are neither listed nor found, so a lookup of a name in it answers "not there"
+and a listing comes back short — ART-330's confident wrong sentence, from another cause. pfs3aio refuses the block:
+`LoadDirBlock` returns NULL with `AFS_ERROR_DNV_WRONG_DIRID` (`directory.c:3590-3606`), and `SearchInDir` then fails
+(`:753-756`; `tonioni/pfs3aio` `211f7f0`). ART's own test fixture leans on the skip — `pfs3_mutator_fixture`'s
+"Broken" has its block's id zeroed so that adding an entry to it fails late. **Reachable on a damaged card:**
+`core/firstboot/cardread.rs` and `core/osinstall/verify.rs` read PFS3 directories off real cards through
+`Volume::lookup`, and would report such a card's file missing or its report "not booted". **Fix direction:** refuse
+the block by name in both walks, as `Error::DamagedDirectory` does for a malformed entry, and give the fixture's late
+failure another shape.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
@@ -111,6 +224,393 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-330** 🟡 **libpfs3's reader stopped at a malformed directory entry and answered "not there" for every name
+behind it — so ART's first-boot report said "not booted", and its install check "not found on the volume", for a
+card whose drawer was damaged — fixed: a walk that meets a malformed entry is refused, naming the directory, the
+block and the offset** — *found 2026-09-15 by the scoped re-review of `a9fd8c3..caceffb`, as a pre-existing
+follow-up; fixed 2026-09-15 on `art-debt-3-0915`, unmerged; libpfs3 `0.1.3+art.11`, ART-PATCH item 26; report
+`.superpowers/sdd/2026-09-15-debt-3-round/followups-report.md`*
+`src-tauri/vendor/libpfs3/src/ondisk/direntry.rs` (`entry_bounds`, `DirEntry::parse`), `src/dir.rs`, `src/volume.rs`,
+`src/writer.rs` (`rename_in_impl`, `delete_in_no_commit`, `entry_in`), `src/error.rs` (`DamagedDirectory`);
+`src-tauri/src/core/osinstall/verify.rs` · **The defect.** Pre-existing since 0.1.3. `DirEntry::parse` returned
+`None` both at the end of a block's entries and for an entry smaller than its own header or running past its block,
+and `dir::list_entries` took either for the end. A lookup of a name behind such an entry answered "not there", a
+listing came back short, and nothing said so. ART reads PFS3 directories off real cards: `core/firstboot/cardread.rs`
+(`pfs3_report`, `Volume::lookup` of `S/FirstBoot.log`) turned that into `ReportSource::None` — "not booted" — and
+`core/osinstall/verify.rs` (`verify_pfs3_one`) into "not found on the volume". libpfs3's `rename_in` and `delete_in`
+looked their name up through the same listing and said `not found: <name>`. **The fix.** `ondisk::entry_bounds` is
+the one rule for walking a directory block — the writer's `dir_entry_at` rule from the scoped re-review's item 5, now
+shared — and `DirEntry::parse` returns `Err(MalformedDirEntry)` for a malformed entry. The reader refuses it `<the
+root directory | the directory 'S'> is damaged: its block <b> holds a malformed entry at offset <o> (size <s>), so the
+entries after it cannot be read — check this volume with a PFS3 repair tool`. A lookup stops at its match, as
+pfs3aio's `SearchInDir` does (`directory.c:729-740`, `tonioni/pfs3aio` `211f7f0`), so a name before the damage is
+still found. `Volume::lookup`, `list_dir` and `list_dir_by_anode` keep their signatures, so no wrapper was needed;
+`dir::`'s four public functions gained the largefile flag (follow-up 1) and have no caller outside `volume.rs`.
+`rename_in` and `delete_in` look their names up through the writer's own bounded walk and refuse with its sentence,
+and `rename_in` no longer takes a destination directory it cannot read for one without the name. **What the user
+sees now.** The install check fails the file with `ART could not tell whether this file is on the volume, because the
+directory 'C' is damaged: its block 22 holds a malformed entry at offset 20 (size 12), so the entries after it cannot
+be read — check this volume with a PFS3 repair tool`, shown as Rust wrote it (`VerifyAgainstCard.tsx`). The
+first-boot report is "could not be checked": `malformed card: the Amiga volume's own first-boot report could not be
+checked: area 1 partition 'DH0': malformed pfs3: the directory 'S' is damaged: …`, under `firstboot.report.readFailed` and
+through `errors.verbatim`. No catalogue key changed. **Tests:**
+`core::preload::native::…::a_pfs3_name_behind_a_malformed_directory_entry_is_corrupt_not_not_found` — a clean volume's
+miss, `Ok(None)`, as the control; a name before the damage found; a name behind it, a name not there, a path through
+it and the listing refused; `rename_in` and `delete_in` refused with nothing written and the last commit kept —
+`core::osinstall::verify::…::a_pfs3_file_behind_a_damaged_directory_entry_fails_naming_the_damage_not_a_missing_file`
+and `core::firstboot::cardread::…::a_pfs3_report_behind_a_damaged_directory_entry_is_could_not_be_checked_not_not_booted`,
+each damaging the size byte of a real entry on an image ART wrote. **Red first**, on the unchanged library (`test
+result: FAILED. 3 passed; 6 failed` with follow-ups 1 and 4): `left: [… ("a name behind it", "Ok(None)"), ("a name
+not there", "Ok(None)"), ("a path through it", "not found: Dst"), ("the listing", "Ok(1)")]`; `left: Some("not found
+on the volume")`; `left: "Ok(None, NotBooted)"`. That run stopped the library test at its first assertion, before
+its writer arms. **Mutations** (`fu-mutate.py`, restored hash-identical from `scratch-0913\*.fu-fixed`): **M6a** (the
+reader stops silently again, `entry_bounds(…).unwrap_or(None)`) → all three tests red, with the three lines above;
+**M6b** (`delete_in` looks up through the reader again) → the delete arm red, `got "the root directory is damaged:
+…"` where the writer's own refusal was expected; **M6d** (`rename_in` likewise) → the rename arm red, the same way;
+**M6c** (the install check's own arm off) → its test red, `left: Some("its path could not be read: the directory 'C'
+is damaged: …")`. **Changed alongside:** `a_failed_pfs3_rename_over_an_existing_file_keeps_the_destination` fails the
+third read of "Dir"'s block, not the fourth — the source listing through the reader was the first. **Not changed:**
+a directory block without the `DB` id is still stepped over silently, filed [ART-331](#open); a comment running past
+its entry still reads as empty.
+
+**ART-325** 🟡 **libpfs3 read a directory entry's extra fields in a layout neither pfs3aio nor hst-amiga uses — fixed:
+every reader and writer of them goes through one implementation of pfs3aio's layout** — *found 2026-09-15 while
+fixing ART-323, by reading two sources; re-rated from 🔵 after the scoped re-review corrected its reachability; fixed
+2026-09-15 on `art-debt-3-0915`, unmerged; libpfs3 `0.1.3+art.10`, ART-PATCH item 25; report
+`.superpowers/sdd/2026-09-15-debt-3-round/art325-327-report.md`*
+`src-tauri/vendor/libpfs3/src/ondisk/direntry.rs` (`ExtraFields::word_offsets`, `read`, `encode`,
+`extra_fields_offset`, `DirEntry::parse`), `src/writer.rs` (`entry_link_field`, `update_dir_entry_size`,
+`build_dir_entry`) · **The defect.** `parse_extrafields` read the flags word right after the comment, one bit per
+field (`0x1` link … `0x40` `fsizex`). pfs3aio's `GetExtraFields` reads it from the entry's last two bytes, one bit per
+16-bit word of `struct extrafields`, the words set lying before it (`directory.c:3719-3731`, `blocks.h:342-353`,
+`tonioni/pfs3aio` `211f7f0`); `AddExtraFields` writes that way (`:3764-3800`), and hst-amiga reads it the same way
+(`DirEntryReader.cs:58-87`, `6b45584`). **Reachability, corrected by the scoped re-review.** The open entry said nothing
+ART does reads `extra` except an `fsizex` only a `MODE_LARGEFILE` volume sets. Wrong: `file_size()` is not gated on
+`MODE_LARGEFILE`, and ART's product code reads PFS3 entry sizes — `core/firstboot/cardread.rs:396` (the first-boot
+report) and `core/osinstall/verify.rs:555` (the check after an install) — on cards a real Amiga wrote. An entry
+pfs3aio gave two or more extra-field words (a link, a rollover file, upper protection bits, uid/gid) could read back
+several GiB too large. **The fix.** One implementation, pfs3aio's, shared by `DirEntry::parse` (so `file_size()`),
+the writer's `link` reader, `update_dir_entry_size` and `build_dir_entry`; `prot` has the entry's protection byte
+OR-ed in (`:3729-3730`). An entry whose flags name more words than it holds lists with no extra fields, and the
+writer refuses it. Below 4 GiB `build_dir_entry` writes the same bytes as before. **Not changed, disclosed:**
+`file_size()` still adds `fsizex` on any volume; pfs3aio's `GetDEFileSize` adds it only on `MODE_LARGEFILE`
+(`directory.c:3641-3652`). With the layout right, no entry pfs3aio writes on another volume carries the field.
+*(Changed 2026-09-15 by the scoped re-review's follow-up 1, recorded under [ART-324](#open): `file_size()` adds it
+only on a largefile volume — `MODE_LARGEFILE` with `MODE_DIR_EXTENSION` — and the test below now reads its "Linked"
+entry on one.)*
+**Tests** (`core::preload::native`): `a_pfs3aio_entrys_extra_fields_read_back_as_pfs3aio_writes_them` — three
+entries built from pfs3aio's source by the new test type `RawEntry`, not through libpfs3: a file with `link` 13 and
+`fsizex` 1; a rollover file with both rollover fields; a file with a comment, uid, gid and protection bits 8-15 — and
+`extra_fields_encode_lays_out_what_pfs3aio_writes_and_read_reads_it_back`, written after `encode` existed, so its red
+is a mutation's. **Red first**, on the unchanged parser: `left: [(700, "", 852994, 0, 0, 0, 0, 0, 0), (8589938688, "",
+69632, 0, 0, 0, 0, 0, 2), (700, "a note", 0, 0, 0, 0, 0, 0, 0)]` against `right: [(4294967996, "", 13, 0, 0, 0, 0, 0,
+1), (4096, "", 0, 0, 0, 0, 135168, 65601, 0), (700, "a note", 0, 65, 64, 1285, 0, 0, 0)]` — the rollover file read
+8 GiB too large. **Mutations** (every mutation of this round: `D:\Projeler\Amiga\scratch-0913\art325-mutate.py`, one
+occurrence each; the four files backed up to `D:\Projeler\Amiga\scratch-0913\*.art325-fixed`, grep-confirmed and
+hash-checked, each restored with `shutil.copyfile` and hash-identical after): **MA** (word order reversed in
+`word_offsets`) → both tests red, `left: [(55834575548, "", 1, 0, 0, 0, 0, 0, 13), …]`; **MB** (`encode` writes the
+lowest word first) → the encode test red (`left: [0, 1, 0, 13, 0, 65, 5, 0, 0, 2, 0, 3, 5, 39]`), the read test green
+as predicted.
+
+**ART-326** 🔵 **libpfs3's writer added a second directory entry under a name that already exists — fixed: each
+creating call refuses the name, compared as pfs3aio compares names** — *found 2026-09-15 while fixing ART-323, by
+reading; fixed 2026-09-15 on `art-debt-3-0915`, unmerged; libpfs3 `0.1.3+art.10`, ART-PATCH item 25*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`refuse_existing`, `create_dir_in`, `create_softlink_in`, `write_file_in`),
+`src/util.rs` (`name_eq_ci`) · **pfs3aio** (`211f7f0`, read, not run): `SearchInDir` then `ERROR_OBJECT_EXISTS` in
+`NewDir` (`directory.c:1666-1671`), `CreateSoftLink` (`:2552-2557`), `CreateLink` (`:2665-2670`) and
+`CreateRollover` (`:2873-2878`), with names compared by `intltoupper`/`intlcmp` (`assroutines.c:113-140,160-193`;
+`directory.c:724,736`), which fold Latin-1 letters as well as ASCII. **Now:** `create_dir_in` and `create_softlink_in`
+refuse `AlreadyExists` before anything is allocated or written; `write_file_in` still overwrites an
+`ST_FILE`/`ST_ROLLOVERFILE` and refuses a directory, a soft link or a hard link (pfs3aio's `NewFile` follows a hard
+link to its object, `:1513-1514`; this writer refuses one); a lookup that fails is returned rather than taken for
+"not there". `util::name_eq_ci` folds as `intlcmp` does, which changes every lookup in the crate; 0.1.3 folded ASCII
+only. `undelete` already refused an existing destination, and `rename_in` has its own check (ART-322).
+**Test**: `creating_a_pfs3_entry_under_a_name_that_exists_is_refused_before_anything_is_written` — eight arms (a
+directory over a file, over a directory, by path; a soft link over a file; a file over a directory, over a soft link,
+over a hard link; a directory named "äa" over "Äa" stored Latin-1 `C4 61`), each refused with the exact sentence, no
+device write, and the same writer's next commit reopening to the last commit (the new helper
+`pfs3_refusal_problem`); the overwrite of a file stays, as a control. **Red first:** all eight arms
+`got "Ok(())"`. **Mutations:** **MC1** (`create_dir_in`'s lookup removed) → the four directory arms red; **MC2b**
+(the fold narrowed to ASCII) → the Latin-1 arm alone red; **MC3** (`write_file_in`'s refusal removed) → the three
+file arms red. MC2 (`name_eq_ci` replaced by `eq_ignore_ascii_case`) did not compile — `upper` unused, and libpfs3
+is `#![deny(warnings)]` — so MC2b replaced it.
+*(Extended 2026-09-15 by the scoped re-review's follow-up 3; libpfs3 `0.1.3+art.11`.)* The fold's edges had no
+guard. `pfs3_names_fold_latin1_letters_as_pfs3aio_does_and_no_further` pins eight pairs against `intltoupper`
+(`assroutines.c:121-123`, fetched again at `211f7f0`): à/À, ö/Ö, ø/Ø, þ/Þ and z/Z fold; ÷ (0xF7) and × (0xD7), ÿ
+(0xFF) and ß (0xDF), `{` and `[` do not. Written after the fold existed, so its red is a mutation's: **M3a** (the fold
+widened to 0xe0–0xfe) → the ÷/× pair alone red, `('÷', '×', true)`; **M3b** (widened to 0xff) → the ÿ/ß pair alone;
+**M3c** (narrowed to 0xfd) → the þ/Þ pair alone.
+
+**ART-327** 🔵 **libpfs3's `rename_in` rebuilt the entry it moves, dropping its comment, its date and its extra
+fields — fixed: the moved entry is the source's own bytes with the new name, and a moved link's chain is updated as
+`MoveLink` does** — *found 2026-09-15 while fixing ART-323, by reading; fixed 2026-09-15 on `art-debt-3-0915`,
+unmerged; libpfs3 `0.1.3+art.10`, ART-PATCH item 25*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`rename_in_impl`, `moved_entry`, `link_moves`, `read_anode_fields`,
+`add_dir_entry_bytes`), `src/error.rs` (`EntryNotMoved`) · **pfs3aio:** `RenameAndMove` copies the header through
+`protection`, the new name, the comment and — with `g->dirextension` — the extra fields to the new field offset
+(`directory.c:2097-2124`); `RenameAcrossDirs` adds the new entry before removing the old (`:3028-3044`); across
+directories `MoveLink` (`:2136-2142`) gives a link's own node `blocknr` = the new directory and every node of an
+object's chain `clustersize` = the object's (`:3993-4028`). **Now** the writer does the same. Before anything is
+staged it reads the chain, and a node it cannot read or a chain that loops is refused `'<name>' was not moved: … —
+move it on the Amiga, or check this volume with a PFS3 repair tool and try again`. The scoped re-review's item 3
+(renaming both a pfs3aio link and its object dropped both `link` fields) is settled by the same change. The name is
+written Latin-1, or as UTF-8 bytes for a character above U+00FF ([ART-328](#open)). **Not done, filed
+[ART-329](#open):** a moved directory's blocks keep their old parent, and a move into its own subtree is not refused.
+**Changed alongside:** `a_failed_pfs3_rename_over_an_existing_file_keeps_the_destination` now fails the fourth read of
+"Dir"'s block rather than the second; the second had been ART-323's link check since ART-323, not
+`remove_dir_entry` as its comment said, and the rename now reads the source entry once more.
+**Tests:** `a_pfs3_rename_keeps_the_entrys_comment_date_and_extra_fields_and_moves_its_links` — four renames: "Dir/Noted"
+to the root (a comment, a date, protection, uid, gid, protection bits and `fsizex`), "Dir/Big" to "Bigger" in the same
+directory (`fsizex`, a one-byte comment, a name of another length), and a pfs3aio object and its link each to the
+root — every new entry compared byte for byte with the entry pfs3aio's would be, and the link node checked
+`(5, 5, 0)`; and `a_pfs3_move_of_an_object_whose_link_chain_loops_is_refused_by_name`. **Red first:** `Moved: Some([1a,
+fd, 00, 00, 00, 0e, 00, 00, 00, 0b, 45, 7d, 01, eb, 0b, 22, 05, 05, 4d, 6f, 76, 65, 64, 00, 00, 00])` (no comment,
+today's date, no fields), the same for the other three, and `the link node …: (11, 11, 0), expected (5, 5, 0)`; the
+loop test `got "Ok(())"`. **Mutations:** **MD1** (the extra fields not copied) → both tests red; **MD2** (`MoveLink`
+skipped) → the node line and the loop test red, the four entries green, as predicted.
+
+**The scoped re-review's items 4 and 5**, fixed in the same change (item 2 is under [ART-317](#fixed)):
+- **Item 5.** `find_dir_entry` indexed `data[pos + 17]` and the name without a bound (`writer.rs` ~770-771), and its
+  siblings trusted what it found. `dir_entry_at` now bounds every walk — `find_dir_entry`, `add_dir_entry_bytes`,
+  `remove_dir_entry`, the link scan — and a malformed entry is refused `corrupt filesystem: directory block <b> holds a
+  malformed entry at offset <o> (size <s>) — check this volume with a PFS3 repair tool before writing to it`. Test
+  `a_malformed_pfs3_directory_entry_is_refused_by_the_writer_not_read_past`: four writer calls (protect, write, mkdir,
+  rename) against a name running past its block, a size below the header, and an entry running past its block.
+  **Red first:** a panic, `panicked at vendor\libpfs3\src\writer.rs:771:68: range end index 1051 out of range for
+  slice of length 1024`. The third shape was added after that run (0.1.3's walk ended there as "not found"); its red
+  is ME2's. **Mutations:** **ME1** (the name bound) → the four "name runs past" arms red (`got "not found: NoSuch"`,
+  `got "Ok(())"`); **ME2** (the block bound) → the four "entry runs past" arms red. `size < 18` has no mutation of its
+  own: `18 + nlen > size` refuses every such entry already — redundant, judged harmless.
+- **Item 4.** The delete-time link check (ART-323) refuses a check it cannot finish with `Error::EntryNotDeleted`:
+  `'<object>' was not deleted: ART could not check that no hard link names it, because <the directory 'Dir' could not
+  be read (…) | the directory 'Dir' holds a malformed entry at offset 44 of block 26 (size 12) | the hard link
+  'Dir/BadLink' has extra fields that do not fit its entry (flags 0x0003)> — delete it on the Amiga, or check this
+  volume with a PFS3 repair tool and try again`, and an entry whose own extra fields do not fit, `'BadLink' was not
+  deleted: its directory entry has extra fields that do not fit it (flags 0x0003) — …`. Test
+  `a_pfs3_delete_whose_link_check_cannot_finish_is_refused_naming_what_stopped_it` (those four arms). **Red first:**
+  `got "I/O error: sector unreadable once (MemDevice::fail_read_of, test)"`; `a malformed entry: got "Ok(())"` — the
+  scan stopped at the entry and the delete went ahead; both link arms `got "corrupt filesystem: the directory entry at
+  offset 44 runs past its extra fields or its block"`. **Mutations:** **MF2** (the unreadable refusal removed) → that
+  arm alone red; **MF1c** (`dir_entry_at`'s refusal read as the end of the block) → the malformed-entry arm alone red.
+  MF1 (an unreachable pattern) and MF1b (E0283) did not compile.
+
+**No mutation survived.** **Disclosed, not tested:** an entry whose extra fields do not fit lists through
+`DirEntry::parse` with none, silently; the writer's `fsizex` path is exercised only through `encode`, since no test
+writes 4 GiB; no pfs3aio-written volume with links, rollover files or extra fields was available, so the oracle
+throughout is pfs3aio's source, read. Red run on the unchanged library: `test result: FAILED. 11 passed; 7 failed`;
+green verification in STATUS. *(Corrected 2026-09-15 by the scoped re-review's follow-ups 1 and 2; libpfs3
+`0.1.3+art.11`.)* `file_size()` no longer adds `fsizex` off a largefile volume ([ART-324](#open)). The entry whose
+extra fields do not fit is tested now: `a_pfs3_entry_whose_extra_fields_do_not_fit_is_listed_with_none` — a flags
+word claiming all eleven words in an entry that holds none — lists with `ExtraFields { prot: 5, .. }`, its size
+700, and the entry after it still listed; the re-review ruled the fallback not a defect. Its red is a mutation's:
+**M2a** (the fallback drops the protection byte) → `left: (700, ExtraFields { …, prot: 0, … })`; **M2b** (a misfit
+refuses the entry) → `DamagedDirectory { dir: "the root directory", block: 24, offset: 122, size: 28 }`.
+
+**ART-323** 🟡 **libpfs3's writer deleted a hard link by freeing the file it names — fixed: a link's delete removes
+only its entry, and what the writer cannot do as pfs3aio does is refused by name** — *found 2026-09-15 by the third
+debt round's final review fix wave, measured; fixed 2026-09-15 on `art-debt-3-0915`, unmerged; libpfs3
+`0.1.3+art.9`, ART-PATCH item 24; report `.superpowers/sdd/2026-09-15-debt-3-round/art323-report.md`*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`delete_in`/`delete_in_no_commit`, `create_hardlink_impl`, new
+`entry_link_field` and `links_naming`), `src/error.rs` (`HardLinkNotWritten`, `Pfs3aioLinkNotDeleted`,
+`HasHardLinks`) · **The defect, as the fix wave measured it:** `create_hardlink` stored the linked object's anode in
+the link's own `ST_LINKFILE` entry, and `delete_in_no_commit` took every entry that is not a directory for a file.
+With "DstLink" a link to "Dst" (anode 9), `delete_in(root, "DstLink")` returned `Ok`, left block 2821 free in the
+bitmap and anode 9 raw `(0, 0, 0)`, and "Dst" still listed, reading back `Ok([])`.
+**pfs3aio**, read at `tonioni/pfs3aio` `211f7f0` (fetched raw, not run):
+- *The link.* `CreateLink` gives a link an anode of its own, a link node with clustersize = the object's directory,
+  blocknr = the link's directory and next = the next node. It stores the object's anode in the link's `link` extra
+  field, and the object's own `link` field heads the chain of nodes (`directory.c:2672-2748`).
+- *Deleting a link.* `DeleteObject` sends a link to `DeleteLink` (`directory.c:1778-1783`). That removes the entry,
+  takes the node out of the chain — rewriting the object's entry when the node is the head, the previous node's
+  `next` otherwise — and frees the node, never the object (`directory.c:3835-3895`).
+- *Deleting an object with links.* `RemapLinks` promotes the first link to be the object
+  (`directory.c:1795-1799,3903-3965`), discarding nodes whose entries are gone (`directory.c:3922-3934`).
+- *Extra fields.* `GetExtraFields` reads the flags word from the entry's last two bytes, one bit per 16-bit word of
+  `struct extrafields`, the words set lying before it (`directory.c:3719-3731`, `blocks.h:342-353`), and
+  `AddExtraFields` writes them that way (`directory.c:3764-3800`).
+- *A second source:* hst-amiga (`henrikstengaard/hst-amiga` `6b45584`) reads extra fields the same way
+  (`DirEntryReader.cs:58-87`), and its own `When_DeletingLinkToFile_Then_LinkIsDeleted`
+  (`GivenPfs3VolumeUsingLinks.cs:461-489`) expects the file kept and its `link` field 0 after a link is deleted.
+
+**What the writer does now**, by the ruling:
+1. **A link in 0.1.3's shape** (no `link` field) loses its entry and nothing else.
+2. **A link pfs3aio made** (its `link` field set) is refused, `'<name>' is a hard link pfs3aio made, and this writer
+   cannot take it out of its object's chain of links, so it did not delete it — delete it on the Amiga`. Refused
+   rather than implemented: `DeleteLink`'s chain update rewrites the object's entry at a different size and walks a
+   chain, and there is no pfs3aio-written volume here to test that against.
+3. **An object that links name** is refused, `'<name>' has hard links (<links>): this writer cannot hand it over to
+   one of them as pfs3aio does, so it did not delete it — delete the links first`. It is found by a link entry in
+   any directory — by its anode (0.1.3's shape) or its `link` field (pfs3aio's) — or by the object's own `link`
+   field. Promotion is not cheap, so it is refused rather than followed; no link is left naming freed blocks.
+4. **`create_hardlink`** is refused, `hard link '<path>' was not created: this writer cannot write pfs3aio's hard-link
+   format (a link anode and the linked object's chain of links)`, before anything is read or written. ART's product
+   code never creates a link: `create_hardlink` appears only in `native.rs` tests, grep 2026-09-15.
+
+Every refusal comes before anything is staged and goes through `guarded`; each refusal test commits once more and
+reopens to exactly the last commit.
+**Tests** (`src-tauri/src/core/preload/native.rs`):
+`deleting_a_pfs3_hard_link_removes_only_its_entry_and_the_file_it_names_keeps_its_blocks`,
+`deleting_a_pfs3aio_hard_link_is_refused_by_name_and_leaves_the_last_commit`,
+`deleting_a_pfs3_file_or_directory_a_hard_link_names_is_refused_by_name` (a file and a directory),
+`deleting_a_pfs3aio_linked_file_is_refused_whether_its_chain_or_its_link_names_it` (three arms: both there; the
+object's own field gone; the link's entry gone) and `pfs3_create_hardlink_is_refused_by_name_and_writes_nothing`,
+which replaces `a_failed_pfs3_create_hardlink_leaves_the_last_commit` and
+`a_pfs3_create_hardlink_commit_failure_locks_the_writer`. The helpers `pfs3_raw_entry` (pfs3aio's extra-field
+layout), `pfs3_append_raw_entries` and `pfs3aio_linked_file` put links on the device directly; the three I1 rename
+tests now build their link that way.
+**Red first**, on the unchanged writer: `test result: FAILED. 3 passed; 5 failed`. The first test failed with
+`assertion `left == right` failed: deleting a hard link to Dst emptied Dst  left: Some([])`; the other four each
+failed with `the injected failure must fail the call: ()`, an `Ok`. **Green:** `test result: ok. 8 passed; 0
+failed`.
+**Mutations**, predicted before the run and applied by `D:\Projeler\Amiga\scratch-0913\art323-mutate.py` to exactly one
+occurrence each. `writer.rs` was backed up to `D:\Projeler\Amiga\scratch-0913\writer.rs.art323-fixed`,
+grep-confirmed, same SHA-256 as the live file. Each mutation ran the 8 tests and was restored with
+`shutil.copyfile`, hash-identical; each gave `7 passed; 1 failed`:
+- **M1** — a link's delete frees what it names again → `deleting a hard link to Dst emptied Dst`.
+- **M2** — the pfs3aio-link refusal dropped → the pfs3aio-link test `must fail the call: ()`.
+- **M3** — the object's own field no longer names links → the linked-file test `must fail the call: ()`. The failing
+  arm is the third (link entry gone), by reasoning: the panic line names none, and the scan still refuses the first
+  two.
+- **M4** — the scan's 0.1.3-shape match dropped → the file-or-directory test `must fail the call: ()`.
+- **M5** — the scan's pfs3aio-shape match dropped → the linked-file test `not the injected failure: 'Obj' has hard
+  links (a pfs3aio link chain from anode 13)…`.
+- **M6** — `create_hardlink` writes 0.1.3's link again → the refusal test `must fail the call: ()`.
+- **M7** — the `link` field's two flag bits swapped → red, but **not as predicted**: the object's own field garbles
+  too (`a pfs3aio link chain from anode 851968`, 13 << 16), so the first arm fails on the sentence, where the second
+  arm was predicted. The pfs3aio-link delete test survives M7, as predicted: its refusal needs only a non-zero field.
+  A weak guard of the bit order there, the linked-file test catching it.
+
+**Disclosed:**
+- Each delete of anything that is not a link reads every directory on the volume.
+- A directory chain that cannot be read anywhere on the volume now fails such a delete with that error.
+- A 0.1.3-written entry with `fsizex` (≥ 4 GiB, `MODE_LARGEFILE`, which ART never formats) reads as a `link` field,
+  so its delete is refused — the safe direction. *(Corrected 2026-09-15 by [ART-325](#fixed)'s fix: the writer now
+  writes `fsizex` in pfs3aio's layout and the `link` field is read through the same `ExtraFields::read`, so an entry
+  libpfs3 `0.1.3+art.10` writes no longer reads as linked. One written with `fsizex` by libpfs3 up to `0.1.3+art.9`
+  still does.)*
+- pfs3aio would delete an object whose chain names only vanished links; this writer refuses.
+- *(Extended 2026-09-15 by the scoped re-review's item 4, with ART-325–327.)* A link check that cannot finish — a
+  directory it cannot read, an entry it cannot walk, a link whose extra fields do not fit — is refused
+  `Error::EntryNotDeleted`, naming the object, what stopped the check and where, and saying to delete it on the Amiga
+  or check the volume. The second bullet above is now that refusal, not the bare error; before it, a malformed entry
+  ended the scan of its block and the delete went ahead.
+
+Filed alongside, all three fixed the same day: [ART-325](#fixed) (the crate's own extra-field parser),
+[ART-326](#fixed) (a second entry under an existing name), [ART-327](#fixed) (`rename_in` drops a moved entry's
+comment, date and extra fields).
+Verification: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo deny check` (`advisories
+ok, bans ok, licenses ok, sources ok`) clean; the ART-PATCH diff regenerated and byte-identical (104 900 bytes);
+`cargo test --lib` counts, the control-byte sweep and `pfs3-oracle-check.py` are in STATUS. Unreachable from ART —
+its product code neither creates nor deletes on PFS3 — so CHANGELOG is not touched.
+
+**ART-322** 🟡 ✅ **A PFS3 rename that changes only a name's case deleted the file and reported success — fixed by
+treating the destination as the source when it is one** — *found 2026-09-15 on `art-debt-3-0915` while closing
+ART-319's `rename_in` gap (third debt round, item 3); fixed 2026-09-15 on `art-debt-3-0915`, item 3b of the third
+debt round*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`rename_in_impl`, new `rename_dir_entry_in_place`) · `rename_in` looked
+for an existing destination with `name_eq_ci`, so renaming "File" to "FILE" in the same directory found the source
+itself as "the destination" and deleted it (data blocks freed), added the new entry with the now-deleted file's
+anode, and removed "the old entry" by the same case-insensitive name — the entry it had just added. The call
+returned `Ok(())` and the directory held neither name. A rename to the identical name (the same case too) hit the
+identical path and was worse: delete, re-add, then remove the just-added entry — the file was gone either way.
+**Fixed** by checking, before a found destination is deleted, whether it is the very entry being renamed — the
+same parent anode and the same anode number, found by the same case-insensitive name compare that found the
+source. When it is: an identical name is a no-op success (`Ok(())`, nothing staged, nothing written — no claim is
+made about pfs3aio's own ending for this exact sub-case, see below); otherwise the new
+`rename_dir_entry_in_place` rewrites only the entry's name bytes in the directory block, leaving its anode, size,
+protection, dates and comment untouched — `name_eq_ci` is an ASCII-only case fold, which cannot change a name's
+byte length, checked defensively (`Error::Corrupt`) rather than assumed. A same-directory destination that differs
+only in case from a *different* entry (a different anode) is unaffected and is still deleted and replaced, as
+before ART-319's disclosed gap. **Read, not measured this time:** pfs3aio's own `RenameAndMove`
+(`tonioni/pfs3aio` `211f7f0`, `directory.c:2064-2076,2130`) confirms the direction — `FindObject` on the
+destination name only refuses `ERROR_OBJECT_EXISTS` when the found entry's `direntry` pointer differs from the
+source's ("%9.1 the same name IS allowed (rename 'hello' to 'Hello')"), and when it is the same entry falls
+through to `ChangeDirEntry`, which moves it (copying its header, name, comment and extra fields into a rebuilt
+direntry) rather than deleting and recreating it — but was not traced past `ChangeDirEntry` for the
+byte-identical-name sub-case, so ART's no-op-with-no-write ending there is ART's own choice. **Tests**
+(`src-tauri/src/core/preload/native.rs`):
+`a_pfs3_case_only_rename_keeps_the_file_its_content_and_its_anode_and_lists_it_under_the_new_case`,
+`a_pfs3_rename_to_the_identical_name_is_a_no_op_success` and (a guard, already green before the fix)
+`a_pfs3_rename_over_a_different_entry_whose_name_differs_only_in_case_still_replaces_it`. **Red first**, on the
+unchanged writer: `test result: FAILED. 26 passed; 2 failed` —
+`assertion `left == right` failed: a case-only rename must leave exactly one entry, not the deleted-and-recreated
+(or deleted-and-gone) result: [...]  left: 0  right: 1` and `assertion `left == right` failed: a rename to the
+identical name wrote to the device  left: 72  right: 65`. **Green after the fix:** `test result: ok. 28 passed; 0
+failed`. **Mutation:** `writer.rs` backed up to `D:\Projeler\Amiga\scratch-0913\writer.rs.art322-backup` and
+grep-confirmed (5 occurrences of "ART-322"); the same-entry condition was disabled
+(`if false && dst_parent == src_parent && dst_entry.anode == entry.anode`), which reproduced both red lines
+exactly (the third, guard test, stayed green — it does not reach this branch); restored with `shutil.copyfile`,
+grep-confirmed no `MUTATION` marker left, green again (28 passed). `cargo fmt --check`, `cargo clippy --all-targets
+-- -D warnings` and `cargo deny check` clean; `cargo test --lib` (once): see STATUS for the count and timing;
+`scripts/control-byte-sweep.py` and `scripts/pfs3-oracle-check.py`
+(`ART_PFS3_DRIVER=E:\amiga\Amigatolon\hstimager\pfs3aio`) both clean. libpfs3 `0.1.3+art.6` → `0.1.3+art.7`. ART
+calls `rename_in` from no product code today (only tests), so nothing user-visible changed; CHANGELOG is not
+touched.
+*(Corrected 2026-09-15 by the round's final whole-branch review, I1 and M1, and fixed by its fix wave; libpfs3
+`0.1.3+art.8`, ART-PATCH item 23.)* **The fix above claimed a name comparison the code did not make.** "Found by the
+same case-insensitive name compare that found the source" described the *lookup*; the identity check itself was
+`dst_parent == src_parent && dst_entry.anode == entry.anode`. `create_hardlink` stores its target's anode in the
+link's own entry, so with "Link" a hard link to "File" in the same directory, `rename_in(root, "File", root, "Link")`
+took the link for the source, rewrote "File" to "Link" in place and returned `Ok` — the root then held
+`Link type -3 anode 6` and `Link type -4 anode 6`, two entries of one name, the failure that does not crash (the
+review's arm A, reproduced here); with a link name of another length (`LongerLink`) the same misfire refused a
+healthy volume as `corrupt filesystem: a case-only rename changed the name's byte length (4 -> 10)`. **And "the byte
+length cannot change" was wrong for non-ASCII names:** the reader decodes a stored name as Latin-1 while the
+in-place rename wrote `new_name.as_bytes()`, UTF-8, so "Äa" (`C4 61`, as an Amiga writes it) → "ÄA" measured 2 → 3
+bytes and was refused as corrupt. **Fixed:** the same-entry check now also requires
+`name_eq_ci(&dst_entry.name, &entry.name)` — within one directory names are unique under that compare, so parent,
+name and anode together are the entry. A found destination that is a hard link, or that shares the source's anode
+without being the source, is refused with `Error::AlreadyExists` before anything is staged, in both directions (the
+file onto its link, the link onto its file). Why refused rather than replaced: this writer's delete of a hard link
+frees the file it names ([ART-323](#fixed), measured), and pfs3aio's own `RenameAndMove` refuses every found
+destination whose direntry is not the source's with `ERROR_OBJECT_EXISTS` (`directory.c:2064-2076`, `tonioni/pfs3aio`
+`211f7f0`, read) — a link's direntry is its own. `rename_dir_entry_in_place` now writes the new name as Latin-1, one
+byte a character; its `Error::Corrupt` stays as a safety net that `name_eq_ci` over the decoded name cannot reach.
+**Tests** (`src-tauri/src/core/preload/native.rs`), each red first on the unchanged writer:
+`a_pfs3_rename_onto_a_hard_link_to_the_same_file_is_refused_and_writes_nothing` (`renaming File onto Link, a hard link
+to the same file, must be refused as already existing, got: Ok(())`),
+`a_pfs3_rename_onto_a_longer_named_hard_link_to_the_same_file_is_refused_not_called_corrupt` (`expected
+already-exists, got: Err(Corrupt("a case-only rename changed the name's byte length (4 -> 10)"))`),
+`a_pfs3_rename_onto_a_hard_link_to_another_file_is_refused_and_that_file_keeps_its_content` (`expected
+already-exists, got: Ok(())`) and `a_pfs3_case_only_rename_of_a_latin1_name_rewrites_its_latin1_bytes_in_place`
+(`called Result::unwrap() on an Err value: Corrupt("a case-only rename changed the name's byte length (2 -> 3)")`);
+green after, with every earlier rename test: `test result: ok. 68 passed; 0 failed` over the rename, overwrite,
+hard-link, Latin-1 and version tests. **Mutations**, predicted before the run, each restored hash-identical with
+`shutil.copyfile` from `D:\Projeler\Amiga\scratch-0913\writer.rs.fixwave-fixed` and green again: **W1**, the name
+compare dropped → the two same-file link tests red (`… got: Ok(())`; `expected already-exists, got: Err(Corrupt("the
+directory entry found for 'File' does not hold a name that 'LongerLink' differs from only in letter case"))`),
+`60 passed; 2 failed`, the other-file test green as predicted (its anodes differ); **W2**, the link refusal skipped →
+all three link tests red (`got: Ok(())` each), `59 passed; 3 failed`; **W3**, the in-place rename back to UTF-8
+bytes → the Latin-1 test red (`Corrupt("the directory entry found for 'Äa' does not hold a name that 'ÄA' differs
+from only in letter case")`), `61 passed; 1 failed`. No survivor.
+
+**ART-321** 🔵 ✅ **`mbr_slot_of` could name the wrong MBR slot when an earlier Amiga area is unreadable — fixed by carrying each area's own slot** — *found 2026-09-14 by the final whole-branch review of `art-debt-2-0914` (`.superpowers/sdd/2026-09-14-art-117-rdb-embed/final-review.md`, M12), by reading; fixed 2026-09-15 on `art-debt-3-0915`, item 1 of the third debt round*
+`src-tauri/src/core/preload/mod.rs::mbr_slot_of(card, area_index)` indexed `mbr.amiga_areas()` — every `0x76` MBR
+entry — with an index into `card.areas`. But `read_card` (`src-tauri/src/core/card/mod.rs`) skips an area it cannot
+read, so `card.areas` could be shorter than `amiga_areas()`: when an earlier `0x76` area was unreadable, every later
+area's index shifted by one, and `mbr_slot_of` named the slot of the area before it — reaching the `FormatPartition`
+and `CopyIn` steps (the format path predates ART-117) and, since ART-117, a replace's target slot. **Fixed by
+carrying the slot instead of re-deriving it.** `AmigaArea` (`core/card/mod.rs`) gained `mbr_slot: Option<usize>`, set
+in `read_card_from` from the same MBR entry the area's own base came from — so the slot survives an earlier area
+being skipped, by construction rather than by a second pass over the table. `core/preload/mod.rs`'s two call sites
+(the per-partition MBR slot and a replace's `target_slot`) now read `area.mbr_slot` directly; `mbr_slot_of` became
+redundant once both callers held the area itself and was removed. `native.rs::area_for_slot` already resolved a
+slot back to an area by matching MBR offsets against `card.areas`, and `embed::area_offset_for` already refused a
+slot whose offset was not one of `card.areas`' own — both unchanged, and both now see the correct slot. TDD:
+`core::preload::tests::a_format_uses_the_readable_areas_own_mbr_slot_when_an_earlier_area_is_unreadable` builds a
+card with two `0x76` areas, the first left zeroed (no `RDSK`, unreadable) and the second a real `DOS\0` partition,
+and plans a format on it — red before the fix (`left: slot Some(2), right: slot Some(3)`, i.e. named the unreadable
+first area's own slot instead of the readable second area's), green after. Mutation: reverting both call sites in
+`core/preload/mod.rs` to a position-derived slot (the pre-fix `mbr_slot_of`, backed up to
+`D:\Projeler\Amiga\scratch-0913\art321-preload-mod.rs.bak`, grep-confirmed) reproduced the identical red line;
+restored via `shutil.copyfile`, green again. `AmigaArea`'s only constructor is in `read_card_from`; the frontend's
+`AmigaArea` TS type gained the matching `mbr_slot: number | null` field, and every test fixture that builds one
+(`src/lib/card.test.ts`, `src/lib/preload.test.ts`, `src/pages/HardDiskStudio.test.tsx`,
+`src/components/osbuilder/VolumePreload.test.tsx`) was updated; `pnpm lint` clean. `cd src-tauri && cargo test --lib
+core::preload` and `core::card` both green (141 and 115 passed); fmt and clippy clean; `cargo test --lib` (once):
+`test result: ok. 3422 passed; 0 failed; 60 ignored; 0 measured; 0 filtered out` (361.85 s, `TMP`/`TEMP` on `E:`);
+`scripts/scratch-guard-sweep.py` clean.
 
 **ART-320** 🔵 ✅ **`cargo test` forced `TMP`/`TEMP` onto `D:`, against the owner's own rule — moved to `E:`, CI overrides it with the runner's own temp directory** — *found 2026-09-14, Task 12 of `.superpowers/sdd/2026-09-14-art-117-rdb-embed/`, verifying ART-117's records; fixed 2026-09-14 on `art-debt-2-0914`, brief `.superpowers/sdd/2026-09-14-art-117-rdb-embed/tmp-fix-brief.md`*
 `src-tauri/.cargo/config.toml`'s `[env]` now forces `TMP`/`TEMP` to
@@ -253,7 +753,7 @@ than a dead end.
 - **M4** — `with_long` returns `None` for an index outside the block or the checksum longword, where a `debug_assert!` stood; callers refuse through `set_long` by block: `with_long_refuses_an_index_outside_the_block_or_the_checksum`. **M6** — `load_driver` returns a `LoadedDriver`; the `#[allow(clippy::type_complexity)]` is gone. **M7** — `EmbedMode` merged into `rdbedit::EditKind` (no wire name: neither was serialised); S1's LSEG map is one `lseg_writes`. **M9** — `read_capped` reads a driver no further than one byte past the cap: `a_driver_is_read_no_further_than_one_byte_past_the_cap`. **M10** — a backup that reads back wrong, or cannot be read back, is removed — ART made it this run — and the sentence says so and names the path: `a_backup_that_reads_back_wrong_is_removed_and_the_sentence_says_so`.
 - **M8** — both crash tests now compare the old chain byte for byte before S4, and after S4 every chain block against the planned write or the card's own bytes (`assert_chain_bytes`). Mutation, S2 also rewriting the old FSHD's version (chain block list unchanged): `0 passed; 1 failed` at `crash-replace-head-Header: the chain before the link, byte for byte`; restored `1 passed`.
 - **M3 — a record, not a code change.** The spec's "about 46 replaces of room" on CaffeineOS counted every block to `RDBBlocksHi` 6143; with no zero check below `RDBBlocksHi`, 14 replaces of a 62 604-byte driver land on zero blocks, the 15th reaches the stale RDB copy at 2048 and the 39th the old PFS3 blocks from 5120. Those blocks are unlinked, journalled before they are written, in the backup, and checked unchanged outside the write set by verification, so no safety gap was found and none was added. Corrected in the spec's Accepted limits.
-- **M5 — disclosed, kept by the controller's ruling.** Three `$VER:` readers now exist: `rdbedit::program_name_from_ver_string` (the program name, `from_utf8_lossy`), `rdb::version_from_ver_string` (the `u16` numbers written to the FSHD) and `amigaver::read` (`u32` halves, Latin-1). They are not unified because `amigaver::read`'s control-byte filter rejects the NUL-prefixed `$VER:\0\0name` the name reader must accept, and merging them would change a reader the game index depends on. Cost: three readers to keep aligned.
+- **M5 — unified, item 4 of the third debt round** (`.superpowers/sdd/2026-09-15-debt-3-round/item4-brief.md`, fixed 2026-09-15 on `art-debt-3-0915`). The three readers this note used to disclose are now one: `core::amigaver::read_loose(data) -> LooseVersion { name: Option<String>, version: Option<(u16, u16)> }` in `src-tauri/src/core/amigaver.rs`, sharing one marker search and one 200-byte window. `rdb::version_from_ver_string` and `rdbedit::program_name_from_ver_string` are now thin calls into it (`.version` and `.name`), keeping their own signatures so neither caller has to learn `AmigaVersion`. **The strict reader, `amigaver::read`, is untouched** — its `is_plausible_name` control-byte rejection is exactly what `read_loose` does not carry, kept as two separate functions (a named option, per the brief) rather than one tolerant mode, because the brief's own claim that this rejection is "what the game index depends on" does not hold: grepping every caller of `amigaver::read` (`amigaver::` outside its own file) found none in `core::gameindex` at all. The real callers are `core::osinstall::collide::read_own_marker`, `core::amigainstall::packagevol::stated_version` and `core::osinstall::apply::read_stated_version`, and it is their behaviour `read` keeps unchanged — corrected here per this project's own rule that a stale claim in a written record is fixed in place, not repeated (CLAUDE.md, "A work list decays"). Characterization tests were written against today's `rdb::version_from_ver_string` and `rdbedit::program_name_from_ver_string` first and run green before either function's body changed, for the shapes that used to differ: a NUL run before the name, control bytes in the name, a marker naming a version and no program, extra whitespace, and no marker at all — `core::rdb::tests::{a_nul_run_between_the_marker_and_the_name_does_not_block_the_version, control_bytes_in_the_name_do_not_stop_the_version_being_found, a_version_with_no_program_name_still_reads, extra_whitespace_between_the_marker_and_the_version_is_tolerated}` and `core::rdbedit::driver_tests::{control_bytes_in_the_name_are_returned_verbatim_not_rejected, extra_whitespace_between_the_marker_and_the_name_is_tolerated}`, plus a new `core::amigaver::tests::a_nul_run_before_the_name_is_rejected_by_the_strict_reader` pinning `read`'s own strictness, and `read_loose`'s own equivalent suite in `core::amigaver::tests`. All stayed green after the refactor, alongside ART-117's own `driver_tests` and `preload::embed` tests and `core::gameindex`. Mutations, both backed up by absolute path into `D:\Projeler\Amiga\scratch-0913\`, grep-confirmed, seen red and restored with `shutil.copyfile`: `read_loose`'s tokenizer made strict about NUL (dropping `|| *b == 0` from its split predicate) turned `core::rdbedit::driver_tests::the_program_name_is_the_first_token_after_ver` red (`80 passed; 1 failed`) — the DifferentDriver tests themselves stayed green, since none of their fixtures place a NUL between the marker and the name, disclosed rather than assumed; restored, `81 passed`. `is_plausible_name` made to accept everything (the strict accessor make tolerant of control bytes) turned the new `a_nul_run_before_the_name_is_rejected_by_the_strict_reader` red along with the pre-existing `binary_noise_with_a_coincidental_number_shape_is_rejected` and `reads_the_id_string_a_library_with_no_ver_marker_carries` (its own premise check) — `23 passed; 3 failed`; restored, `26 passed`. `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean; `cargo test --lib`: `test result: ok. 3469 passed; 0 failed; 60 ignored; 0 measured; 0 filtered out` (406.57 s). Cost, now paid down: one reader instead of three.
 - **M11** — `docs/architecture.md` no longer lists `import_filesystem` on `VolumeFormatter`. **M12** — filed open as [ART-321](#open), found by reading.
 
 **Scoped re-review fix, 2026-09-15 — the journal I2 leaves behind said "undo it".** The re-review of the fix wave found I2 half-done: `Journalled::close_after_sync` only removed the journal, so a journal left after a written, synced and verified edit was byte-identical to a crash's. The next run's `open_rdb` refused with `JOURNAL-PENDING` ("Undo it first in the File Manager"), and the File Manager's `PendingJournal::roll_back` would have reverted the good edit — the confident wrong sentence `JOURNAL-LEFT` existed to prevent, one run later.
@@ -368,7 +868,8 @@ holds the failed attempt's in-memory rootblock and other state, and `Writer::ope
 it, so its next commit would write those stale values. Documented on `Error::CommitFailed`, on
 `CoreError::Pfs3WriterLocked`, and on `Writer::into_volume`'s own doc comment; not exercised by a test — ART
 never reopens a locked writer this way today either.
-**Out of scope, disclosed rather than fixed:** `overwrite_file_in` writes new data over a file's existing blocks
+**Out of scope, disclosed rather than fixed** (*both closed 2026-09-15 on `art-debt-3-0915` — see "Closed
+2026-09-15" at the end of this entry; the paragraph is left as it read on the day*)**:** `overwrite_file_in` writes new data over a file's existing blocks
 before its metadata, so an error after that point cannot be undone in memory — **unreachable from ART today:**
 `copy_in_pfs3` only ever calls `write_file_in` against a freshly-formatted, still-empty volume (it refuses when
 `vol.list_dir("")` is non-empty) with one entry per relative path from `collect_entries`'s walk of a Windows
@@ -424,7 +925,7 @@ through to the generic `Malformed` arm (M4) → red, and the first time this par
 red: `panicked … malformed pfs3: a write to this PFS3 volume failed and ART could not confirm what is on the
 disk: reopen it (and check it) before writing to it again`. No survivor across all seven mutations: every one
 was killed by at least the guard aimed at it.
-Any public mutator the tests above do not exercise directly for its own discard/lock behaviour — `create_dir`/
+*(Emptied 2026-09-15 — see "Closed 2026-09-15" below; the paragraph is left as it read on the day.)* Any public mutator the tests above do not exercise directly for its own discard/lock behaviour — `create_dir`/
 `create_dir_in`, `create_softlink`/`create_softlink_in`, `create_hardlink`, `undelete`, `force_remove_entry`,
 `update_dir_entry_protection`, `rename_in`, `overwrite_file_in` — is wrapped the same way but has no
 behavioural test of its own: its test would be structurally identical to the ones above, applied to a different
@@ -433,6 +934,89 @@ previously wrong** — it omitted `create_dir`/`create_dir_in`, `rename_in` and 
 `set_volume_name`, which now has the test above). `repair_reserved_free` is exercised, but **only as the
 second, already-locked call** in `a_pfs3_commit_failing_part_way_locks_the_writer` — that covers its refusal
 once the writer is poisoned, not its own discard-to-last-commit behaviour on an ordinary failure of its own.
+**Closed 2026-09-15 on `art-debt-3-0915`, unmerged** (third debt round, item 3; brief
+`.superpowers/sdd/2026-09-15-debt-3-round/item3-brief.md`, design approved in chat, copy-on-write the owner's
+choice; report `item3-report.md` beside it; libpfs3 `0.1.3+art.6`). **(1) `overwrite_file_in` is copy-on-write.**
+The new content goes only into blocks `alloc_data_blocks` hands out while the old file's blocks are still
+allocated; the extents after the first get anodes allocated while the old chain's are still taken; only then are
+the old data blocks freed and the old chain's other anodes cleared, the head anode rewritten in place (the anode
+number is the method's contract) and the entry's size set — all pending, all made true by the one
+`update_rootblock`. An error before that is discarded by `guarded`, and the old file is intact on disk. **The
+limit:** the whole new content needs free space of its own; an overwrite that would fit only by reusing the file's
+own blocks is refused `DiskFull` before a block is written, and the file keeps its old content. Still unreachable
+from ART (only tests call it, checked 2026-09-15). *(Corrected 2026-09-15 by the round's final review, M3: "only
+tests call it" was too strong. `write_file_in` calls `overwrite_file_in` whenever its name already exists as a file
+in the directory. ART's one product writer path, `copy_in_pfs3`, never produces that: it refuses a volume that is
+not empty (`vol.list_dir("")`, `SafetyRefused`) and writes one entry per relative path of a Windows directory walk —
+so the method is reached only through `write_file_in` on an existing name, which ART's product code never does.)* `truncate_anode_chain` and `free_and_clear_anodes`, used only by
+the old in-place path, are removed; the extent loop is shared as `block_extents`. **(2) `rename_in` is one
+commit.** `delete_in`'s body is now `delete_in_no_commit`, which both `delete_in` and `rename_in` call, so a
+destination file goes to the deldir exactly as a delete sends it, and the delete, the new entry and the old
+entry's removal are one commit. **(3) Every public mutator has a test of its own** (`src-tauri/src/core/preload/native.rs`).
+Red on the old writer first: `a_failed_pfs3_overwrite_keeps_the_old_content_on_disk` (`a failed overwrite destroyed
+the old content`), `a_pfs3_overwrite_writes_new_blocks_and_frees_the_old_ones_in_its_commit` (`old block 2818 is
+not free after the overwrite (new blocks [2818, 2819, 2822])`), `a_pfs3_overwrite_needs_free_space_for_the_whole_new_content`
+(`copy-on-write has no room for the whole new content: ()` — the old writer fitted it in place),
+`a_failed_pfs3_rename_over_an_existing_file_keeps_the_destination` (`a failed rename deleted its destination`,
+`left: None`). Green on the old writer too, as guards of what must not change:
+`a_pfs3_overwrite_frees_the_old_chains_other_anodes`,
+`a_pfs3_rename_over_an_existing_file_sends_it_to_the_deldir_as_delete_does` (one volume renamed over "Dst", another
+with "Dst" deleted first and then renamed onto, read the same — tree, free counts, deldir). Discard tests — a
+failure part-way, then the same writer commits once more, and the reopened volume must equal the last commit: the
+reserved area byte for byte (the rootblock's datestamp zeroed), the tree with contents, the free counts, the
+deldir: `a_failed_pfs3_{create_dir,create_dir_in,create_softlink,create_softlink_in,undelete}_leaves_the_last_commit`
+(into a directory whose block has lost its `DB` id, so `add_dir_entry` fails after the allocation),
+`a_failed_pfs3_create_hardlink_leaves_the_last_commit` (a full directory, one free reserved block, no free anode:
+the eighth link stages a new directory block, then finds no reserved block for a new anode block) *(removed
+2026-09-15 by ART-323, with `a_pfs3_create_hardlink_commit_failure_locks_the_writer` below: `create_hardlink` is now
+refused before anything is read or written, so it has no part-way failure and no commit to lock on;
+`pfs3_create_hardlink_is_refused_by_name_and_writes_nothing` replaces both)*, and the
+overwrite and rename tests above. `a_refused_pfs3_force_remove_entry_leaves_the_last_commit` and
+`a_refused_pfs3_update_dir_entry_protection_leaves_the_last_commit` fail before staging: each mutator's one staged
+write is its last step before the commit, so no part-way failure exists for them. Lock tests — the commit's first
+write refused, then the next call `CommitFailed` and `write_count()` unchanged:
+`a_pfs3_{create_dir,create_dir_in,create_softlink,create_softlink_in,create_hardlink,undelete,force_remove_entry,update_dir_entry_protection,rename,overwrite,repair_reserved_free}_commit_failure_locks_the_writer`.
+`pfs3_test_device::MemDevice` gained `fail_read_of(sector, nth)`, a one-shot read failure, for the rename test: a
+directory block with a bad id cannot fail it, because `list_entries` and `find_dir_entry` both skip such a block.
+Mutations (`writer.rs` backed up to `D:\Projeler\Amiga\scratch-0913\writer.rs.item3-backup`, grep-confirmed; each
+restored with `shutil.copyfile` and seen green again, never `git checkout --`): **M1** new data written over the old
+blocks again → red: the overwrite discard test (`a failed overwrite destroyed the old content`), with the success
+and leak tests; **M2** the old blocks freed before the new ones are allocated → red: the discard test (same line),
+the success test (`old block 2818 is not free…`) and the free-space test; **M3** the destination delete committed
+separately (`delete_in`) → red: `a failed rename deleted its destination`; **M4** the old chain's other anodes not
+cleared → red: `the old chain's anode 6 leaked`, `left: (2, 2820, 0)`; **M5** `discard_to_last_commit` a no-op →
+the eight new discard tests that stage something red (`the failed call's in-memory state reached the next commit`),
+with ART-319's own two; **M6** `update_rootblock`'s `self.poisoned = true` dropped → all eleven new lock tests red
+(`the next operation must return the lock error, got: block 2 out of range`), with
+`a_pfs3_commit_failing_part_way_locks_the_writer`. **Survivors, judged:** under M5, the two refused-before-staging
+tests — those mutators have no staged state for a discard to undo, so this is the mutation reaching nothing, not a
+weak guard; under M6, `a_failed_pfs3_set_volume_name_locks_the_writer`, which locks through its own write rather
+than `update_rootblock` (ART-319's mutation (e) is its guard).
+**The round's final review fix wave, 2026-09-15 (libpfs3 `0.1.3+art.8`, ART-PATCH item 23).** **M2, copy-on-write
+trusted the bitmap:** the new blocks were taken from the committed bitmap without checking them against the old
+chain, so a corrupt bitmap marking one of the old file's blocks free handed it out, the new content went over the
+old file on the device before any commit, and the commit then freed a block the new chain uses — "the device still
+holds the old file" held only for a consistent bitmap. `overwrite_file_in` now refuses `Error::Corrupt` ("the data
+bitmap marks block N free, but file anode A still uses it") before the first write, and `guarded` discards the
+allocation. Test `a_pfs3_overwrite_refuses_a_bitmap_that_offers_the_old_files_own_block` (the fixture's on-disk
+bitmap bit for "File"'s first block set, nothing else) — red first on the unchanged writer: `a bitmap offering the
+old file's own block 2818 must be refused as corruption, got: Ok(())`; green after; mutation W4 (the check made
+never to fire) reproduced that exact line, `61 passed; 1 failed`, restored hash-identical with `shutil.copyfile`
+from `D:\Projeler\Amiga\scratch-0913\writer.rs.fixwave-fixed`, green again. **M3:** the reachability correction is
+in place above. **M5, pfs3aio's overwrite path, read** (`tonioni/pfs3aio` `211f7f0`, read, not run): a
+`MODE_NEWFILE` open of an existing file is `ACTION_FINDOUTPUT` → `NewFile` with `found` set (`dd_funcs.c:686-709`),
+which takes over the direntry (`directory.c:1492-1499`) — the head anode number is kept, the old version goes to the
+deldir under a replacement anode when the deldir is on (`directory.c:1538-1551`), the size is set to 0, the head
+anode reclaimed and the old blocks freed into the to-be-freed list, "not actually freed until UpdateFreeList is
+called" (`directory.c:1557-1576`, `allocation.c:502-505`); `WriteToFile` then allocates new blocks as the file grows
+(`disk.c:807`). A write inside an existing file's size through a handle that did not call `NewFile`
+(`ACTION_FINDUPDATE`, `dd_funcs.c:657-684`) goes over the file's own blocks in place (`disk.c:938`). So for a
+whole-file replace pfs3aio, like `overwrite_file_in`, keeps the head anode and does not write into blocks it has
+just freed; unlike it, pfs3aio sends the old version to the deldir. **Recorded, not changed:**
+`overwrite_file_in` sends nothing to the deldir. **Not traced:** whether pfs3aio reuses its freed blocks before the
+commit when its to-be-freed cache fills mid-write (`allocation.c:549-576`), so nothing is claimed about whether it
+fits a replacement that needs the old file's own space. **M6 (sizes of 4 GiB or more)** is filed as
+[ART-324](#open), not fixed.
 
 **ART-317** 🟡 ✅ **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
 the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
@@ -483,6 +1067,84 @@ survivors remain **open**, neither guarded nor disclosed before this fix wave: (
 `clock.rs` is on `core_makes_amiga_dates_only_through_the_clock`'s own allow-list, so no guard sees it; (c) a
 libpfs3 `Writer` opened without calling `set_entry_date` falls back to UTC (`vendor/libpfs3/src/writer.rs:132-133`)
 and the independence guards do not read `vendor/`. Dates already on volumes stay as written.
+**Survivors (b) and (c) closed, third debt round item 2, 2026-09-15 on `art-debt-3-0915`:** two new
+`core::independence` guards, modelled on `core_makes_amiga_dates_only_through_the_clock` and
+`commands_and_tools_never_name_utc_clock_outside_a_test`. (b)
+`only_clock_and_local_time_name_amiga_from_wall_or_system_now_unix` walks all of `src/` (not only `core/`, since
+`tools/local_time.rs` must be checked too) for `amiga_from_wall` and `system_now_unix`, allow-listing only
+`core/clock.rs` (where both are declared) and `tools/local_time.rs` (the product clock); `core/volume/write/layout.rs`'s
+two calls (lines 403, 412) are inside `#[cfg(test)]` and need no allow-list entry — confirmed by grep and by
+`test_regions` skipping them. (c) `libpfs3_writer_open_is_named_only_by_the_pfs3_writer_helper` walks `core/` for
+`libpfs3::writer::Writer::open(`, allow-listing `core/preload/native.rs` (the new helper) and `core/card/sizing.rs`
+(its own call, in the `fill` test helper, already sits inside a `#[cfg(test)] mod tests` that runs to the file's end,
+so it needs no allow-list entry on its own account either — named anyway per the approved design). A new
+`core::preload::native::open_pfs3_writer(vol, clock)` is now the one product path to a libpfs3 `Writer`: it opens the
+writer and calls `set_entry_date` with the clock's date before handing it back, so a writer used immediately after
+open — before any per-entry refresh — still carries the clock's local date rather than falling back to
+`current_amiga_datestamp`'s UTC (`vendor/libpfs3/src/writer.rs`). `copy_in_pfs3` now calls it in place of a bare
+`Writer::open`; its own per-entry `set_entry_date` refresh inside the loop is unchanged. Tests: both guards seen red
+with an injected product call (a temporary function in `core/card/sizing.rs` for (b), `core/dirsize.rs` for (c) —
+neither file is allow-listed for the other guard) and green after restore;
+`core::preload::native::tests::open_pfs3_writer_stamps_the_clocks_local_date_before_any_write` (writes through a
+writer immediately after `open_pfs3_writer`, no `set_entry_date` call of its own) was red when the helper's own
+`set_entry_date` call was removed (day 17789/UTC-now vs the expected 17546 from `PLUS_THREE`'s fixed clock) and green
+restored. Backups by absolute path into `D:\Projeler\Amiga\scratch-0913\` (`sizing.rs.bak`, `dirsize.rs.bak`,
+`native.rs.bak`), grep-confirmed; restored with `shutil.copyfile`, never `git checkout --`. No survivor disclosed.
+*(Corrected 2026-09-15 by the round's final whole-branch review, I2, and its fix wave: "no survivor" was wrong for
+(c).)* Guard (c) looked for the fully qualified `libpfs3::writer::Writer::open(` only, in `core/` only, allowed all
+of `native.rs` and a `core/card/sizing.rs` whose one call was already inside `#[cfg(test)]`, and was mutated only
+with that exact needle — so `use libpfs3::writer::Writer;` followed by `Writer::open(vol)` passed it, and so did a
+second call anywhere in `native.rs`. **Now:** `core::independence::libpfs3_writer_open_is_named_only_by_the_pfs3_writer_helper`
+walks all of `src/` through a new `libpfs3_writer_open_sites`, which resolves how each file names libpfs3's `Writer`
+— the full path; a `use` of `libpfs3`, `libpfs3::writer` or the type itself, plain, `as`-aliased, grouped in braces
+or a glob, `pub` or not, wrapped across lines; and a `type` alias of any of those. The allow-list is the one call
+inside `open_pfs3_writer`'s own body, which must hold exactly one; the `sizing.rs` entry is gone. A fixture test,
+`core::independence::libpfs3_writer_open_sites_sees_every_naming_of_the_writer`, pins each naming and four controls
+(another type's `open`, a comment, a test region, a `Writer` that is not libpfs3's), re-runnably. **Red by
+injection**, each into a product line above the file's first column-0 `#[cfg(test)]`, run on the already-built
+test binary (the guard reads source at run time, so nothing else changed) and restored with `shutil.copyfile` from
+`D:\Projeler\Amiga\scratch-0913\*.fixwave-fixed`, hash-identical each time: `use libpfs3::writer::Writer;` +
+`Writer::open(vol)` in `core/dirsize.rs` → `dirsize.rs:199: Writer::open(vol) // FW-MUTATION`,
+`test result: FAILED. 1 passed; 1 failed`; `use libpfs3::writer::Writer as PfsWriter;` + `PfsWriter::open(vol)` →
+`dirsize.rs:199: PfsWriter::open(vol) // FW-MUTATION`, `1 passed; 1 failed`; a second
+`libpfs3::writer::Writer::open(vol)` in `native.rs` outside the helper → `native.rs:1158: … // FW-MUTATION`,
+`1 passed; 1 failed`; the helper renamed (`fn open_pfs3_writer_renamed(`) → its own call reported as
+`native.rs:166: let mut writer = libpfs3::writer::Writer::open(vol).map_err(from_pfs3)?;`, `1 passed; 1 failed`.
+Each green again after the restore: `test result: ok. 2 passed; 0 failed`. **Survivors, disclosed:** a `Writer`
+reached through a re-export in another module (`pub use libpfs3::writer::Writer;` in one file, then
+`crate::that::Writer::open(` in another), a call built by a macro, and a call split across lines inside
+`Writer::open(` — none exists in the tree today, and none of the four is resolved by a line scan.
+*(Extended 2026-09-15 by the scoped re-review's item 2, with ART-325–327; libpfs3 `0.1.3+art.10`.)* The re-review
+found the fixture had no glob form, `<libpfs3::writer::Writer>::open(` and `extern crate libpfs3 as x;` passed the
+guard, and a `/* */` comment or a string could be flagged. `libpfs3_writer_open_sites` now reads code only —
+`strip_string_literals` blanks block comments (nested), strings, raw strings and char literals and keeps every
+newline — resolves `<T>::open(` for every name of the type and every `type` alias, and takes an
+`extern crate libpfs3 as x;` alias both as a path and as the root of a `use`. The fixture test gained ten sources:
+both glob forms, both qualified forms, both `extern crate` forms, block comments, strings, a call after a string
+holding `/*`, and a `use` inside a block comment. **Red first:** `a qualified path`, `a qualified path through a use
+alias`, `an extern crate alias` and `a use through an extern crate alias`, each `flagged []`; `block comments: flagged
+["/* let _ = Writer::open(v); */", "let _ = Writer::open(v);", "/* nested */ let _ = Writer::open(v);"]`;
+`string literals: flagged ["let _ = \"Writer::open(v)\";", "let _ = r#\"Writer::open(v)\"#;"]`. The two glob forms
+were already resolved and passed at once; their red is a mutation's. **Mutations** (`art325-mutate.py`, `mod.rs`
+restored hash-identical each time): **MG1** (`<T>::open(` not searched) → both qualified cases red; **MG2** (the
+alias not a `use` root) → the use-through-alias case alone; **MG4** / **MG5** (each glob branch disabled) → its one
+glob case alone; **MG3** (nothing stripped) went red, but on the older fixture's `// Writer::open(v) in a comment`
+control, before the new cases ran — so **MG3b**, the old reading exactly (whole `//` lines skipped), was run: the
+block-comment and string cases alone red. **Still not seen, disclosed:** a re-export through another module, or an
+`extern crate` alias made in another file; a call built by a macro; a call split across lines; a trait-qualified
+`<… as T>::open(`.
+*(Extended 2026-09-15 by the scoped re-review's follow-up 4; libpfs3 `0.1.3+art.11`.)* `use {libpfs3::writer::Writer};`
+passed the guard, for two reasons: the scan looked for `use ` — and `compact_rust` keeps no space before a `{` or a
+`::` — and it required the statement itself to start with the crate's name. It now takes `use `, `use{` and `use::`
+alike and resolves each leaf of the tree against the crate and its `extern crate` aliases, so a tree rooted at a
+brace group, nested or not, is seen. Three fixture sources: a brace-rooted `use`, a nested one, one through an
+`extern crate` alias. **Red first:** each `flagged []`. The first fix, per leaf only, stayed red on all three —
+which is how the missing space was found. **Mutations:** **M4a** (only `use ` taken) → all three red; **M4b** (a
+tree starting with `{` not expanded) → all three red. **The survivors**, now listed in
+`libpfs3_writer_open_sites`'s own doc: the four above, and a `use` that does not start its line or whose keyword
+stands on a line of its own. Those last two were confirmed, not assumed: **E4**, a temporary fixture holding each as
+a source that expects the call flagged, went red on both (`a use after a statement on its line: flagged []`, `a use
+keyword on its own line: flagged []`) and was restored hash-identical.
 
 **ART-301** 🔵 ✅ **The job bar's titles were English sentences composed in Rust** — *found 2026-09-10 in the
 owner's screenshot; fixed 2026-09-14 on `art-debt-0914`*

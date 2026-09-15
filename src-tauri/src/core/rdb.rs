@@ -106,14 +106,6 @@ pub struct FileSystemSpec {
 /// checksum, host id, next.
 pub const LSEG_DATA_BYTES: usize = BLOCK_SIZE - 20;
 
-/// The marker every well-made Amiga binary carries so `Version` can answer.
-const VER_MARKER: &[u8] = b"$VER:";
-
-/// How far past the marker to look. The version follows the program name, so
-/// a couple of lines is generous; scanning further would start finding the
-/// numbers in an unrelated string.
-const VER_SCAN_BYTES: usize = 200;
-
 /// The version a driver states about **itself**.
 ///
 /// The FSHD block has to declare a version, and asking the user to type one
@@ -126,46 +118,15 @@ const VER_SCAN_BYTES: usize = 200;
 ///
 /// Returns `None` when the driver says nothing; the caller must then ask
 /// rather than guess (spec §89).
+///
+/// A thin call into [`crate::core::amigaver::read_loose`] (item 4 of the
+/// third debt round, replacing this function's own former scan, ART-117 M5)
+/// — its own `(u16, u16)` return type is kept so callers here never need to
+/// learn about `AmigaVersion`. `read_loose` is tolerant of a NUL run between
+/// the marker and the program name, which this function's own tests already
+/// pin (`core::rdb::tests::a_nul_run_between_the_marker_and_the_name_does_not_block_the_version`).
 pub fn version_from_ver_string(data: &[u8]) -> Option<(u16, u16)> {
-    let marker = data
-        .windows(VER_MARKER.len())
-        .position(|window| window == VER_MARKER)?;
-    let start = marker + VER_MARKER.len();
-    let end = start.saturating_add(VER_SCAN_BYTES).min(data.len());
-
-    // The first token shaped like `<digits>.<digits>`. The program name comes
-    // first and is skipped by that rule even when it contains a dot
-    // (`pfs3aio.dev`), because its left half is not all digits.
-    for token in data[start..end].split(|b| b.is_ascii_whitespace() || *b == 0) {
-        let Some(dot) = token.iter().position(|b| *b == b'.') else {
-            continue;
-        };
-        let major = &token[..dot];
-        if major.is_empty() || !major.iter().all(|b| b.is_ascii_digit()) {
-            continue;
-        }
-        // The revision runs until whatever punctuation follows it — `19.2,`
-        // and `19.2)` are both real.
-        let minor: Vec<u8> = token[dot + 1..]
-            .iter()
-            .copied()
-            .take_while(|b| b.is_ascii_digit())
-            .collect();
-        if minor.is_empty() {
-            continue;
-        }
-
-        // A number too big for the field is not this driver's version; keep
-        // looking rather than truncating it into a plausible-looking lie.
-        let (Ok(major), Ok(minor)) = (
-            std::str::from_utf8(major).unwrap_or("x").parse::<u16>(),
-            std::str::from_utf8(&minor).unwrap_or("x").parse::<u16>(),
-        ) else {
-            continue;
-        };
-        return Some((major, minor));
-    }
-    None
+    crate::core::amigaver::read_loose(data).version
 }
 
 /// `MaxTransfer` — the largest single transfer the driver will be asked for.
@@ -1564,6 +1525,57 @@ mod tests {
         for len in 0..=full.len() {
             let _ = version_from_ver_string(&full[..len]);
         }
+    }
+
+    // ---- characterization, item 4 of the third debt round -----------------
+    //
+    // Pinned on today's code before `version_from_ver_string` became a thin
+    // call into `core::amigaver::read_loose` (ART item 4, `.superpowers/sdd/
+    // 2026-09-15-debt-3-round/item4-brief.md`): the shapes that differ from
+    // `amigaver::read`'s own strict parsing, so the unification cannot
+    // change what this function answers.
+
+    /// ART-117's own shape: a NUL run between the marker and the name
+    /// (`libpfs3` writes `$VER:\0\0pfs3aio.device 4.1` — see
+    /// `core::rdbedit::driver_tests::the_program_name_is_the_first_token_after_ver`).
+    /// NUL is a token separator here, same as whitespace, so the version is
+    /// found past it.
+    #[test]
+    fn a_nul_run_between_the_marker_and_the_name_does_not_block_the_version() {
+        assert_eq!(
+            version_from_ver_string(b"$VER:\0\0pfs3aio.device 4.1"),
+            Some((4, 1))
+        );
+    }
+
+    /// Control bytes in the name token are never inspected by this reader —
+    /// unlike `amigaver::read`, it never looks at the name at all, only at
+    /// whichever token is shaped `<digits>.<digits>`.
+    #[test]
+    fn control_bytes_in_the_name_do_not_stop_the_version_being_found() {
+        let bytes = b"$VER: \x01\x02\x03 12.34 (1.1.99)";
+        assert_eq!(version_from_ver_string(bytes), Some((12, 34)));
+    }
+
+    /// A marker that states a version and no program name still answers a
+    /// version — final review I1's `unnamed_driver` shape, pinned here for
+    /// the reader that actually parses it.
+    #[test]
+    fn a_version_with_no_program_name_still_reads() {
+        assert_eq!(
+            version_from_ver_string(b"$VER: 44.5 (1.1.26)"),
+            Some((44, 5))
+        );
+    }
+
+    /// Extra whitespace between the marker, the name and the version is not
+    /// a malformed marker.
+    #[test]
+    fn extra_whitespace_between_the_marker_and_the_version_is_tolerated() {
+        assert_eq!(
+            version_from_ver_string(b"$VER:    pfs3aio    19.2   (2.10.18)"),
+            Some((19, 2))
+        );
     }
 
     /// Round-trip: a driver written into an RDB comes back out measured

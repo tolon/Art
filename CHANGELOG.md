@@ -28,6 +28,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A file of 4 GiB or more is refused by name before ART copies anything onto a PFS3 partition.** ART used to read
+  such a file whole into memory and only then refuse it, with a sentence that did not say what to do. It now names
+  each such file and its size before any file is read, says that the partition holds files of at most 4294967295
+  bytes and that ART's own PFS3 format does not make large-file partitions, and asks you to leave the file out and run
+  the copy again. Checked with sizes handed to the copy in ART's tests, not with a real 4 GiB file.
+- **A damaged drawer on a PFS3 partition is reported as damaged, not as a missing file.** When an entry in a drawer
+  on the card was malformed, ART could not see anything listed after it: the first-boot report then said the card
+  had not booted, and the check after an install said a file was not found. Both now say which drawer is damaged,
+  where on the partition, and to check the partition with a PFS3 repair tool. Checked against drawers damaged on
+  purpose in ART's own tests, not against a card a real Amiga damaged.
+- **ART reads the size of a file on a PFS3 partition correctly when the Amiga stored more about the file** — a hard
+  link, a rollover file, or owner, group or other protection bits. Until now such a file could be reported with the
+  wrong size, or as too large to read, by the first-boot report and by the check after an install. Checked against
+  directory entries laid out from the Amiga handler's source, not yet against a card a real Amiga wrote.
 - **The Files screen's empty-pane text no longer clips in Turkish at 1024x768.** "Hiçbir şey açık değil" is now
   "Açık bir şey yok".
 - **The job bar names each job in the language you chose.** Titles such as

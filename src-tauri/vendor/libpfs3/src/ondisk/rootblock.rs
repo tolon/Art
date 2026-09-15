@@ -1,4 +1,9 @@
 //! Rootblock and rootblock extension parsing.
+//!
+//! Modified by ART on 2026-09-15 (the scoped re-review's follow-up 1,
+//! ART-324): `Rootblock::has_largefile` is pfs3aio's `g->largefile` —
+//! `MODE_LARGEFILE` and `MODE_DIR_EXTENSION` — not `MODE_LARGEFILE` alone.
+//! `ART-PATCH.md` in this crate's root says what and why.
 
 use byteorder::{BigEndian, ReadBytesExt};
 use std::io::Cursor;
@@ -169,8 +174,15 @@ impl Rootblock {
     pub fn has_longfn(&self) -> bool {
         self.has_flag(MODE_LONGFN)
     }
+    /// Whether `fsizex` is part of a file's size on this volume.
+    ///
+    /// ART (2026-09-15, the scoped re-review's follow-up 1): pfs3aio's
+    /// `g->largefile`, set at mount from `MODE_LARGEFILE` **and**
+    /// `MODE_DIR_EXTENSION` (`init.c:648`, `tonioni/pfs3aio` `211f7f0`) and
+    /// read by `GetDEFileSize`, `SetDEFileSize` and `GetDDFileSize`
+    /// (`directory.c:3641-3694`). 0.1.3 looked at `MODE_LARGEFILE` alone.
     pub fn has_largefile(&self) -> bool {
-        self.has_flag(MODE_LARGEFILE)
+        self.has_flag(MODE_LARGEFILE) && self.has_flag(MODE_DIR_EXTENSION)
     }
     pub fn is_splitted_anodes(&self) -> bool {
         self.has_flag(MODE_SPLITTED_ANODES)

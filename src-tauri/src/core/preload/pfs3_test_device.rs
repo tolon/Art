@@ -16,7 +16,9 @@
 //! (ART-319, M1 final review): once armed, every `read_block`/`read_blocks`
 //! call fails from then on, whatever `end` or `fail_from_write` say — the
 //! shape a reload needs when the device that held the last commit can no
-//! longer even be read back.
+//! longer even be read back. **Unreadable once, at one sector** with
+//! [`MemDevice::fail_read_of`] (third debt round, item 3): an I/O error at a
+//! chosen read inside one writer call.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -39,6 +41,9 @@ pub(crate) struct MemDevice {
     /// once set, every `read_block`/`read_blocks` call fails, independent
     /// of `end` and `fail_from_write`, which affect only writes.
     reads_fail: Arc<Mutex<bool>>,
+    /// Armed by [`MemDevice::fail_read_of`] (third debt round, item 3): the
+    /// sector, and how many more reads covering it succeed before one fails.
+    fail_read_of: Arc<Mutex<Option<(u64, u64)>>>,
 }
 
 impl MemDevice {
@@ -93,6 +98,35 @@ impl MemDevice {
         *self.reads_fail.lock().unwrap() = true;
     }
 
+    /// Third debt round, item 3: the `nth` read call from now on (1-indexed)
+    /// whose range covers `sector` fails, once; every other read succeeds,
+    /// and so does every read after that one. This puts an I/O error at a
+    /// chosen point *inside* one writer call — the second read of one
+    /// directory block, say — where `fail_reads` would already fail the
+    /// call's first read, and a reopen afterwards still reads the device.
+    pub(crate) fn fail_read_of(&self, sector: u64, nth: u64) {
+        assert!(nth >= 1, "nth is 1-indexed");
+        *self.fail_read_of.lock().unwrap() = Some((sector, nth));
+    }
+
+    /// Whether this read call is the one [`MemDevice::fail_read_of`] armed;
+    /// disarms it when it is.
+    fn read_armed_to_fail(&self, block: u64, count: u64) -> bool {
+        let mut armed = self.fail_read_of.lock().unwrap();
+        let Some((sector, left)) = *armed else {
+            return false;
+        };
+        if !(block..block + count).contains(&sector) {
+            return false;
+        }
+        if left > 1 {
+            *armed = Some((sector, left - 1));
+            return false;
+        }
+        *armed = None;
+        true
+    }
+
     /// `len` bytes from `sector` on; a sector never written reads as zeros.
     pub(crate) fn read(&self, sector: u64, len: usize) -> Vec<u8> {
         let sectors = self.sectors.lock().unwrap();
@@ -122,6 +156,11 @@ impl libpfs3::io::BlockDevice for MemDevice {
                 "device unreadable (MemDevice::fail_reads, test)",
             )));
         }
+        if self.read_armed_to_fail(block, (buf.len() as u64).div_ceil(512)) {
+            return Err(Error::Io(std::io::Error::other(
+                "sector unreadable once (MemDevice::fail_read_of, test)",
+            )));
+        }
         buf.copy_from_slice(&self.read(block, buf.len()));
         Ok(())
     }
@@ -130,6 +169,11 @@ impl libpfs3::io::BlockDevice for MemDevice {
         if *self.reads_fail.lock().unwrap() {
             return Err(Error::Io(std::io::Error::other(
                 "device unreadable (MemDevice::fail_reads, test)",
+            )));
+        }
+        if self.read_armed_to_fail(block, u64::from(count)) {
+            return Err(Error::Io(std::io::Error::other(
+                "sector unreadable once (MemDevice::fail_read_of, test)",
             )));
         }
         let len = count as usize * 512;

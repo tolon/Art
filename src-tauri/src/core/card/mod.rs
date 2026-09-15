@@ -49,6 +49,19 @@ pub struct AmigaArea {
     /// How long the MBR says it is. Zero for a plain HDF, where the answer is
     /// "the rest of the file".
     pub length_bytes: u64,
+    /// The slot this area's own `0x76` entry holds in the card's MBR, **from
+    /// one** — the number `hst-imager`, a card's own documentation and the
+    /// user's notes all use. `None` for a plain HDF, which has no partition
+    /// table.
+    ///
+    /// **Carried here rather than re-derived by position (ART-321).**
+    /// `read_card` skips an area it cannot read, so `card.areas` can be
+    /// shorter than the MBR's own list of `0x76` entries — deriving a slot
+    /// from an area's *position* in `card.areas` names the slot of the area
+    /// before it once an earlier one has been skipped. Recording each area's
+    /// own slot as it is read makes that mistake impossible to make again by
+    /// construction.
+    pub mbr_slot: Option<usize>,
     pub rdb: ParsedRdb,
 }
 
@@ -177,6 +190,19 @@ fn read_card_from<R: std::io::Read + std::io::Seek>(
         // A plain HDF is one disk and it is the whole file.
         None => vec![total_bytes],
     };
+    // Each `bases` entry is one `0x76` MBR entry, in table order (ART-321):
+    // recording each area's own slot here, alongside its base, is what lets
+    // the loop below carry the right slot even when an earlier area is
+    // skipped for being unreadable.
+    let slots: Vec<Option<usize>> = match &mbr {
+        Some(mbr) => mbr
+            .amiga_areas()
+            .iter()
+            .map(|p| Some(p.slot_number()))
+            .collect(),
+        // A plain HDF has no partition table and so no slot.
+        None => vec![None],
+    };
 
     let mut areas = Vec::new();
     for (index, base) in bases.iter().enumerate() {
@@ -202,6 +228,7 @@ fn read_card_from<R: std::io::Read + std::io::Seek>(
         areas.push(AmigaArea {
             offset_bytes: *base,
             length_bytes: lengths.get(index).copied().unwrap_or(0),
+            mbr_slot: slots.get(index).copied().flatten(),
             rdb,
         });
     }

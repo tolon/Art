@@ -955,6 +955,606 @@ fn production_after() -> u32 {
         files
     }
 
+    /// Every `.rs` file under `src/`, recursively — wider than [`core_files`]
+    /// (`core/` only) because [`only_clock_and_local_time_name_amiga_from_wall_or_system_now_unix`]
+    /// must also see `tools/local_time.rs`, the one legitimate caller outside
+    /// `core/clock.rs` itself.
+    fn all_src_files() -> Vec<PathBuf> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", dir.display()))
+            {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    files.push(path);
+                }
+            }
+        }
+        files
+    }
+
+    /// ART-317's third debt round, survivor (b) (docs/ISSUES.md). Both
+    /// `amiga_from_wall` and `system_now_unix` are `pub`, and `clock.rs` is on
+    /// [`core_makes_amiga_dates_only_through_the_clock`]'s own allow-list — so
+    /// nothing stopped a product site from calling
+    /// `amiga_from_wall(system_now_unix())` directly, which makes a UTC Amiga
+    /// date with no offset at all, bypassing `AmigaClock::offset_at`
+    /// entirely, invisibly to every guard ART-317 shipped. Only
+    /// `core/clock.rs` (where both are declared, and where
+    /// `AmigaClock::amiga_from_unix`'s default body legitimately calls
+    /// `amiga_from_wall`) and `tools/local_time.rs` (the product clock,
+    /// which calls `system_now_unix()` inside `now_unix()`) may name either
+    /// outside a test. This walks all of `src/`, not just `core/`, since
+    /// `tools/local_time.rs` must be checked too.
+    ///
+    /// Mutate by adding a line naming `amiga_from_wall` or `system_now_unix`
+    /// to a real product file outside the two allowed ones, above its
+    /// `#[cfg(test)]`; this fails.
+    #[test]
+    fn only_clock_and_local_time_name_amiga_from_wall_or_system_now_unix() {
+        let needles = [
+            concat!("amiga_from", "_wall"),
+            concat!("system_now", "_unix"),
+        ];
+        let allowed = ["core/clock.rs", "tools/local_time.rs"];
+        let mut offenders = Vec::new();
+        for path in all_src_files() {
+            let shown = path.display().to_string().replace('\\', "/");
+            if allowed.iter().any(|ok| shown.ends_with(ok)) {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&path.display().to_string(), &lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                if needles.iter().any(|needle| line.contains(needle)) {
+                    offenders.push(format!("{shown}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "amiga_from_wall or system_now_unix named outside core::clock and \
+             tools::local_time — a date made this way carries no UTC offset at all \
+             (ART-317, third debt round survivor (b)):\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// `line` with every run of whitespace dropped, except one space kept
+    /// between two identifier characters — `libpfs3 :: writer :: { Writer as
+    /// W }` becomes `libpfs3::writer::{Writer as W}` — so a `use` tree and a
+    /// call read the same however they are spaced.
+    fn compact_rust(line: &str) -> String {
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        let mut out = String::new();
+        let mut pending_space = false;
+        for c in line.chars() {
+            if c.is_whitespace() {
+                pending_space = true;
+                continue;
+            }
+            if pending_space && out.chars().last().is_some_and(ident) && ident(c) {
+                out.push(' ');
+            }
+            pending_space = false;
+            out.push(c);
+        }
+        out
+    }
+
+    /// Every leaf of a compacted `use` tree as `(full path, the name it
+    /// binds)`: `libpfs3::{writer::{self as w, Writer}}` gives
+    /// `("libpfs3::writer", "w")` and `("libpfs3::writer::Writer", "Writer")`;
+    /// a glob binds `*`.
+    fn use_tree_leaves(prefix: &str, tree: &str, out: &mut Vec<(String, String)>) {
+        if let Some(open) = tree.find('{') {
+            let base = format!("{prefix}{}", &tree[..open]);
+            let close = tree.rfind('}').unwrap_or(tree.len()).max(open + 1);
+            let inner = &tree[open + 1..close];
+            let (mut depth, mut start) = (0usize, 0usize);
+            for (i, c) in inner.char_indices() {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth = depth.saturating_sub(1),
+                    ',' if depth == 0 => {
+                        use_tree_leaves(&base, &inner[start..i], out);
+                        start = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            use_tree_leaves(&base, &inner[start..], out);
+            return;
+        }
+        if tree.is_empty() {
+            return;
+        }
+        let (path, alias) = match tree.split_once(" as ") {
+            Some((path, alias)) => (path, Some(alias)),
+            None => (tree, None),
+        };
+        let mut full = format!("{prefix}{path}");
+        if let Some(parent) = full.strip_suffix("::self") {
+            full = parent.to_string();
+        }
+        let last = full.rsplit("::").next().unwrap_or(&full).to_string();
+        out.push((full, alias.map(str::to_string).unwrap_or(last)));
+    }
+
+    /// Final review fix wave, I2. The lines of `text` outside a test and a
+    /// comment that call libpfs3's `Writer::open`, **however `Writer` is
+    /// named there**: the full path; a `use` of `libpfs3`, of
+    /// `libpfs3::writer` or of `libpfs3::writer::Writer` itself — plain,
+    /// `as`-aliased, grouped in braces or a glob, `pub` or not, wrapped
+    /// across lines; and a `type` alias of any of those. A `use` or `type`
+    /// inside a test region binds nothing here, since a call there is
+    /// skipped anyway. Returned as `(0-based line, trimmed line)`.
+    ///
+    /// Scoped re-review item 2: also a glob of either (pinned in the fixture
+    /// now, not only resolved); the qualified-path form
+    /// `<libpfs3::writer::Writer>::open(` and `<Alias>::open(`; and an
+    /// `extern crate libpfs3 as x;` alias, used as a path or as the root of a
+    /// `use`. It reads code only: a block comment (nested or not), a string,
+    /// a raw string or a char literal is blanked first by
+    /// `strip_string_literals`, which keeps every newline where it was, so
+    /// neither holds a call nor binds a name.
+    ///
+    /// Follow-up 4 (2026-09-15): a `use` tree whose root is a brace group —
+    /// `use {libpfs3::writer::Writer};`, nested groups, and through an
+    /// `extern crate` alias — is resolved leaf by leaf (pinned in the
+    /// fixture).
+    ///
+    /// **What it does not see:** a `Writer` reached through a re-export in
+    /// another module (`pub use libpfs3::writer::Writer;` in one file, then
+    /// `crate::that::Writer::open(` in another), or through an `extern crate`
+    /// alias made in another file; a call built by a macro; a call split
+    /// across lines inside `Writer::open(`; a trait-qualified
+    /// `<libpfs3::writer::Writer as T>::open(`, which only a trait of ART's
+    /// own with an `open` method could make compile; and a `use` that does
+    /// not start its line (`let x = 1; use libpfs3::writer::Writer;`) or whose
+    /// keyword stands on a line of its own — both seen unflagged by a
+    /// temporary fixture on 2026-09-15 (follow-up 4, E4).
+    fn libpfs3_writer_open_sites(label: &str, text: &str) -> Vec<(usize, String)> {
+        let lines: Vec<&str> = text.lines().collect();
+        let regions = test_regions(label, &lines);
+        let stripped = strip_string_literals(text);
+        let code: Vec<&str> = stripped.lines().collect();
+        assert_eq!(
+            code.len(),
+            lines.len(),
+            "{label}: stripping comments and strings moved a line"
+        );
+        let live = |n: usize| !is_test_line(&regions, n);
+        let root = concat!("lib", "pfs3");
+        let writer_mod = format!("{root}::writer");
+        let writer_type = format!("{writer_mod}::Writer");
+        let mut needles = vec![format!("{writer_type}::open(")];
+        // Paths that name the `Writer` type itself, for `type` aliases.
+        let mut type_names = vec![writer_type.clone()];
+        // `extern crate libpfs3 as x;` makes `x` another name for the crate.
+        let mut roots = vec![root.to_string()];
+        let extern_alias = format!("extern crate {root} as ");
+        for (n, line) in code.iter().enumerate() {
+            if !live(n) {
+                continue;
+            }
+            let compact = compact_rust(line);
+            let unpub = compact.strip_prefix("pub ").unwrap_or(&compact);
+            if let Some(alias) = unpub.strip_prefix(extern_alias.as_str()) {
+                let alias = alias.trim_end_matches(';');
+                if !alias.is_empty() && alias != "_" {
+                    needles.push(format!("{alias}::writer::Writer::open("));
+                    type_names.push(format!("{alias}::writer::Writer"));
+                    roots.push(alias.to_string());
+                }
+            }
+        }
+        let mut n = 0;
+        while n < code.len() {
+            let start = n;
+            n += 1;
+            if !live(start) {
+                continue;
+            }
+            let head = compact_rust(code[start]);
+            // Follow-up 4 (2026-09-15): `compact_rust` keeps no space before a
+            // `{` or a `::`, so `use {libpfs3::…}` reads `use{libpfs3::…}` and
+            // `use ::{…}` reads `use::{…}`; all three spellings start a `use`.
+            let Some(at) = ["use ", "use{", "use::"]
+                .iter()
+                .filter_map(|keyword| head.find(keyword))
+                .min()
+            else {
+                continue;
+            };
+            let before = &head[..at];
+            if !(before.is_empty() || before.starts_with("pub")) {
+                continue;
+            }
+            let mut stmt = head[at + 3..].trim_start().to_string();
+            while !stmt.contains(';') && n < code.len() {
+                stmt.push_str(&compact_rust(code[n]));
+                n += 1;
+            }
+            let stmt = stmt.trim_start_matches("::");
+            let stmt = stmt.split(';').next().unwrap_or("");
+            let mut leaves = Vec::new();
+            use_tree_leaves("", stmt, &mut leaves);
+            for (path, name) in leaves {
+                // Each leaf rooted at the crate or at an `extern crate` alias
+                // of it, and spelled from the crate's own name either way.
+                // Follow-up 4 (2026-09-15): per leaf, not per statement, so a
+                // tree whose root is a brace group — `use {libpfs3::…};`,
+                // nested or not — is resolved too. It used to require the
+                // statement itself to start with the crate's name.
+                let path = path.trim_start_matches("::");
+                let Some(path) = roots.iter().find_map(|r| {
+                    let rest = path.strip_prefix(r.as_str())?;
+                    (rest.is_empty() || rest.starts_with("::")).then(|| format!("{root}{rest}"))
+                }) else {
+                    continue;
+                };
+                if name == "_" {
+                    continue;
+                }
+                if path == writer_type {
+                    needles.push(format!("{name}::open("));
+                    type_names.push(name);
+                } else if path == writer_mod {
+                    needles.push(format!("{name}::Writer::open("));
+                    type_names.push(format!("{name}::Writer"));
+                } else if path == format!("{writer_mod}::*") {
+                    needles.push("Writer::open(".to_string());
+                    type_names.push("Writer".to_string());
+                } else if path == root {
+                    needles.push(format!("{name}::writer::Writer::open("));
+                    type_names.push(format!("{name}::writer::Writer"));
+                } else if path == format!("{root}::*") {
+                    needles.push("writer::Writer::open(".to_string());
+                    type_names.push("writer::Writer".to_string());
+                }
+            }
+        }
+        let mut aliases = Vec::new();
+        for (n, line) in code.iter().enumerate() {
+            if !live(n) {
+                continue;
+            }
+            let compact = compact_rust(line);
+            let unpub = compact.strip_prefix("pub ").unwrap_or(&compact);
+            let Some(rest) = unpub.strip_prefix("type ") else {
+                continue;
+            };
+            if let Some((alias, rhs)) = rest.split_once('=') {
+                let rhs = rhs.trim_end_matches(';').trim_start_matches("::");
+                if type_names.iter().any(|t| rhs == t) {
+                    aliases.push(alias.to_string());
+                }
+            }
+        }
+        // `<T>::open(` names the type as `T::open(` does.
+        for t in type_names.iter().chain(&aliases) {
+            needles.push(format!("<{t}>::open("));
+        }
+        needles.extend(aliases.iter().map(|alias| format!("{alias}::open(")));
+        let ident = |c: char| c.is_alphanumeric() || c == '_';
+        let mut sites = Vec::new();
+        for (n, line) in code.iter().enumerate() {
+            if !live(n) {
+                continue;
+            }
+            let compact = compact_rust(line).replace("<::", "<");
+            let hit = needles.iter().any(|needle| {
+                compact
+                    .match_indices(needle.as_str())
+                    .any(|(at, _)| !compact[..at].chars().last().is_some_and(ident))
+            });
+            if hit {
+                sites.push((n, lines[n].trim().to_string()));
+            }
+        }
+        sites
+    }
+
+    /// The fixture for [`libpfs3_writer_open_sites`]: every naming the guard
+    /// claims to see is flagged, and the controls — a different type's
+    /// `open`, a comment, a test, and a `Writer` that is not libpfs3's — are
+    /// not. Re-runnable, where the guard below was first proven only by
+    /// one-off injections.
+    #[test]
+    fn libpfs3_writer_open_sites_sees_every_naming_of_the_writer() {
+        let src = "\
+    use libpfs3::writer::Writer;
+    pub use libpfs3::writer::Writer as PfsWriter;
+    use libpfs3::{
+        volume::Volume,
+        writer::{self as w, Writer as Grouped},
+    };
+    use libpfs3 as pfs;
+    type Alias = libpfs3::writer::Writer;
+
+    fn product(v: Volume) {
+        let _ = Writer::open(v);
+        let _ = PfsWriter :: open(v);
+        let _ = w::Writer::open(v);
+        let _ = Grouped::open(v);
+        let _ = pfs::writer::Writer::open(v);
+        let _ = Alias::open(v);
+        let _ = libpfs3::writer::Writer::open(v);
+        let _ = VolumeWriter::open(v);
+        // Writer::open(v) in a comment
+    }
+
+    #[cfg(test)]
+    mod tests {
+        fn t(v: Volume) {
+            let _ = Writer::open(v);
+        }
+    }
+";
+        let flagged: Vec<String> = libpfs3_writer_open_sites("naming fixture", src)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect();
+        assert_eq!(
+            flagged,
+            [
+                "let _ = Writer::open(v);",
+                "let _ = PfsWriter :: open(v);",
+                "let _ = w::Writer::open(v);",
+                "let _ = Grouped::open(v);",
+                "let _ = pfs::writer::Writer::open(v);",
+                "let _ = Alias::open(v);",
+                "let _ = libpfs3::writer::Writer::open(v);",
+            ]
+        );
+        let unrelated = "\
+    use crate::core::volume::write::Writer;
+
+    fn product() {
+        let _ = Writer::open();
+    }
+";
+        assert!(libpfs3_writer_open_sites("unrelated fixture", unrelated).is_empty());
+
+        // Scoped re-review item 2: the glob forms, the qualified-path form,
+        // an `extern crate` alias, and a call that only looks like one because
+        // it sits in a block comment or a string. Each case is its own source.
+        let cases: [(&str, &str, &[&str]); 13] = [
+            // Follow-up 4 (2026-09-15): a `use` tree whose root is a brace
+            // group, plain, nested, and through an `extern crate` alias.
+            (
+                "a brace-rooted use",
+                "\
+    use {libpfs3::writer::Writer};
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &["let _ = Writer::open(v);"],
+            ),
+            (
+                "a nested brace-rooted use",
+                "\
+    use {{libpfs3::{writer::{Writer as W}}}, std::io};
+    fn f(v: V) {
+        let _ = W::open(v);
+    }
+",
+                &["let _ = W::open(v);"],
+            ),
+            (
+                "a brace-rooted use through an extern crate alias",
+                "\
+    extern crate libpfs3 as x;
+    pub use ::{x::{writer}};
+    fn f(v: V) {
+        let _ = writer::Writer::open(v);
+    }
+",
+                &["let _ = writer::Writer::open(v);"],
+            ),
+            (
+                "a glob of libpfs3::writer",
+                "\
+    use libpfs3::writer::*;
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &["let _ = Writer::open(v);"],
+            ),
+            (
+                "a glob of libpfs3",
+                "\
+    use libpfs3::*;
+    fn f(v: V) {
+        let _ = writer::Writer::open(v);
+    }
+",
+                &["let _ = writer::Writer::open(v);"],
+            ),
+            (
+                "a qualified path",
+                "\
+    fn f(v: V) {
+        let _ = <libpfs3::writer::Writer>::open(v);
+    }
+",
+                &["let _ = <libpfs3::writer::Writer>::open(v);"],
+            ),
+            (
+                "a qualified path through a use alias",
+                "\
+    use libpfs3::writer::Writer as W;
+    fn f(v: V) {
+        let _ = <W>::open(v);
+    }
+",
+                &["let _ = <W>::open(v);"],
+            ),
+            (
+                "an extern crate alias",
+                "\
+    extern crate libpfs3 as x;
+    fn f(v: V) {
+        let _ = x::writer::Writer::open(v);
+    }
+",
+                &["let _ = x::writer::Writer::open(v);"],
+            ),
+            (
+                "a use through an extern crate alias",
+                "\
+    extern crate libpfs3 as x;
+    use x::writer::Writer;
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &["let _ = Writer::open(v);"],
+            ),
+            (
+                "block comments",
+                "\
+    use libpfs3::writer::Writer;
+    fn f(v: V) {
+        /* let _ = Writer::open(v); */
+        /*
+         let _ = Writer::open(v);
+         /* nested */ let _ = Writer::open(v);
+        */
+    }
+",
+                &[],
+            ),
+            (
+                "string literals",
+                "\
+    use libpfs3::writer::Writer;
+    fn f(v: V) {
+        let _ = \"Writer::open(v)\";
+        let _ = r#\"Writer::open(v)\"#;
+    }
+",
+                &[],
+            ),
+            (
+                "a call after a string holding a comment opener",
+                "\
+    use libpfs3::writer::Writer;
+    fn f(v: V) {
+        let s = \"/*\"; let _ = Writer::open(v);
+    }
+",
+                &["let s = \"/*\"; let _ = Writer::open(v);"],
+            ),
+            (
+                "a use inside a block comment",
+                "\
+    /* use libpfs3::writer::Writer; */
+    fn f(v: V) {
+        let _ = Writer::open(v);
+    }
+",
+                &[],
+            ),
+        ];
+        let mut wrong = Vec::new();
+        for (what, src, expected) in cases {
+            let flagged: Vec<String> = libpfs3_writer_open_sites(what, src)
+                .into_iter()
+                .map(|(_, line)| line)
+                .collect();
+            if flagged != expected {
+                wrong.push(format!(
+                    "{what}: flagged {flagged:?}, expected {expected:?}"
+                ));
+            }
+        }
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// `(first, last)` 0-based lines of the top-level item whose opening line
+    /// contains `signature`, through its closing `}` at column 0.
+    fn top_level_item_lines(text: &str, signature: &str) -> Option<(usize, usize)> {
+        let lines: Vec<&str> = text.lines().collect();
+        let first = lines
+            .iter()
+            .position(|l| !l.starts_with(' ') && l.contains(signature))?;
+        let last = (first..lines.len()).find(|&n| lines[n].trim_end() == "}")?;
+        Some((first, last))
+    }
+
+    /// ART-317's third debt round, survivor (c) (docs/ISSUES.md). A libpfs3
+    /// `Writer` opened without calling `set_entry_date` falls back to
+    /// `current_amiga_datestamp` (`vendor/libpfs3/src/writer.rs`'s
+    /// `entry_datestamp`), which stamps UTC — the same defect ART-317 closed
+    /// everywhere else, reopened by any fresh `Writer::open` call outside the
+    /// one place that stamps it. `core::preload::native::open_pfs3_writer` is
+    /// that place: it opens the writer and calls `set_entry_date` with the
+    /// clock's own date before handing the writer back.
+    ///
+    /// **Final review fix wave, I2.** This walks all of `src/`, and a call is
+    /// found however `Writer` is named ([`libpfs3_writer_open_sites`] says
+    /// which namings it resolves and which it does not). The allow-list is
+    /// the one call inside `open_pfs3_writer`'s own body, not the file it
+    /// lives in, and that body must hold exactly one — so a second call beside
+    /// the helper fails, and so does renaming the helper. It used to look for
+    /// the fully qualified path only, in `core/` only, allowing all of
+    /// `native.rs` and a `core/card/sizing.rs` whose one call was already
+    /// inside `#[cfg(test)]`; `use libpfs3::writer::Writer;` followed by
+    /// `Writer::open(` passed it.
+    ///
+    /// Mutate by adding `use libpfs3::writer::Writer;` and a function calling
+    /// `Writer::open(vol)` above a product file's `#[cfg(test)]`, or the same
+    /// with an `as` alias, or a second call in `native.rs` outside the
+    /// helper; each fails.
+    #[test]
+    fn libpfs3_writer_open_is_named_only_by_the_pfs3_writer_helper() {
+        let mut offenders = Vec::new();
+        let mut helper_calls = 0;
+        for path in all_src_files() {
+            let shown = path.display().to_string().replace('\\', "/");
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let helper = if shown.ends_with("core/preload/native.rs") {
+                top_level_item_lines(&text, "fn open_pfs3_writer(")
+            } else {
+                None
+            };
+            for (n, line) in libpfs3_writer_open_sites(&shown, &text) {
+                if helper.is_some_and(|(first, last)| (first..=last).contains(&n)) {
+                    helper_calls += 1;
+                } else {
+                    offenders.push(format!("{shown}:{}: {line}", n + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "libpfs3's Writer::open named outside \
+             core::preload::native::open_pfs3_writer, which is the only place that stamps \
+             the clock's date on a fresh writer (ART-317, third debt round survivor (c)):\n{}",
+            offenders.join("\n")
+        );
+        assert_eq!(
+            helper_calls, 1,
+            "core::preload::native::open_pfs3_writer must hold exactly one libpfs3 \
+             Writer::open call — the allow-list is that call, not the file"
+        );
+    }
+
     /// ART-317, final review I1's survivor (a). Nothing stopped a
     /// `commands/` or `tools/` site from passing `&crate::core::clock::UtcClock`
     /// in place of `&crate::tools::local_time::LOCAL_TIME` — that makes a UTC
