@@ -28,6 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A damaged drawer on a PFS3 partition is reported as damaged, not as a missing file.** When an entry in a drawer
+  on the card was malformed, ART could not see anything listed after it: the first-boot report then said the card
+  had not booted, and the check after an install said a file was not found. Both now say which drawer is damaged,
+  where on the partition, and to check the partition with a PFS3 repair tool. Checked against drawers damaged on
+  purpose in ART's own tests, not against a card a real Amiga damaged.
 - **ART reads the size of a file on a PFS3 partition correctly when the Amiga stored more about the file** — a hard
   link, a rollover file, or owner, group or other protection bits. Until now such a file could be reported with the
   wrong size, or as too large to read, by the first-boot report and by the check after an install. Checked against
