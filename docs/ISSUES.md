@@ -26,23 +26,6 @@ pass — filed and closed together rather than sitting in Open in between.
 
 ## Open
 
-**ART-322** 🟡 **A PFS3 rename that changes only a name's case deletes the file and reports success** — *found
-2026-09-15 on `art-debt-3-0915` while closing ART-319's `rename_in` gap (third debt round, item 3); not fixed —
-outside that item's approved design, the owner's call*
-`src-tauri/vendor/libpfs3/src/writer.rs` (`rename_in_impl`) · `rename_in` looks for an existing destination with
-`name_eq_ci`, so renaming "File" to "FILE" in the same directory finds the source itself as "the destination" and
-deletes it (data blocks freed; to the deldir on a deldir volume), adds the new entry with the now-deleted file's
-anode, and then removes "the old entry" by the same case-insensitive name — which is the entry it just added. The
-call returns `Ok(())` and the directory holds neither name: the user is told the rename worked and the file is gone.
-**Measured, not read** — a throwaway controlled experiment (one variable: the new name; both arms; removed before
-commit), on the fixture `pfs3_mutator_fixture` builds: control `rename_in(root, "File", root, "Other")` →
-`Ok(())`, entries `["Other"]`, `read_file("Other")` the original bytes; case-only `rename_in(root, "File", root,
-"FILE")` → `Ok(())`, entries `[]`, `read_file("FILE")` `NotFound`. The same two arms on the writer at `277bea0`,
-before item 3's change, gave the identical result, so it predates the one-commit rename and was not introduced by
-it. **Blast radius today: none** — ART never renames on PFS3 (only tests call `rename_in`, checked 2026-09-15),
-which is why it is Medium, not Critical. A fix would treat a destination that *is* the source (same parent, same
-entry) as no destination at all, and needs its own test.
-
 **ART-062** 🔵 **A handful of Turkish strings have been read on screen; the other ~2200 keys have not** (2262 leaf keys as of 2026-09-14 — count them, the figures written into this entry have been overtaken repeatedly). **Mechanical part done 2026-09-14** on `art-debt-2-0914` — the one string this table's original rows could still name and reach without a backend was measured, found clipped, and fixed; **stays open**, see "What remains" below.
 `src/i18n/tr.json`, `src/i18n/en.json` · Every Turkish string landed this phase
 was verified by `pnpm test`'s key-parity check and by reading the JSON — never
@@ -114,6 +97,50 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-322** 🟡 ✅ **A PFS3 rename that changes only a name's case deleted the file and reported success — fixed by
+treating the destination as the source when it is one** — *found 2026-09-15 on `art-debt-3-0915` while closing
+ART-319's `rename_in` gap (third debt round, item 3); fixed 2026-09-15 on `art-debt-3-0915`, item 3b of the third
+debt round*
+`src-tauri/vendor/libpfs3/src/writer.rs` (`rename_in_impl`, new `rename_dir_entry_in_place`) · `rename_in` looked
+for an existing destination with `name_eq_ci`, so renaming "File" to "FILE" in the same directory found the source
+itself as "the destination" and deleted it (data blocks freed), added the new entry with the now-deleted file's
+anode, and removed "the old entry" by the same case-insensitive name — the entry it had just added. The call
+returned `Ok(())` and the directory held neither name. A rename to the identical name (the same case too) hit the
+identical path and was worse: delete, re-add, then remove the just-added entry — the file was gone either way.
+**Fixed** by checking, before a found destination is deleted, whether it is the very entry being renamed — the
+same parent anode and the same anode number, found by the same case-insensitive name compare that found the
+source. When it is: an identical name is a no-op success (`Ok(())`, nothing staged, nothing written — no claim is
+made about pfs3aio's own ending for this exact sub-case, see below); otherwise the new
+`rename_dir_entry_in_place` rewrites only the entry's name bytes in the directory block, leaving its anode, size,
+protection, dates and comment untouched — `name_eq_ci` is an ASCII-only case fold, which cannot change a name's
+byte length, checked defensively (`Error::Corrupt`) rather than assumed. A same-directory destination that differs
+only in case from a *different* entry (a different anode) is unaffected and is still deleted and replaced, as
+before ART-319's disclosed gap. **Read, not measured this time:** pfs3aio's own `RenameAndMove`
+(`tonioni/pfs3aio` `211f7f0`, `directory.c:2064-2076,2130`) confirms the direction — `FindObject` on the
+destination name only refuses `ERROR_OBJECT_EXISTS` when the found entry's `direntry` pointer differs from the
+source's ("%9.1 the same name IS allowed (rename 'hello' to 'Hello')"), and when it is the same entry falls
+through to `ChangeDirEntry`, which moves it (copying its header, name, comment and extra fields into a rebuilt
+direntry) rather than deleting and recreating it — but was not traced past `ChangeDirEntry` for the
+byte-identical-name sub-case, so ART's no-op-with-no-write ending there is ART's own choice. **Tests**
+(`src-tauri/src/core/preload/native.rs`):
+`a_pfs3_case_only_rename_keeps_the_file_its_content_and_its_anode_and_lists_it_under_the_new_case`,
+`a_pfs3_rename_to_the_identical_name_is_a_no_op_success` and (a guard, already green before the fix)
+`a_pfs3_rename_over_a_different_entry_whose_name_differs_only_in_case_still_replaces_it`. **Red first**, on the
+unchanged writer: `test result: FAILED. 26 passed; 2 failed` —
+`assertion `left == right` failed: a case-only rename must leave exactly one entry, not the deleted-and-recreated
+(or deleted-and-gone) result: [...]  left: 0  right: 1` and `assertion `left == right` failed: a rename to the
+identical name wrote to the device  left: 72  right: 65`. **Green after the fix:** `test result: ok. 28 passed; 0
+failed`. **Mutation:** `writer.rs` backed up to `D:\Projeler\Amiga\scratch-0913\writer.rs.art322-backup` and
+grep-confirmed (5 occurrences of "ART-322"); the same-entry condition was disabled
+(`if false && dst_parent == src_parent && dst_entry.anode == entry.anode`), which reproduced both red lines
+exactly (the third, guard test, stayed green — it does not reach this branch); restored with `shutil.copyfile`,
+grep-confirmed no `MUTATION` marker left, green again (28 passed). `cargo fmt --check`, `cargo clippy --all-targets
+-- -D warnings` and `cargo deny check` clean; `cargo test --lib` (once): see STATUS for the count and timing;
+`scripts/control-byte-sweep.py` and `scripts/pfs3-oracle-check.py`
+(`ART_PFS3_DRIVER=E:\amiga\Amigatolon\hstimager\pfs3aio`) both clean. libpfs3 `0.1.3+art.6` → `0.1.3+art.7`. ART
+calls `rename_in` from no product code today (only tests), so nothing user-visible changed; CHANGELOG is not
+touched.
 
 **ART-321** 🔵 ✅ **`mbr_slot_of` could name the wrong MBR slot when an earlier Amiga area is unreadable — fixed by carrying each area's own slot** — *found 2026-09-14 by the final whole-branch review of `art-debt-2-0914` (`.superpowers/sdd/2026-09-14-art-117-rdb-embed/final-review.md`, M12), by reading; fixed 2026-09-15 on `art-debt-3-0915`, item 1 of the third debt round*
 `src-tauri/src/core/preload/mod.rs::mbr_slot_of(card, area_index)` indexed `mbr.amiga_areas()` — every `0x76` MBR
