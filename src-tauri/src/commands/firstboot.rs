@@ -70,6 +70,11 @@ pub fn firstboot_write(tree: String, oplog: State<'_, JsonlOperationLog>) -> App
         &result,
         |record, done: &Written| {
             let record = record.detail("Files written", done.files.join(", "));
+            let record = if done.removed.is_empty() {
+                record
+            } else {
+                record.detail("Files removed", done.removed.join(", "))
+            };
             match &done.user_startup_backup {
                 Some(backup) => record.detail("User-Startup backup", backup.display().to_string()),
                 None => record,
