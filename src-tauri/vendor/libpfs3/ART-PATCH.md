@@ -1,4 +1,4 @@
-# `libpfs3` 0.1.3+art.8 — ART's vendored copy
+# `libpfs3` 0.1.3+art.9 — ART's vendored copy
 
 This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART for
 [ART-310](../../../docs/ISSUES.md). ART's build uses it through `[patch.crates-io]` in
@@ -9,8 +9,8 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 | Original | `https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`, SHA-256 `02f457ef99a09ddebf56e454c6a25dc3a6860a602c878489f132a4ca3eed4317` |
 | Upstream source | `metaneutrons/pfs3` commit `33e9ff6ba8462cc4e434dfb6e2783d91b7dd5b14`, `crates/libpfs3` (the crate's `.cargo_vcs_info.json`) |
 | Licence | LGPL-3.0-or-later. `LICENSE` is upstream's own file at that commit, unchanged; the full LGPL-3.0 text is `COPYING.LESSER`; the GPL-3.0 text it builds on is ART's `LICENSE` |
-| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so; 2026-09-14, src/format.rs and src/writer.rs for ART-317; 2026-09-14, src/writer.rs, src/error.rs and src/volume.rs for ART-319; 2026-09-15, src/writer.rs for ART-319's disclosed gaps; 2026-09-15, src/writer.rs for ART-322; 2026-09-15, src/writer.rs for the third debt round's final review fix wave |
-| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.8`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
+| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so; 2026-09-14, src/format.rs and src/writer.rs for ART-317; 2026-09-14, src/writer.rs, src/error.rs and src/volume.rs for ART-319; 2026-09-15, src/writer.rs for ART-319's disclosed gaps; 2026-09-15, src/writer.rs for ART-322; 2026-09-15, src/writer.rs for the third debt round's final review fix wave; 2026-09-15, src/writer.rs and src/error.rs for ART-323 |
+| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.9`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
 | Not carried | `tests/`: `GPL-3.0-only` headers, 9.3 MB of fixtures, and a dev-dependency (`sevenz-rust` 0.6) with RUSTSEC-2026-0245 and RUSTSEC-2026-0246. ART's own tests prove the patch (`src-tauri/src/core/preload/native.rs`) |
 
 ## Changes against 0.1.3
@@ -326,6 +326,41 @@ M3, M5; report `fix-wave-report.md` beside it):
     - ART's tests (`src-tauri/src/core/preload/native.rs`) and their mutations are in `docs/ISSUES.md` under ART-322
       and ART-319.
 
+**2026-09-15, ART-323** ([ART-323](../../../docs/ISSUES.md); report
+`.superpowers/sdd/2026-09-15-debt-3-round/art323-report.md`):
+
+24. **Deleting a hard link removes only its entry; a link pfs3aio made, an object a link still names, and
+    `create_hardlink` are refused by name (`src/writer.rs`, `src/error.rs`).** pfs3aio read at `tonioni/pfs3aio`
+    `211f7f0`, not run.
+    - *The defect.* 0.1.3's `create_hardlink` put the linked object's anode in the link's own `ST_LINKFILE` entry,
+      and `delete_in_no_commit` took every entry that is not a directory for a file: on a link it freed that anode's
+      data blocks and cleared its anodes. The object stayed listed, read back empty, and its blocks were free.
+    - *pfs3aio's link.* `CreateLink` gives the link an anode of its own, a link node with clustersize = the object's
+      directory, blocknr = the link's directory and next = the next node. It puts the object's anode in the link's
+      `link` extra field, and heads the object's own `link` field with the chain of nodes
+      (`directory.c:2672-2748`). `DeleteObject` sends a link to `DeleteLink` (`directory.c:1778-1783`), which
+      removes the entry, takes the node out of the chain (the object's entry rewritten when the node is the head,
+      the previous node's `next` otherwise) and frees the node, never the object (`directory.c:3835-3895`). An
+      object with links is not freed either: `RemapLinks` promotes the first link to be the object
+      (`directory.c:1795-1799,3903-3965`).
+    - *What the writer does now.* **A link in 0.1.3's shape** (no `link` field) loses its entry and nothing else.
+      **A link pfs3aio made** (`link` field set) is refused, `Error::Pfs3aioLinkNotDeleted`: the chain update needs
+      an entry rewrite of a different size and a chain walk this writer has no test oracle for. **An object that
+      links name** is refused, `Error::HasHardLinks`, naming the link found. It is found either by a link entry
+      anywhere on the volume, in 0.1.3's shape by its anode and in pfs3aio's by its `link` field, or by the object's
+      own `link` field. That last case names a chain even when no link entry is found; pfs3aio would discard such
+      nodes (`directory.c:3922-3934`). **`create_hardlink`** is refused, `Error::HardLinkNotWritten`, before
+      anything is read or written. Every refusal comes before anything is staged and goes through `guarded`.
+    - *The extra-field layout.* The writer reads a `link` field as pfs3aio's `GetExtraFields` does
+      (`directory.c:3719-3731`): the flags word is the entry's last two bytes, with one bit for each 16-bit word of
+      `struct extrafields` (`blocks.h:342-353`), and the words set lie before it, read backwards. `AddExtraFields`
+      writes them that way (`directory.c:3764-3800`), and hst-amiga reads them the same way
+      (`DirEntryReader.ReadExtraFields`, `henrikstengaard/hst-amiga` `6b45584`). Extra fields exist only on a
+      `MODE_DIR_EXTENSION` volume. This crate's own `DirEntry::parse_extrafields` reads the flags word first with one
+      bit per field, which neither source does. Not changed here, filed as [ART-325](../../../docs/ISSUES.md).
+    - *The cost.* A delete of anything that is not a link reads every directory on the volume.
+    - ART's tests and their mutations are in `docs/ISSUES.md` under ART-323.
+
 ## Re-vendoring
 
 After replacing this directory, run `cargo update -p libpfs3 --precise <version>` in `src-tauri`: Cargo
@@ -347,22 +382,24 @@ carries the format change only; the writer change (ART-312) is not prepared for 
 
 ```diff
 diff --git a/src/error.rs b/src/error.rs
-index 48823c7..f0d728d 100644
+index 48823c7..ec84d84 100644
 --- a/src/error.rs
 +++ b/src/error.rs
-@@ -1,4 +1,11 @@
+@@ -1,4 +1,13 @@
  //! Error types for libpfs3.
 +//!
 +//! Modified by ART on 2026-09-14 (ART-314): the `NameTooLong` variant, for a
 +//! name the volume cannot store and find again; (ART-319) the `CommitFailed`
 +//! variant, for a writer that has locked itself; on 2026-09-14, the final
 +//! review (M1): `CommitFailed`'s sentence covers both causes that reach it,
-+//! not only a failed commit. `ART-PATCH.md` in this crate's root says what
-+//! and why.
++//! not only a failed commit.
++//! Modified by ART on 2026-09-15 (ART-323): the `HardLinkNotWritten`,
++//! `Pfs3aioLinkNotDeleted` and `HasHardLinks` variants, the writer's refusals
++//! around hard links. `ART-PATCH.md` in this crate's root says what and why.
  
  /// Result type alias using the PFS3 [`Error`].
  pub type Result<T> = std::result::Result<T, Error>;
-@@ -30,9 +37,40 @@ pub enum Error {
+@@ -30,9 +39,69 @@ pub enum Error {
      #[error("already exists: {0}")]
      AlreadyExists(String),
  
@@ -377,6 +414,35 @@ index 48823c7..f0d728d 100644
      #[error("disk full: {0}")]
      DiskFull(String),
  
++    /// ART-323: `Writer::create_hardlink` is refused. 0.1.3 wrote the
++    /// linked object's anode into the link's own entry; pfs3aio's link has a
++    /// link node of its own and sits in the object's chain of links
++    /// (`CreateLink`, `directory.c:2672-2748`, `tonioni/pfs3aio` `211f7f0`).
++    #[error(
++        "hard link '{0}' was not created: this writer cannot write pfs3aio's hard-link format \
++         (a link anode and the linked object's chain of links)"
++    )]
++    HardLinkNotWritten(String),
++
++    /// ART-323: deleting a hard link pfs3aio made means taking its node out
++    /// of the object's chain of links (`DeleteLink`, `directory.c:3835-3895`),
++    /// which the writer does not do.
++    #[error(
++        "'{0}' is a hard link pfs3aio made, and this writer cannot take it out of its object's \
++         chain of links, so it did not delete it — delete it on the Amiga"
++    )]
++    Pfs3aioLinkNotDeleted(String),
++
++    /// ART-323: an object that hard links still name is not deleted. pfs3aio
++    /// promotes a link to be the object instead (`RemapLinks`,
++    /// `directory.c:3903-3965`); the writer does not. `links` names the link
++    /// found, or the object's own chain of links when no link entry was.
++    #[error(
++        "'{name}' has hard links ({links}): this writer cannot hand it over to one of them as \
++         pfs3aio does, so it did not delete it — delete the links first"
++    )]
++    HasHardLinks { name: String, links: String },
++
 +    /// ART-319: the writer has locked itself, and every later mutating call
 +    /// refuses immediately with this, before touching anything. Two causes
 +    /// reach it: a commit itself failed part-way through — the rootblock
@@ -806,10 +872,10 @@ index 757c2f9..2f3f6f3 100644
                      result.push(entry);
                  }
 diff --git a/src/writer.rs b/src/writer.rs
-index fc692d6..3bfab58 100644
+index fc692d6..c688556 100644
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,32 @@
+@@ -6,6 +6,35 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
@@ -838,11 +904,14 @@ index fc692d6..3bfab58 100644
 +//! link found as the destination is refused (I1); the in-place rename writes
 +//! Latin-1 (M1); copy-on-write refuses a bitmap that offers the old file's
 +//! own block (M2);
++//! Modified by ART on 2026-09-15 (ART-323): deleting a hard link removes only
++//! its entry, a link pfs3aio made is refused, an object a link still names is
++//! refused, and `create_hardlink` is refused;
 +//! `ART-PATCH.md` in this crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -28,8 +54,41 @@ pub struct Writer {
+@@ -28,8 +57,41 @@ pub struct Writer {
      // Mutable state
      res_bitmap: Vec<u32>,
      data_bm: Vec<(u32, Vec<u32>)>, // (blk_num, longs)
@@ -885,7 +954,7 @@ index fc692d6..3bfab58 100644
  }
  
  impl Writer {
-@@ -37,6 +96,19 @@ impl Writer {
+@@ -37,6 +99,19 @@ impl Writer {
      pub fn open(vol: Volume) -> Result<Self> {
          let rb = &vol.rootblock;
          let rbs = rb.reserved_blksize as u32;
@@ -905,7 +974,7 @@ index fc692d6..3bfab58 100644
          let rescluster = rbs / vol.block_size();
          let firstreserved = rb.firstreserved;
          let numreserved = (rb.lastreserved - firstreserved + 1) / rescluster;
-@@ -57,6 +129,11 @@ impl Writer {
+@@ -57,6 +132,11 @@ impl Writer {
              res_bitmap: Vec::new(),
              data_bm: Vec::new(),
              pending_writes: Vec::new(),
@@ -917,7 +986,7 @@ index fc692d6..3bfab58 100644
              vol,
          };
          w.load_reserved_bitmap()?;
-@@ -64,38 +141,163 @@ impl Writer {
+@@ -64,38 +144,163 @@ impl Writer {
          Ok(w)
      }
  
@@ -1082,7 +1151,7 @@ index fc692d6..3bfab58 100644
          let name_bytes = name.as_bytes();
          let len = name_bytes.len().min(30);
          self.vol.rootblock.diskname = name[..len].to_string();
-@@ -114,16 +316,32 @@ impl Writer {
+@@ -114,16 +319,32 @@ impl Writer {
          cluster[RB_OFF_DISKNAME + 1..RB_OFF_DISKNAME + 1 + len].copy_from_slice(&name_bytes[..len]);
          let ds = self.next_datestamp();
          put_u32(&mut cluster, RB_OFF_DATESTAMP, ds);
@@ -1118,7 +1187,7 @@ index fc692d6..3bfab58 100644
          // Check if file already exists — if so, overwrite it
          if let Ok((_, entry_data, pos)) = self.find_dir_entry(parent_anode, name) {
              let entry_type = entry_data[pos + 1] as i8;
-@@ -144,6 +362,7 @@ impl Writer {
+@@ -144,6 +365,7 @@ impl Writer {
          name: &str,
          data: &[u8],
      ) -> Result<()> {
@@ -1126,7 +1195,7 @@ index fc692d6..3bfab58 100644
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
  
-@@ -165,6 +384,11 @@ impl Writer {
+@@ -165,6 +387,11 @@ impl Writer {
  
      /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
      pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -1138,7 +1207,7 @@ index fc692d6..3bfab58 100644
          let dir_blk = self.alloc_reserved_block()?;
          let anodenr = self.alloc_anode(1, dir_blk, 0)?;
  
-@@ -181,6 +405,10 @@ impl Writer {
+@@ -181,6 +408,10 @@ impl Writer {
  
      /// Create a softlink in a parent directory.
      pub fn create_softlink(&mut self, path: &str, target: &str) -> Result<()> {
@@ -1149,7 +1218,7 @@ index fc692d6..3bfab58 100644
          let (parent_anode, name) = self.split_path(path)?;
          self.create_softlink_in(parent_anode, &name, target)
      }
-@@ -192,6 +420,16 @@ impl Writer {
+@@ -192,6 +423,16 @@ impl Writer {
          name: &str,
          target: &str,
      ) -> Result<()> {
@@ -1166,18 +1235,30 @@ index fc692d6..3bfab58 100644
          let data = target.as_bytes();
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
-@@ -220,13 +458,22 @@ impl Writer {
+@@ -219,14 +460,31 @@ impl Writer {
+     }
  
      /// Create a hardlink in a parent directory.
++    ///
++    /// ART (2026-09-15, ART-323): **refused**, with
++    /// `Error::HardLinkNotWritten`, before anything is read or written.
++    /// 0.1.3 added an `ST_LINKFILE` entry holding the linked object's anode.
++    /// pfs3aio's `CreateLink` gives the link an anode of its own — a link
++    /// node whose clustersize is the object's directory and blocknr the
++    /// link's — puts the object's anode in the link's `link` extra field, and
++    /// adds the node to the chain of links headed by the object's own `link`
++    /// field (`directory.c:2672-2748`, `tonioni/pfs3aio` `211f7f0`). This
++    /// writer does not write that, and a link that is not pfs3aio's is not a
++    /// link under pfs3aio.
      pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
+-        let (parent_anode, name) = self.split_path(path)?;
+-        self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
+-        self.update_rootblock()
 +        self.guarded(|w| w.create_hardlink_impl(path, target_anode))
 +    }
 +
-+    fn create_hardlink_impl(&mut self, path: &str, target_anode: u32) -> Result<()> {
-         let (parent_anode, name) = self.split_path(path)?;
-+        self.check_name_len(&name)?;
-         self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
-         self.update_rootblock()
++    fn create_hardlink_impl(&mut self, path: &str, _target_anode: u32) -> Result<()> {
++        Err(Error::HardLinkNotWritten(path.to_string()))
      }
  
      /// Undelete a file from the deldir by index. Writes it to `dest_path`.
@@ -1189,7 +1270,7 @@ index fc692d6..3bfab58 100644
          // Read the deldir entry
          let rext = self
              .vol
-@@ -256,7 +503,9 @@ impl Writer {
+@@ -256,7 +514,9 @@ impl Writer {
          let blk = deldirblocks[block_idx];
          let data = self.read_reserved_raw(blk)?;
          let off = DELDIR_HEADER_SIZE + slot_idx * DELDIR_ENTRY_SIZE;
@@ -1200,7 +1281,7 @@ index fc692d6..3bfab58 100644
              .ok_or_else(|| Error::NotFound("empty deldir slot".into()))?;
  
          // Check destination doesn't already exist
-@@ -266,6 +515,23 @@ impl Writer {
+@@ -266,6 +526,23 @@ impl Writer {
  
          let old_anode = entry.anode;
  
@@ -1224,7 +1305,7 @@ index fc692d6..3bfab58 100644
          // Read file data via the anode chain (still intact)
          let file_data = self.vol.read_file_data(old_anode, entry.file_size())?;
  
-@@ -290,139 +556,131 @@ impl Writer {
+@@ -290,139 +567,131 @@ impl Writer {
      /// Force-remove a directory entry without touching anodes or data blocks.
      /// Used by check --repair for entries with broken anode chains.
      pub fn force_remove_entry(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -1446,7 +1527,7 @@ index fc692d6..3bfab58 100644
      }
  
      /// Append a sub-chain to the tail of an existing anode chain.
-@@ -464,7 +722,18 @@ impl Writer {
+@@ -464,7 +733,18 @@ impl Writer {
  
      /// Clear a single anode slot (set all 3 fields to 0).
      fn clear_single_anode(&mut self, anodenr: u32) -> Result<()> {
@@ -1466,7 +1547,7 @@ index fc692d6..3bfab58 100644
      }
  
      /// Find a directory entry by name, returning (block_number, block_data, entry_offset).
-@@ -565,7 +834,7 @@ impl Writer {
+@@ -565,7 +845,7 @@ impl Writer {
          }
  
          // Update datestamp
@@ -1475,7 +1556,7 @@ index fc692d6..3bfab58 100644
          put_u16(&mut data, pos + 10, cday);
          put_u16(&mut data, pos + 12, cmin);
          put_u16(&mut data, pos + 14, ctick);
-@@ -580,6 +849,15 @@ impl Writer {
+@@ -580,6 +860,15 @@ impl Writer {
          dir_anode: u32,
          name: &str,
          protection: u8,
@@ -1491,7 +1572,7 @@ index fc692d6..3bfab58 100644
      ) -> Result<()> {
          let (blk, mut data, pos) = self.find_dir_entry(dir_anode, name)?;
          data[pos + 16] = protection;
-@@ -588,6 +866,34 @@ impl Writer {
+@@ -588,6 +877,34 @@ impl Writer {
          self.update_rootblock()
      }
  
@@ -1526,7 +1607,7 @@ index fc692d6..3bfab58 100644
      pub fn rename_in(
          &mut self,
          src_parent: u32,
-@@ -595,6 +901,17 @@ impl Writer {
+@@ -595,6 +912,17 @@ impl Writer {
          dst_parent: u32,
          dst_name: &str,
      ) -> Result<()> {
@@ -1544,7 +1625,7 @@ index fc692d6..3bfab58 100644
          let entries = self.vol.list_dir_by_anode(src_parent)?;
          let entry = entries
              .iter()
-@@ -602,13 +919,45 @@ impl Writer {
+@@ -602,13 +930,45 @@ impl Writer {
              .ok_or_else(|| Error::NotFound(src_name.to_string()))?
              .clone();
  
@@ -1594,7 +1675,7 @@ index fc692d6..3bfab58 100644
          }
  
          // Add entry in new location with new name
-@@ -625,8 +974,65 @@ impl Writer {
+@@ -625,8 +985,88 @@ impl Writer {
          self.update_rootblock()
      }
  
@@ -1644,6 +1725,29 @@ index fc692d6..3bfab58 100644
 +    }
 +
      /// Delete a file or empty directory by name in a parent directory.
++    ///
++    /// ART (2026-09-15, ART-323), hard links, before anything is staged:
++    /// - **A hard link in 0.1.3's shape** (`ST_LINKFILE`/`ST_LINKDIR`, no
++    ///   `link` extra field, the linked object's anode in its entry) loses its
++    ///   entry and nothing else. 0.1.3 freed the data blocks and anodes of the
++    ///   object the link names, which stayed listed and read back empty.
++    ///   pfs3aio's `DeleteObject` likewise sends a link to `DeleteLink`, which
++    ///   never frees the object (`directory.c:1778-1783`).
++    /// - **A hard link pfs3aio made** (its `link` field set) is refused with
++    ///   `Error::Pfs3aioLinkNotDeleted`: `DeleteLink` also takes the link's
++    ///   node out of the object's chain of links, rewriting the object's entry
++    ///   when the link is the head or the previous node otherwise
++    ///   (`directory.c:3835-3895`), and this writer does not.
++    /// - **An object hard links name** is refused with `Error::HasHardLinks`:
++    ///   a link entry anywhere on the volume naming its anode, in either
++    ///   shape, or its own `link` field (the head of its chain). pfs3aio
++    ///   promotes the first link to be the object instead (`RemapLinks`,
++    ///   `directory.c:1795-1799,3903-3965`), and this writer does not. **The
++    ///   cost:** every directory on the volume is read on each delete of
++    ///   anything that is not a link.
++    ///
++    /// Each refusal goes through `guarded`, so it discards back to the last
++    /// commit.
      pub fn delete_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
 +        self.guarded(|w| w.delete_in_impl(parent_anode, name))
 +    }
@@ -1660,7 +1764,31 @@ index fc692d6..3bfab58 100644
          let entries = self.vol.list_dir_by_anode(parent_anode)?;
          let target = entries
              .iter()
-@@ -642,96 +1048,123 @@ impl Writer {
+@@ -634,6 +1074,23 @@ impl Writer {
+             .ok_or_else(|| Error::NotFound(name.to_string()))?
+             .clone();
+ 
++        // ART-323: a hard link is only its entry; an object links name is not
++        // deleted. See `delete_in`.
++        let (_, block, pos) = self.find_dir_entry(parent_anode, name)?;
++        let link_field = self.entry_link_field(&block, pos)?;
++        if target.is_hardlink() {
++            if link_field != 0 {
++                return Err(Error::Pfs3aioLinkNotDeleted(target.name));
++            }
++            return self.remove_dir_entry(parent_anode, name);
++        }
++        if let Some(links) = self.links_naming(target.anode, link_field)? {
++            return Err(Error::HasHardLinks {
++                name: target.name,
++                links,
++            });
++        }
++
+         if target.is_dir() {
+             let sub = self.vol.list_dir_by_anode(target.anode)?;
+             if !sub.is_empty() {
+@@ -642,96 +1099,236 @@ impl Writer {
              self.free_anode_chain_reserved(target.anode)?;
              self.clear_anode_chain(target.anode)?;
          } else {
@@ -1687,6 +1815,158 @@ index fc692d6..3bfab58 100644
 -        use crate::ondisk::*;
 -        if !self.vol.rootblock.has_flag(MODE_DELDIR) {
 -            return false;
++    /// ART-323: the `link` extra field of the entry at `pos` in `block`, as
++    /// pfs3aio's `GetExtraFields` reads it (`directory.c:3719-3731`): the
++    /// flags word is the entry's last two bytes, with one bit for each 16-bit
++    /// word of `struct extrafields` (`blocks.h:342-353`), bit 0 for the high
++    /// word of `link` and bit 1 for its low word, and each word whose bit is
++    /// set lies before the one read last. `AddExtraFields` writes them that
++    /// way, starting after the comment on an even offset
++    /// (`directory.c:3764-3800`), and hst-amiga reads them the same way
++    /// (`DirEntryReader.ReadExtraFields`, `henrikstengaard/hst-amiga`
++    /// `6b45584`). Only a `MODE_DIR_EXTENSION` volume has extra fields
++    /// (pfs3aio's `CreateLink` refuses without them, `directory.c:2628-2632`).
++    /// `DirEntry::parse` reads the flags word first instead, which is not
++    /// this layout, so it is not used here.
++    fn entry_link_field(&self, block: &[u8], pos: usize) -> Result<u32> {
++        if !self.vol.rootblock.has_flag(MODE_DIR_EXTENSION) {
++            return Ok(0);
+         }
+-        let rext = match &self.vol.rootblock_ext {
+-            Some(e) => e,
+-            None => return false,
++        let corrupt = || {
++            Error::Corrupt(format!(
++                "the directory entry at offset {pos} runs past its extra fields or its block"
++            ))
+         };
+-        let deldirblocks: Vec<u32> = rext
+-            .deldirblocks
+-            .iter()
+-            .copied()
+-            .filter(|&b| b != 0)
+-            .collect();
+-        if deldirblocks.is_empty() {
+-            return false;
++        let byte = |at: usize| block.get(at).copied().map(usize::from).ok_or_else(corrupt);
++        let word = |at: usize| {
++            block
++                .get(at..at + 2)
++                .map(|b| u16::from_be_bytes([b[0], b[1]]))
++                .ok_or_else(corrupt)
++        };
++        let end = pos + byte(pos)?;
++        let nlen = byte(pos + 17)?;
++        let clen = byte(pos + 18 + nlen)?;
++        let fields = pos + ((20 + nlen + clen) & !1);
++        if end < fields + 2 {
++            return Ok(0);
+         }
++        let flags = word(end - 2)?;
++        let mut at = end - 2;
++        let mut next = |bit: u16| -> Result<u16> {
++            if flags & bit == 0 {
++                return Ok(0);
++            }
++            if at < fields + 2 {
++                return Err(corrupt());
++            }
++            at -= 2;
++            word(at)
++        };
++        let hi = next(1)?;
++        let lo = next(2)?;
++        Ok((u32::from(hi) << 16) | u32::from(lo))
++    }
+ 
+-        let rbs = self.vol.rootblock.reserved_blksize;
+-        let entries_per_block = deldir_entries_per_block(rbs);
+-
+-        // Find a free slot (anode == 0) using roving pointer
+-        for blk in &deldirblocks {
+-            let data = match self.read_reserved_raw(*blk) {
+-                Ok(d) => d,
+-                Err(_) => continue,
+-            };
+-            if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DELDIRID {
++    /// ART-323: what names `anode` as a hard link's object, or `None`. Every
++    /// directory reachable from the root is read, each once: a link in
++    /// 0.1.3's shape names it by its entry's anode, a link pfs3aio made by
++    /// its `link` field (`CreateLink`, `directory.c:2686`). `head`, the
++    /// object's own `link` field, is the head of its chain of links
++    /// (`directory.c:2720-2726`); when no link entry is found it still names
++    /// links — pfs3aio would discard nodes whose entries are gone
++    /// (`directory.c:3922-3934`), but walking a chain this writer cannot
++    /// check is not safe.
++    fn links_naming(&mut self, anode: u32, head: u32) -> Result<Option<String>> {
++        let mut dirs = vec![(String::new(), ANODE_ROOTDIR)];
++        let mut seen = std::collections::HashSet::new();
++        while let Some((path, dir)) = dirs.pop() {
++            if !seen.insert(dir) {
+                 continue;
+             }
+-
+-            for i in 0..entries_per_block {
+-                let off = DELDIR_HEADER_SIZE + i * DELDIR_ENTRY_SIZE;
+-                if off + DELDIR_ENTRY_SIZE > data.len() {
+-                    break;
+-                }
+-                let slot_anode = u32::from_be_bytes(data[off..off + 4].try_into().unwrap());
+-                if slot_anode == 0 {
+-                    // Found free slot — write the deldir entry
+-                    let mut block_data = data;
+-                    self.write_deldir_entry(&mut block_data, off, entry);
+-                    let _ = self.write_reserved(*blk, &block_data);
+-                    return true;
++            let chain = self
++                .vol
++                .anodes
++                .get_chain(dir, self.vol.dev.as_ref(), &mut self.vol.cache)?;
++            for an in &chain {
++                for i in 0..an.clustersize {
++                    let data = self.read_reserved_raw(an.blocknr + i)?;
++                    if u16::from_be_bytes([data[0], data[1]]) != DBLKID {
++                        continue;
++                    }
++                    let mut pos = DIR_BLOCK_HEADER_SIZE;
++                    while pos + 18 <= data.len() {
++                        let esize = usize::from(data[pos]);
++                        if esize < 18 || pos + esize > data.len() {
++                            break;
++                        }
++                        let etype = data[pos + 1] as i8;
++                        let eanode = u32::from_be_bytes(data[pos + 2..pos + 6].try_into().unwrap());
++                        let name_end = (pos + 18 + usize::from(data[pos + 17])).min(pos + esize);
++                        let name = crate::util::latin1_to_string(&data[pos + 18..name_end]);
++                        let full = if path.is_empty() {
++                            name
++                        } else {
++                            format!("{path}/{name}")
++                        };
++                        if etype == ST_USERDIR {
++                            dirs.push((full, eanode));
++                        } else if etype == ST_LINKFILE || etype == ST_LINKDIR {
++                            let link = self.entry_link_field(&data, pos)?;
++                            if link == anode || (link == 0 && eanode == anode) {
++                                return Ok(Some(format!("'{full}'")));
++                            }
++                        }
++                        pos += esize;
++                    }
+                 }
+             }
+         }
++        if head != 0 {
++            return Ok(Some(format!("a pfs3aio link chain from anode {head}")));
++        }
++        Ok(None)
++    }
+ 
+-        // Deldir full — evict oldest entry (first slot of first block)
+-        let blk = deldirblocks[0];
+-        let data = match self.read_reserved_raw(blk) {
+-            Ok(d) => d,
+-            Err(_) => return false,
 +    /// ART-318: put a deleted file into the deldir as pfs3aio's `AllocDeldirSlot`
 +    /// and `AddToDeldir` do (`directory.c:4489-4564`). The slot is
 +    /// `rext.deldirroving`, which advances modulo `deldirsize × 31`; a slot whose
@@ -1698,10 +1978,7 @@ index fc692d6..3bfab58 100644
 +    fn move_to_deldir(&mut self, entry: &crate::ondisk::DirEntry) -> Result<bool> {
 +        if !self.vol.rootblock.has_flag(MODE_DELDIR) || !self.vol.rootblock.has_extension() {
 +            return Ok(false);
-         }
--        let rext = match &self.vol.rootblock_ext {
--            Some(e) => e,
--            None => return false,
++        }
 +        let ext_blk = self.vol.rootblock.extension;
 +        let mut rext = self.read_reserved_raw(ext_blk)?;
 +        let u16_at = |b: &[u8], at: usize| u16::from_be_bytes([b[at], b[at + 1]]);
@@ -1719,73 +1996,30 @@ index fc692d6..3bfab58 100644
 +        } else {
 +            (0, 0)
          };
--        let deldirblocks: Vec<u32> = rext
--            .deldirblocks
--            .iter()
--            .copied()
--            .filter(|&b| b != 0)
--            .collect();
--        if deldirblocks.is_empty() {
--            return false;
+-        let off = DELDIR_HEADER_SIZE;
+-        let evict_anode = u32::from_be_bytes(data[off..off + 4].try_into().unwrap());
+-        if evict_anode != 0 {
+-            let _ = self.free_data_blocks(evict_anode);
+-            let _ = self.clear_anode_chain(evict_anode);
 +        let dd_blk = block_of(&rext, slot);
 +        if dd_blk == 0 {
 +            return Ok(false);
-         }
--
--        let rbs = self.vol.rootblock.reserved_blksize;
--        let entries_per_block = deldir_entries_per_block(rbs);
--
--        // Find a free slot (anode == 0) using roving pointer
--        for blk in &deldirblocks {
--            let data = match self.read_reserved_raw(*blk) {
--                Ok(d) => d,
--                Err(_) => continue,
--            };
--            if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DELDIRID {
--                continue;
--            }
--
--            for i in 0..entries_per_block {
--                let off = DELDIR_HEADER_SIZE + i * DELDIR_ENTRY_SIZE;
--                if off + DELDIR_ENTRY_SIZE > data.len() {
--                    break;
--                }
--                let slot_anode = u32::from_be_bytes(data[off..off + 4].try_into().unwrap());
--                if slot_anode == 0 {
--                    // Found free slot — write the deldir entry
--                    let mut block_data = data;
--                    self.write_deldir_entry(&mut block_data, off, entry);
--                    let _ = self.write_reserved(*blk, &block_data);
--                    return true;
--                }
--            }
++        }
 +        let mut data = self.read_reserved_raw(dd_blk)?;
 +        if u16::from_be_bytes([data[0], data[1]]) != DELDIRID {
 +            return Err(Error::Corrupt(format!(
 +                "deldir block {dd_blk} is not a deldir block"
 +            )));
          }
--
--        // Deldir full — evict oldest entry (first slot of first block)
--        let blk = deldirblocks[0];
--        let data = match self.read_reserved_raw(blk) {
--            Ok(d) => d,
--            Err(_) => return false,
--        };
--        let off = DELDIR_HEADER_SIZE;
--        let evict_anode = u32::from_be_bytes(data[off..off + 4].try_into().unwrap());
--        if evict_anode != 0 {
--            let _ = self.free_data_blocks(evict_anode);
--            let _ = self.clear_anode_chain(evict_anode);
-+        let off = DELDIR_HEADER_SIZE + (slot % DELENTRIES_PER_BLOCK) * DELDIR_ENTRY_SIZE;
-+        let evicted = u32_at(&data, off);
-+        if evicted != 0 {
-+            self.clear_anode_chain(evicted)?; // anodes only (`directory.c:4510-4518`)
-         }
 -        let mut block_data = data;
 -        self.write_deldir_entry(&mut block_data, off, entry);
 -        let _ = self.write_reserved(blk, &block_data);
 -        true
++        let off = DELDIR_HEADER_SIZE + (slot % DELENTRIES_PER_BLOCK) * DELDIR_ENTRY_SIZE;
++        let evicted = u32_at(&data, off);
++        if evicted != 0 {
++            self.clear_anode_chain(evicted)?; // anodes only (`directory.c:4510-4518`)
++        }
 +        self.write_deldir_entry(&mut data, off, entry);
 +        // The deldir block's date and rext.dd_creation* are now (`directory.c:4556-4560`).
 +        let (cday, cmin, ctick) = self.entry_datestamp();
@@ -1854,7 +2088,7 @@ index fc692d6..3bfab58 100644
      }
  
      // ---- Data bitmap ----
-@@ -739,9 +1172,11 @@ impl Writer {
+@@ -739,9 +1336,11 @@ impl Writer {
      fn load_data_bitmap(&mut self) -> Result<()> {
          let no_bmb = {
              let bits_per_bmb = self.index_per_block * 32;
@@ -1868,7 +2102,7 @@ index fc692d6..3bfab58 100644
          };
          for seq in 0..no_bmb {
              if let Some(blk) = self.get_bitmap_block_nr(seq)? {
-@@ -778,7 +1213,10 @@ impl Writer {
+@@ -778,7 +1377,10 @@ impl Writer {
                              .ok_or_else(|| {
                                  Error::Corrupt("block number overflow in bitmap".into())
                              })?;
@@ -1880,7 +2114,7 @@ index fc692d6..3bfab58 100644
                              continue; // skip out-of-range bitmap bits
                          }
                          longs[li] &= !(0x8000_0000 >> bit);
-@@ -825,7 +1263,9 @@ impl Writer {
+@@ -825,7 +1427,9 @@ impl Writer {
      }
  
      fn free_data_block(&mut self, blk: u32) -> Result<()> {
@@ -1891,7 +2125,7 @@ index fc692d6..3bfab58 100644
              return Ok(());
          }
          let rel = blk - self.bitmapstart;
-@@ -896,55 +1336,106 @@ impl Writer {
+@@ -896,55 +1500,106 @@ impl Writer {
  
      // ---- Anode allocation ----
  
@@ -2035,7 +2269,7 @@ index fc692d6..3bfab58 100644
      }
  
      /// Allocate a new anode block and register it in the index.
-@@ -964,43 +1455,62 @@ impl Writer {
+@@ -964,43 +1619,62 @@ impl Writer {
          let idx_off = seqnr % ipb;
  
          if self.vol.rootblock.is_large() {
@@ -2112,7 +2346,7 @@ index fc692d6..3bfab58 100644
                  put_u32(&mut sdata, soff, new_idx);
                  put_u32(&mut sdata, 4, self.datestamp);
                  self.write_reserved(super_blk, &sdata)?;
-@@ -1012,8 +1522,14 @@ impl Writer {
+@@ -1012,8 +1686,14 @@ impl Writer {
                  self.write_reserved(idx_blk, &idata)?;
              }
          } else {
@@ -2129,7 +2363,7 @@ index fc692d6..3bfab58 100644
                  .vol
                  .rootblock
                  .indexblocks
-@@ -1021,7 +1537,18 @@ impl Writer {
+@@ -1021,7 +1701,18 @@ impl Writer {
                  .copied()
                  .unwrap_or(0);
              if idx_blk == 0 {
@@ -2149,7 +2383,7 @@ index fc692d6..3bfab58 100644
              }
              let mut idata = self.read_reserved_raw(idx_blk)?;
              let entry_off = INDEX_BLOCK_HEADER_SIZE + idx_off as usize * 4;
-@@ -1036,18 +1563,7 @@ impl Writer {
+@@ -1036,18 +1727,7 @@ impl Writer {
      }
  
      fn create_anode_chain(&mut self, blocks: &[u32]) -> Result<u32> {
@@ -2169,7 +2403,7 @@ index fc692d6..3bfab58 100644
          // Allocate in reverse so we can set next pointers
          let mut next_nr = 0u32;
          for &(start, count) in clusters.iter().rev() {
-@@ -1097,6 +1613,7 @@ impl Writer {
+@@ -1097,6 +1777,7 @@ impl Writer {
                  .anodes
                  .get_chain(dir_anode, self.vol.dev.as_ref(), &mut self.vol.cache)?;
  
@@ -2177,7 +2411,7 @@ index fc692d6..3bfab58 100644
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,6 +1621,11 @@ impl Writer {
+@@ -1104,6 +1785,11 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -2189,7 +2423,7 @@ index fc692d6..3bfab58 100644
                  // Find end of entries
                  let mut pos = DIR_BLOCK_HEADER_SIZE;
                  while pos < self.resblocksize as usize {
-@@ -1123,13 +1645,17 @@ impl Writer {
+@@ -1123,13 +1809,17 @@ impl Writer {
                  }
              }
          }
@@ -2209,7 +2443,7 @@ index fc692d6..3bfab58 100644
          new_data[DIR_BLOCK_HEADER_SIZE..DIR_BLOCK_HEADER_SIZE + entry_bytes.len()]
              .copy_from_slice(&entry_bytes);
          self.write_reserved(new_blk, &new_data)?;
-@@ -1172,7 +1698,7 @@ impl Writer {
+@@ -1172,7 +1862,7 @@ impl Writer {
          entry[1] = entry_type as u8;
          put_u32(&mut entry, 2, anode);
          put_u32(&mut entry, 6, fsize as u32);
@@ -2218,7 +2452,7 @@ index fc692d6..3bfab58 100644
          put_u16(&mut entry, 10, cday);
          put_u16(&mut entry, 12, cmin);
          put_u16(&mut entry, 14, ctick);
-@@ -1200,11 +1726,52 @@ impl Writer {
+@@ -1200,11 +1890,52 @@ impl Writer {
  
      // ---- Rootblock update ----
  
@@ -2272,7 +2506,7 @@ index fc692d6..3bfab58 100644
          let bs = self.vol.block_size() as usize;
          let rblkcluster = self.vol.rootblock.rblkcluster as u32;
          let cluster_size = rblkcluster as usize * bs;
-@@ -1236,6 +1803,25 @@ impl Writer {
+@@ -1236,6 +1967,25 @@ impl Writer {
              }
          }
  
@@ -2298,7 +2532,7 @@ index fc692d6..3bfab58 100644
          self.vol
              .dev
              .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)?;
-@@ -1286,10 +1872,44 @@ impl Writer {
+@@ -1286,10 +2036,44 @@ impl Writer {
          Ok(())
      }
  
@@ -2346,7 +2580,7 @@ index fc692d6..3bfab58 100644
      }
  
      fn get_bitmap_block_nr(&mut self, seqnr: u32) -> Result<Option<u32>> {
-@@ -1316,3 +1936,21 @@ impl Writer {
+@@ -1316,3 +2100,21 @@ impl Writer {
          Ok((parent, filename))
      }
  }

@@ -16,7 +16,7 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.8`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.9`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
@@ -112,14 +112,14 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version of the `libpfs3` ART builds: the vendored copy in
 /// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patches,
-/// `+art.8`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// `+art.9`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
 /// version, so this is kept in sync by hand, the same trade-off ART already
 /// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
 /// constant as which implementation did the work, and
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.8";
+const LIBPFS3_VERSION: &str = "0.1.3+art.9";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -3179,7 +3179,7 @@ mod tests {
     #[test]
     fn probe_names_libpfs3() {
         let probed = NativeFormatter::UTC.probe().unwrap();
-        assert_eq!(probed.raw, "libpfs3 0.1.3+art.8 (native, no external tool)");
+        assert_eq!(probed.raw, "libpfs3 0.1.3+art.9 (native, no external tool)");
     }
 
     /// A DosType neither family claims — ART refuses rather than guessing.
@@ -4714,12 +4714,11 @@ mod tests {
     fn a_pfs3_rename_onto_a_hard_link_to_the_same_file_is_refused_and_writes_nothing() {
         let dev = MemDevice::new();
         let fx = pfs3_mutator_fixture(&dev, false);
-        {
-            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
-            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
-            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
-            w.create_hardlink("Link", fx.file).unwrap();
-        }
+        pfs3_append_raw_entries(
+            &dev,
+            PFS3_ROOT,
+            &[pfs3_raw_entry(LINKFILE, fx.file, 0, "Link", 0)],
+        );
         let before_writes = dev.write_count();
         let (raw_before, facts_before) = pfs3_committed_state(&dev);
         for (src, dst) in [("File", "Link"), ("Link", "File")] {
@@ -4752,11 +4751,11 @@ mod tests {
     {
         let dev = MemDevice::new();
         let fx = pfs3_mutator_fixture(&dev, false);
-        {
-            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
-            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
-            w.create_hardlink("LongerLink", fx.file).unwrap();
-        }
+        pfs3_append_raw_entries(
+            &dev,
+            PFS3_ROOT,
+            &[pfs3_raw_entry(LINKFILE, fx.file, 0, "LongerLink", 0)],
+        );
         let (_, facts_before) = pfs3_committed_state(&dev);
         {
             let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
@@ -4784,11 +4783,11 @@ mod tests {
             let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
             vol.lookup("Dst").unwrap().unwrap().anode
         };
-        {
-            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
-            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
-            w.create_hardlink("DstLink", dst).unwrap();
-        }
+        pfs3_append_raw_entries(
+            &dev,
+            PFS3_ROOT,
+            &[pfs3_raw_entry(LINKFILE, dst, 0, "DstLink", 0)],
+        );
         {
             let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
             let mut w = libpfs3::writer::Writer::open(vol).unwrap();
@@ -4805,6 +4804,299 @@ mod tests {
             "renaming onto a link to Dst destroyed Dst"
         );
         assert_eq!(vol.read_file("File").unwrap(), pfs3_bytes(1, 700));
+    }
+
+    const FILE: i8 = libpfs3::ondisk::ST_FILE;
+    const LINKFILE: i8 = libpfs3::ondisk::ST_LINKFILE;
+    const LINKDIR: i8 = libpfs3::ondisk::ST_LINKDIR;
+
+    /// One PFS3 directory entry, raw, with the fixture's date. `link` is
+    /// the `link` extra field, laid out as pfs3aio's `AddExtraFields`
+    /// writes it (`directory.c:3764-3800`, `tonioni/pfs3aio` `211f7f0`):
+    /// the non-zero 16-bit words of the field in reverse order, then the
+    /// flags word — one bit per word, bit 0 the high word — as the entry's
+    /// last two bytes. hst-amiga reads it back the same way, from the end
+    /// (`DirEntryReader.ReadExtraFields`, `henrikstengaard/hst-amiga`
+    /// `6b45584`). With `link` 0 this is byte for byte what 0.1.3's
+    /// `create_hardlink` wrote for a link (its `build_dir_entry`: flags 0).
+    fn pfs3_raw_entry(entry_type: i8, anode: u32, fsize: u32, name: &str, link: u32) -> Vec<u8> {
+        let mut e = vec![0u8; 18];
+        e[1] = entry_type as u8;
+        e[2..6].copy_from_slice(&anode.to_be_bytes());
+        e[6..10].copy_from_slice(&fsize.to_be_bytes());
+        e[10..12].copy_from_slice(&PFS3_FIXTURE_DATE.0.to_be_bytes());
+        e[12..14].copy_from_slice(&PFS3_FIXTURE_DATE.1.to_be_bytes());
+        e[14..16].copy_from_slice(&PFS3_FIXTURE_DATE.2.to_be_bytes());
+        e[17] = name.len() as u8;
+        e.extend_from_slice(name.as_bytes());
+        e.push(0); // comment length
+        if e.len() % 2 == 1 {
+            e.push(0);
+        }
+        let (hi, lo) = ((link >> 16) as u16, link as u16);
+        let mut flags = 0u16;
+        if lo != 0 {
+            e.extend_from_slice(&lo.to_be_bytes());
+            flags |= 2;
+        }
+        if hi != 0 {
+            e.extend_from_slice(&hi.to_be_bytes());
+            flags |= 1;
+        }
+        e.extend_from_slice(&flags.to_be_bytes());
+        e[0] = e.len() as u8;
+        e
+    }
+
+    /// Appends raw entries after the last entry of `dir`'s first directory
+    /// block, on the device — a committed state no writer call made.
+    fn pfs3_append_raw_entries(dev: &MemDevice, dir: u32, entries: &[Vec<u8>]) {
+        let blk = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            u64::from(vol.get_anode_chain(dir).unwrap()[0].blocknr)
+        };
+        let mut block = dev.read(blk, 1024);
+        let mut pos = libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE;
+        while block[pos] != 0 {
+            pos += usize::from(block[pos]);
+        }
+        for e in entries {
+            block[pos..pos + e.len()].copy_from_slice(e);
+            pos += e.len();
+        }
+        assert!(pos < 1024, "the raw entries do not fit the block");
+        dev.patch(blk, &block);
+    }
+
+    /// "Links/Obj" and "Links/Lnk", a hard link to it, as pfs3aio's
+    /// `CreateLink` leaves them (`directory.c:2672-2748`): the link's entry
+    /// is `ST_LINKFILE`, its anode is a link node of its own — clustersize
+    /// the object's directory, blocknr the link's directory, next 0 — and
+    /// its `link` field is the object's anode; the object's own `link`
+    /// field is the head of its chain of links, that node. `head` false
+    /// leaves the object's field 0 (what 0.1.3's `rename_in`, which rebuilds
+    /// an entry without its extra fields, leaves); `link_entry` false leaves
+    /// the chain naming a node whose entry is gone.
+    struct Pfs3aioLink {
+        dir: u32,
+        node: u32,
+    }
+
+    fn pfs3aio_linked_file(dev: &MemDevice, head: bool, link_entry: bool) -> Pfs3aioLink {
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+            w.create_dir("Links").unwrap();
+            w.write_file("Links/Obj", b"linked bytes").unwrap();
+        }
+        let (dir, obj, dir_block) = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let dir = vol.lookup("Links").unwrap().unwrap().anode;
+            let obj = vol.lookup("Links/Obj").unwrap().unwrap().anode;
+            let blk = u64::from(vol.get_anode_chain(dir).unwrap()[0].blocknr);
+            (dir, obj, blk)
+        };
+        // A free anode for the link node, in the first anode block — the
+        // layout `pfs3_raw_anode` reads.
+        let root = dev.read(2, 512);
+        let resblk = usize::from(be16(&root, 0x40));
+        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), resblk);
+        let ab_blk = u64::from(be32(&ib, 12));
+        let mut ab = dev.read(ab_blk, resblk);
+        let node = (6..(resblk - 16) / 12)
+            .find(|&i| ab[16 + i * 12..28 + i * 12].iter().all(|&b| b == 0))
+            .expect("a free anode") as u32;
+        let at = 16 + node as usize * 12;
+        ab[at..at + 4].copy_from_slice(&dir.to_be_bytes());
+        ab[at + 4..at + 8].copy_from_slice(&dir.to_be_bytes());
+        dev.patch(ab_blk, &ab);
+        let size = b"linked bytes".len() as u32;
+        let mut block = dev.read(dir_block, 1024);
+        block[libpfs3::ondisk::DIR_BLOCK_HEADER_SIZE..].fill(0);
+        dev.patch(dir_block, &block);
+        let mut entries = vec![pfs3_raw_entry(
+            FILE,
+            obj,
+            size,
+            "Obj",
+            if head { node } else { 0 },
+        )];
+        if link_entry {
+            entries.push(pfs3_raw_entry(LINKFILE, node, size, "Lnk", obj));
+        }
+        pfs3_append_raw_entries(dev, dir, &entries);
+        Pfs3aioLink { dir, node }
+    }
+
+    fn has_links_sentence(name: &str, links: &str) -> String {
+        format!(
+            "'{name}' has hard links ({links}): this writer cannot hand it over to one of them as \
+             pfs3aio does, so it did not delete it — delete the links first"
+        )
+    }
+
+    /// **ART-323.** 0.1.3's hard link stores the anode of the file it names
+    /// in its own entry, and `delete_in` took any entry that is not a
+    /// directory for a file: it freed that anode's data blocks and cleared
+    /// its anodes, so "Dst" stayed listed, read back empty, and its block was
+    /// free for the next write — reported as a successful delete of
+    /// something else. Deleting a link removes the link's entry and nothing
+    /// else, as pfs3aio's `DeleteObject` sends a link to `DeleteLink`, which
+    /// never frees the object (`directory.c:1778-1783,3835-3895`). Reopened
+    /// from the device: Dst's content, its block in the bitmap, its anode
+    /// and the free count are all as they were; and Dst itself, its link
+    /// gone, deletes as any file does.
+    #[test]
+    fn deleting_a_pfs3_hard_link_removes_only_its_entry_and_the_file_it_names_keeps_its_blocks() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        let (dst, dst_block, free_before) = {
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let dst = vol.lookup("Dst").unwrap().unwrap().anode;
+            let blk = vol.get_anode_chain(dst).unwrap()[0].blocknr;
+            (dst, blk, vol.rootblock.blocksfree)
+        };
+        pfs3_append_raw_entries(
+            &dev,
+            PFS3_ROOT,
+            &[pfs3_raw_entry(LINKFILE, dst, 0, "DstLink", 0)],
+        );
+        let anode_before = pfs3_raw_anode(&dev, dst);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.delete_in(PFS3_ROOT, "DstLink").unwrap();
+        }
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert!(vol.lookup("DstLink").unwrap().is_none(), "the link is gone");
+        assert_eq!(
+            vol.read_file("Dst").ok().as_deref(),
+            Some(&b"destination bytes"[..]),
+            "deleting a hard link to Dst emptied Dst"
+        );
+        assert!(
+            !pfs3_data_block_free_on_disk(&dev, dst_block),
+            "Dst's block {dst_block} is free in the bitmap after deleting a link to it"
+        );
+        assert_eq!(pfs3_raw_anode(&dev, dst), anode_before, "Dst's anode");
+        assert_eq!(vol.rootblock.blocksfree, free_before, "blocksfree");
+        drop(vol);
+        {
+            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+            w.delete_in(PFS3_ROOT, "Dst").unwrap();
+        }
+        assert!(
+            pfs3_data_block_free_on_disk(&dev, dst_block),
+            "Dst, its link gone, must delete as any file does"
+        );
+    }
+
+    /// **ART-323, a link pfs3aio made.** Its entry's anode is its own link
+    /// node, and deleting it means taking that node out of the object's
+    /// chain of links — rewriting the object's `link` field when the link
+    /// is the head, or the previous node's `next` — before freeing the node
+    /// (`DeleteLink`, `directory.c:3835-3895`). This writer does not do
+    /// that, so it refuses by name before anything is staged, and the
+    /// volume is exactly its last commit. 0.1.3 read the link node as a data
+    /// chain, cleared it and returned `Ok`, leaving the object's chain
+    /// naming a node that was free.
+    #[test]
+    fn deleting_a_pfs3aio_hard_link_is_refused_by_name_and_leaves_the_last_commit() {
+        let dev = MemDevice::new();
+        pfs3_mutator_fixture(&dev, false);
+        let lx = pfs3aio_linked_file(&dev, true, true);
+        assert_pfs3_failure_leaves_the_last_commit(
+            &dev,
+            |w| w.delete_in(lx.dir, "Lnk"),
+            |e| {
+                e.to_string()
+                    == "'Lnk' is a hard link pfs3aio made, and this writer cannot take it out of \
+                        its object's chain of links, so it did not delete it — delete it on the \
+                        Amiga"
+            },
+            |_| {},
+        );
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert_eq!(vol.read_file("Links/Obj").unwrap(), b"linked bytes");
+    }
+
+    /// **ART-323, the object a link names.** A file or a directory that a
+    /// hard link (0.1.3's shape) still names is refused by name, and the
+    /// volume is its last commit: deleting it would free what the link
+    /// names. pfs3aio instead promotes the first link to be the object
+    /// (`RemapLinks`, `directory.c:1795-1799,3903-3965`), which this writer
+    /// does not do. 0.1.3 deleted it and left the link naming freed anodes.
+    #[test]
+    fn deleting_a_pfs3_file_or_directory_a_hard_link_names_is_refused_by_name() {
+        for (target, link, link_type) in [
+            ("Dst", "DstLink", LINKFILE),
+            ("Empty", "EmptyLink", LINKDIR),
+        ] {
+            let dev = MemDevice::new();
+            pfs3_mutator_fixture(&dev, false);
+            {
+                let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+                let mut w = libpfs3::writer::Writer::open(vol).unwrap();
+                w.set_entry_date(Some(PFS3_FIXTURE_DATE));
+                w.create_dir("Empty").unwrap();
+            }
+            let anode = {
+                let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+                vol.lookup(target).unwrap().unwrap().anode
+            };
+            pfs3_append_raw_entries(
+                &dev,
+                PFS3_ROOT,
+                &[pfs3_raw_entry(link_type, anode, 0, link, 0)],
+            );
+            let expected = has_links_sentence(target, &format!("'{link}'"));
+            assert_pfs3_failure_leaves_the_last_commit(
+                &dev,
+                |w| w.delete_in(PFS3_ROOT, target),
+                |e| e.to_string() == expected,
+                |_| {},
+            );
+            if target == "Dst" {
+                let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+                assert_eq!(vol.read_file("Dst").unwrap(), b"destination bytes");
+            }
+        }
+    }
+
+    /// **ART-323, a file pfs3aio linked.** Refused by name in each of three
+    /// states: its chain and its link both there (the link is found and
+    /// named); its own `link` field gone, the link still naming it (found
+    /// by the link's `link` field); its chain there, the link's entry gone
+    /// (named by the chain — pfs3aio would discard such a node and delete,
+    /// `directory.c:3922-3934`; this writer refuses rather than guess what a
+    /// chain it cannot walk safely holds).
+    #[test]
+    fn deleting_a_pfs3aio_linked_file_is_refused_whether_its_chain_or_its_link_names_it() {
+        for (head, link_entry) in [(true, true), (false, true), (true, false)] {
+            let dev = MemDevice::new();
+            pfs3_mutator_fixture(&dev, false);
+            let lx = pfs3aio_linked_file(&dev, head, link_entry);
+            let links = if link_entry {
+                "'Links/Lnk'".to_string()
+            } else {
+                format!("a pfs3aio link chain from anode {}", lx.node)
+            };
+            let expected = has_links_sentence("Obj", &links);
+            assert_pfs3_failure_leaves_the_last_commit(
+                &dev,
+                |w| w.delete_in(lx.dir, "Obj"),
+                |e| e.to_string() == expected,
+                |_| {},
+            );
+            let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+            assert_eq!(
+                vol.read_file("Links/Obj").unwrap(),
+                b"linked bytes",
+                "head {head}, link entry {link_entry}"
+            );
+        }
     }
 
     /// **Final review fix wave, M1.** An Amiga stores a name's bytes as
@@ -5011,79 +5303,39 @@ mod tests {
         });
     }
 
-    /// `create_hardlink` stages nothing before `add_dir_entry`, and inside
-    /// it only a directory with no room left gets as far as allocating. So:
-    /// "Full", whose one block seven 106-byte names fill (`20 + 7 × 128 +
-    /// 128 ≥ 1024`), a reserved bitmap with exactly one free block left, and
-    /// an anode block with no free slot. The eighth link takes that last
-    /// reserved block for Full's new directory block and stages it; the
-    /// anode for it then needs a new anode block, and there is no reserved
-    /// block left for one.
+    /// **ART-323.** `create_hardlink` wrote a link as 0.1.3 shaped it: the
+    /// linked file's anode in the link's own entry, no link node, no chain.
+    /// pfs3aio's `CreateLink` gives the link a node of its own, puts the
+    /// object's anode in the link's `link` field and adds the node to the
+    /// object's chain (`directory.c:2672-2748`) — so a link this writer made
+    /// was not a pfs3aio link. It is refused by name before anything is
+    /// read or written; the refusal discards back to the last commit, and
+    /// the writer is not locked. This replaces the discard and lock tests
+    /// `create_hardlink` had, which needed it to reach its commit. ART's
+    /// product code never creates a link.
     #[test]
-    fn a_failed_pfs3_create_hardlink_leaves_the_last_commit() {
+    fn pfs3_create_hardlink_is_refused_by_name_and_writes_nothing() {
         let dev = MemDevice::new();
         let fx = pfs3_mutator_fixture(&dev, false);
-        let long = |i: usize| format!("Full/{i}{}", "x".repeat(105));
-        {
-            let vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
-            let mut w = libpfs3::writer::Writer::open(vol).unwrap();
-            w.create_dir("Full").unwrap();
-            for i in 0..7 {
-                w.create_hardlink(&long(i), fx.file).unwrap();
-            }
-        }
-        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
-        let full = vol.lookup("Full").unwrap().unwrap().anode;
-        assert_eq!(
-            vol.get_anode_chain(full).unwrap().len(),
-            1,
-            "Full is one block"
-        );
-        let rb = vol.rootblock.clone();
-        // One free reserved block: the first, and reserved_free saying so.
-        let first = u64::from(rb.firstreserved);
-        let mut cluster = dev.read(first, usize::from(rb.rblkcluster) * 512);
-        let mut kept = false;
-        for at in (512 + 12..cluster.len() - 3).step_by(4) {
-            let word = be32(&cluster, at);
-            let keep = if !kept && word != 0 {
-                kept = true;
-                0x8000_0000u32 >> word.leading_zeros()
-            } else {
-                0
-            };
-            cluster[at..at + 4].copy_from_slice(&keep.to_be_bytes());
-        }
-        assert!(kept, "the fixture has a free reserved block");
-        let rf = libpfs3::ondisk::RB_OFF_RESERVED_FREE;
-        cluster[rf..rf + 4].copy_from_slice(&1u32.to_be_bytes());
-        dev.patch(first, &cluster);
-        // No free anode in the (only) anode block.
-        let root = dev.read(2, 512);
-        let ib = dev.read(u64::from(be32(&root, 0x60 + 5 * 4)), 1024);
-        let ab_blk = u64::from(be32(&ib, 12));
-        assert_eq!(be32(&ib, 16), 0, "one anode block");
-        let mut ab = dev.read(ab_blk, 1024);
-        for at in (16..1024 - 11).step_by(12) {
-            if be32(&ab, at) == 0 && be32(&ab, at + 4) == 0 {
-                ab[at + 4..at + 8].copy_from_slice(&0xFFFF_FFFFu32.to_be_bytes());
-            }
-        }
-        dev.patch(ab_blk, &ab);
-
+        let before = dev.write_count();
         assert_pfs3_failure_leaves_the_last_commit(
             &dev,
-            |w| w.create_hardlink(&long(7), fx.file),
-            |e| matches!(e, libpfs3::error::Error::DiskFull(m) if m.contains("reserved")),
-            |_| {},
+            |w| w.create_hardlink("Hard", fx.file),
+            |e| {
+                e.to_string()
+                    == "hard link 'Hard' was not created: this writer cannot write pfs3aio's \
+                        hard-link format (a link anode and the linked object's chain of links)"
+            },
+            |d| {
+                assert_eq!(
+                    d.write_count(),
+                    before,
+                    "a refused link wrote to the device"
+                )
+            },
         );
-    }
-
-    #[test]
-    fn a_pfs3_create_hardlink_commit_failure_locks_the_writer() {
-        let dev = MemDevice::new();
-        let fx = pfs3_mutator_fixture(&dev, false);
-        assert_pfs3_commit_failure_locks(&dev, 0, |w| w.create_hardlink("Hard", fx.file));
+        let mut vol = libpfs3::volume::Volume::from_device(Box::new(dev.clone())).unwrap();
+        assert!(vol.lookup("Hard").unwrap().is_none());
     }
 
     /// `undelete`: the deleted file's data is read, a new block allocated

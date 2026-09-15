@@ -31,6 +31,9 @@
 //! link found as the destination is refused (I1); the in-place rename writes
 //! Latin-1 (M1); copy-on-write refuses a bitmap that offers the old file's
 //! own block (M2);
+//! Modified by ART on 2026-09-15 (ART-323): deleting a hard link removes only
+//! its entry, a link pfs3aio made is refused, an object a link still names is
+//! refused, and `create_hardlink` is refused;
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
@@ -457,15 +460,23 @@ impl Writer {
     }
 
     /// Create a hardlink in a parent directory.
+    ///
+    /// ART (2026-09-15, ART-323): **refused**, with
+    /// `Error::HardLinkNotWritten`, before anything is read or written.
+    /// 0.1.3 added an `ST_LINKFILE` entry holding the linked object's anode.
+    /// pfs3aio's `CreateLink` gives the link an anode of its own — a link
+    /// node whose clustersize is the object's directory and blocknr the
+    /// link's — puts the object's anode in the link's `link` extra field, and
+    /// adds the node to the chain of links headed by the object's own `link`
+    /// field (`directory.c:2672-2748`, `tonioni/pfs3aio` `211f7f0`). This
+    /// writer does not write that, and a link that is not pfs3aio's is not a
+    /// link under pfs3aio.
     pub fn create_hardlink(&mut self, path: &str, target_anode: u32) -> Result<()> {
         self.guarded(|w| w.create_hardlink_impl(path, target_anode))
     }
 
-    fn create_hardlink_impl(&mut self, path: &str, target_anode: u32) -> Result<()> {
-        let (parent_anode, name) = self.split_path(path)?;
-        self.check_name_len(&name)?;
-        self.add_dir_entry(parent_anode, &name, ST_LINKFILE, target_anode, 0, 0)?;
-        self.update_rootblock()
+    fn create_hardlink_impl(&mut self, path: &str, _target_anode: u32) -> Result<()> {
+        Err(Error::HardLinkNotWritten(path.to_string()))
     }
 
     /// Undelete a file from the deldir by index. Writes it to `dest_path`.
@@ -1020,6 +1031,29 @@ impl Writer {
     }
 
     /// Delete a file or empty directory by name in a parent directory.
+    ///
+    /// ART (2026-09-15, ART-323), hard links, before anything is staged:
+    /// - **A hard link in 0.1.3's shape** (`ST_LINKFILE`/`ST_LINKDIR`, no
+    ///   `link` extra field, the linked object's anode in its entry) loses its
+    ///   entry and nothing else. 0.1.3 freed the data blocks and anodes of the
+    ///   object the link names, which stayed listed and read back empty.
+    ///   pfs3aio's `DeleteObject` likewise sends a link to `DeleteLink`, which
+    ///   never frees the object (`directory.c:1778-1783`).
+    /// - **A hard link pfs3aio made** (its `link` field set) is refused with
+    ///   `Error::Pfs3aioLinkNotDeleted`: `DeleteLink` also takes the link's
+    ///   node out of the object's chain of links, rewriting the object's entry
+    ///   when the link is the head or the previous node otherwise
+    ///   (`directory.c:3835-3895`), and this writer does not.
+    /// - **An object hard links name** is refused with `Error::HasHardLinks`:
+    ///   a link entry anywhere on the volume naming its anode, in either
+    ///   shape, or its own `link` field (the head of its chain). pfs3aio
+    ///   promotes the first link to be the object instead (`RemapLinks`,
+    ///   `directory.c:1795-1799,3903-3965`), and this writer does not. **The
+    ///   cost:** every directory on the volume is read on each delete of
+    ///   anything that is not a link.
+    ///
+    /// Each refusal goes through `guarded`, so it discards back to the last
+    /// commit.
     pub fn delete_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
         self.guarded(|w| w.delete_in_impl(parent_anode, name))
     }
@@ -1040,6 +1074,23 @@ impl Writer {
             .ok_or_else(|| Error::NotFound(name.to_string()))?
             .clone();
 
+        // ART-323: a hard link is only its entry; an object links name is not
+        // deleted. See `delete_in`.
+        let (_, block, pos) = self.find_dir_entry(parent_anode, name)?;
+        let link_field = self.entry_link_field(&block, pos)?;
+        if target.is_hardlink() {
+            if link_field != 0 {
+                return Err(Error::Pfs3aioLinkNotDeleted(target.name));
+            }
+            return self.remove_dir_entry(parent_anode, name);
+        }
+        if let Some(links) = self.links_naming(target.anode, link_field)? {
+            return Err(Error::HasHardLinks {
+                name: target.name,
+                links,
+            });
+        }
+
         if target.is_dir() {
             let sub = self.vol.list_dir_by_anode(target.anode)?;
             if !sub.is_empty() {
@@ -1059,6 +1110,119 @@ impl Writer {
             }
         }
         self.remove_dir_entry(parent_anode, name)
+    }
+
+    /// ART-323: the `link` extra field of the entry at `pos` in `block`, as
+    /// pfs3aio's `GetExtraFields` reads it (`directory.c:3719-3731`): the
+    /// flags word is the entry's last two bytes, with one bit for each 16-bit
+    /// word of `struct extrafields` (`blocks.h:342-353`), bit 0 for the high
+    /// word of `link` and bit 1 for its low word, and each word whose bit is
+    /// set lies before the one read last. `AddExtraFields` writes them that
+    /// way, starting after the comment on an even offset
+    /// (`directory.c:3764-3800`), and hst-amiga reads them the same way
+    /// (`DirEntryReader.ReadExtraFields`, `henrikstengaard/hst-amiga`
+    /// `6b45584`). Only a `MODE_DIR_EXTENSION` volume has extra fields
+    /// (pfs3aio's `CreateLink` refuses without them, `directory.c:2628-2632`).
+    /// `DirEntry::parse` reads the flags word first instead, which is not
+    /// this layout, so it is not used here.
+    fn entry_link_field(&self, block: &[u8], pos: usize) -> Result<u32> {
+        if !self.vol.rootblock.has_flag(MODE_DIR_EXTENSION) {
+            return Ok(0);
+        }
+        let corrupt = || {
+            Error::Corrupt(format!(
+                "the directory entry at offset {pos} runs past its extra fields or its block"
+            ))
+        };
+        let byte = |at: usize| block.get(at).copied().map(usize::from).ok_or_else(corrupt);
+        let word = |at: usize| {
+            block
+                .get(at..at + 2)
+                .map(|b| u16::from_be_bytes([b[0], b[1]]))
+                .ok_or_else(corrupt)
+        };
+        let end = pos + byte(pos)?;
+        let nlen = byte(pos + 17)?;
+        let clen = byte(pos + 18 + nlen)?;
+        let fields = pos + ((20 + nlen + clen) & !1);
+        if end < fields + 2 {
+            return Ok(0);
+        }
+        let flags = word(end - 2)?;
+        let mut at = end - 2;
+        let mut next = |bit: u16| -> Result<u16> {
+            if flags & bit == 0 {
+                return Ok(0);
+            }
+            if at < fields + 2 {
+                return Err(corrupt());
+            }
+            at -= 2;
+            word(at)
+        };
+        let hi = next(1)?;
+        let lo = next(2)?;
+        Ok((u32::from(hi) << 16) | u32::from(lo))
+    }
+
+    /// ART-323: what names `anode` as a hard link's object, or `None`. Every
+    /// directory reachable from the root is read, each once: a link in
+    /// 0.1.3's shape names it by its entry's anode, a link pfs3aio made by
+    /// its `link` field (`CreateLink`, `directory.c:2686`). `head`, the
+    /// object's own `link` field, is the head of its chain of links
+    /// (`directory.c:2720-2726`); when no link entry is found it still names
+    /// links — pfs3aio would discard nodes whose entries are gone
+    /// (`directory.c:3922-3934`), but walking a chain this writer cannot
+    /// check is not safe.
+    fn links_naming(&mut self, anode: u32, head: u32) -> Result<Option<String>> {
+        let mut dirs = vec![(String::new(), ANODE_ROOTDIR)];
+        let mut seen = std::collections::HashSet::new();
+        while let Some((path, dir)) = dirs.pop() {
+            if !seen.insert(dir) {
+                continue;
+            }
+            let chain = self
+                .vol
+                .anodes
+                .get_chain(dir, self.vol.dev.as_ref(), &mut self.vol.cache)?;
+            for an in &chain {
+                for i in 0..an.clustersize {
+                    let data = self.read_reserved_raw(an.blocknr + i)?;
+                    if u16::from_be_bytes([data[0], data[1]]) != DBLKID {
+                        continue;
+                    }
+                    let mut pos = DIR_BLOCK_HEADER_SIZE;
+                    while pos + 18 <= data.len() {
+                        let esize = usize::from(data[pos]);
+                        if esize < 18 || pos + esize > data.len() {
+                            break;
+                        }
+                        let etype = data[pos + 1] as i8;
+                        let eanode = u32::from_be_bytes(data[pos + 2..pos + 6].try_into().unwrap());
+                        let name_end = (pos + 18 + usize::from(data[pos + 17])).min(pos + esize);
+                        let name = crate::util::latin1_to_string(&data[pos + 18..name_end]);
+                        let full = if path.is_empty() {
+                            name
+                        } else {
+                            format!("{path}/{name}")
+                        };
+                        if etype == ST_USERDIR {
+                            dirs.push((full, eanode));
+                        } else if etype == ST_LINKFILE || etype == ST_LINKDIR {
+                            let link = self.entry_link_field(&data, pos)?;
+                            if link == anode || (link == 0 && eanode == anode) {
+                                return Ok(Some(format!("'{full}'")));
+                            }
+                        }
+                        pos += esize;
+                    }
+                }
+            }
+        }
+        if head != 0 {
+            return Ok(Some(format!("a pfs3aio link chain from anode {head}")));
+        }
+        Ok(None)
     }
 
     /// ART-318: put a deleted file into the deldir as pfs3aio's `AllocDeldirSlot`
