@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-09-15
+
 ### Added
 
 - **ART can put a filesystem driver into a card's existing partition table, or update the one there, without

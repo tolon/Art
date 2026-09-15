@@ -15,7 +15,7 @@ drag-and-drop-driven application.
 
 > **DROP IT INTO ART.**
 
-**0.9.3 is out, and it is asking for testers.**
+**0.9.4 is out, and it is asking for testers.**
 [Download it](https://github.com/tolon/Art/releases/latest), try it on your own
 Amiga files, and tell it what it got wrong — the thirteen things that still need
 someone other than the author are listed under
@@ -160,9 +160,9 @@ directory in it.
 
 ## Status
 
-**0.9.3**, measured on **2026-09-13**: **3258** Rust tests and
-**1658** frontend tests passing (the Rust suite run twice), **2215** interface strings in
-each language, **8** open defects — ART-062, 117, 118, 250, 300, 301, 302 and 311.
+**0.9.4**, measured on **2026-09-15**: **3495** Rust tests and
+**1687** frontend tests passing (the Rust suite run twice), **2287** interface strings in
+each language, **5** open defects — ART-062, 324, 328, 329 and 331.
 Every one of those numbers, and the command that produced it, is in
 [docs/STATUS.md](docs/STATUS.md) — count them there rather than trusting this paragraph.
 
@@ -738,8 +738,8 @@ Build output:
 
 ```
 src-tauri/target/release/bundle/
-├── msi/   Amiga Retro Toolkit_0.9.3_x64_en-US.msi
-└── nsis/  Amiga Retro Toolkit_0.9.3_x64-setup.exe
+├── msi/   Amiga Retro Toolkit_0.9.4_x64_en-US.msi
+└── nsis/  Amiga Retro Toolkit_0.9.4_x64-setup.exe
 ```
 
 ## Architecture
