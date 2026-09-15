@@ -220,6 +220,135 @@ fn parse(text: &str) -> Option<AmigaVersion> {
     })
 }
 
+// ---- read_loose: the NUL-tolerant reading ART-117 needs -------------------
+//
+// `read` above is strict on purpose (`is_plausible_name` rejects any control
+// byte, NUL included) and every one of its callers —
+// `core::osinstall::collide::read_own_marker`,
+// `core::amigainstall::packagevol::stated_version`,
+// `core::osinstall::apply::read_stated_version` — relies on that rejection to
+// treat a coincidental `$VER:` match inside binary noise as no marker at all
+// (`a_nul_run_before_the_name_is_rejected_by_the_strict_reader`, below).
+//
+// ART-117's driver embedding reads a different shape: `libpfs3` writes
+// `$VER:\0\0pfs3aio.device 4.1`, a NUL run between the marker and the name,
+// and `core::rdbedit::check_same_driver` must still read `pfs3aio.device` out
+// of it. Before this task (item 4 of the third debt round,
+// `.superpowers/sdd/2026-09-15-debt-3-round/item4-brief.md`) that need was
+// served by two separate readers — `core::rdb::version_from_ver_string` (the
+// `u16` version pair) and `core::rdbedit::program_name_from_ver_string` (the
+// name) — kept apart from `read` by the controller's ruling recorded as
+// ART-117 M5. `read_loose` is their unification: one scan of one window,
+// exposing both pieces it can find rather than fusing them into one
+// `AmigaVersion`, because a marker can state either without the other (a
+// version with no name reads a version; a name with no version reads a
+// name). `core::rdb::version_from_ver_string` and
+// `core::rdbedit::program_name_from_ver_string` are now thin calls into this
+// that keep their own, differently-typed signatures so neither caller has to
+// learn about `AmigaVersion`.
+
+/// How far past `$VER:` `read_loose` looks — the one window both pieces
+/// below are read from, and the same 200 bytes `version_from_ver_string` and
+/// `program_name_from_ver_string` each read on their own before this task
+/// unified them.
+const LOOSE_SCAN_BYTES: usize = 200;
+
+/// What a `$VER:` marker states, read tolerant of a NUL run between the
+/// marker and the name. `name` and `version` are independent `Option`s
+/// rather than fused into one [`AmigaVersion`] — a marker can state either
+/// without the other.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LooseVersion {
+    /// The first token after the marker, once it is confirmed not to be a
+    /// version number, taken verbatim (`String::from_utf8_lossy`).
+    ///
+    /// Unlike [`read`], this does **not** reject a control byte: ASCII
+    /// control bytes (`0x00..=0x1F`, `0x7F`) are valid standalone UTF-8, so
+    /// nothing here fails to decode, and nothing here is rejected for
+    /// containing one — see
+    /// `driver_tests::control_bytes_in_the_name_are_returned_verbatim_not_rejected`
+    /// in `core::rdbedit`.
+    pub name: Option<String>,
+    /// The first `major.minor`-shaped token anywhere in the scanned window,
+    /// found by skipping past tokens that are not that shape — the program
+    /// name among them, so a name never has to come first for the version to
+    /// be found.
+    pub version: Option<(u16, u16)>,
+}
+
+/// Is `token` shaped like a version number rather than a name — the test
+/// [`read_loose`] uses to decide whether the token it is looking at could be
+/// the name at all (`$VER: 19.2 (1.1.26)` names no program).
+fn looks_like_version_token(token: &[u8]) -> bool {
+    token.first().is_some_and(u8::is_ascii_digit) && token.contains(&b'.')
+}
+
+/// The first `major.minor` token in `window`, skipping any that are not
+/// exactly that shape. A number too big for `u16` is passed over rather than
+/// truncated into a plausible-looking lie — `70000.1` is not `4464.1`.
+fn first_version_token(window: &[u8]) -> Option<(u16, u16)> {
+    for token in window.split(|b| b.is_ascii_whitespace() || *b == 0) {
+        let Some(dot) = token.iter().position(|b| *b == b'.') else {
+            continue;
+        };
+        let major = &token[..dot];
+        if major.is_empty() || !major.iter().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        // The revision runs until whatever punctuation follows it — `19.2,`
+        // and `19.2)` are both real.
+        let minor: Vec<u8> = token[dot + 1..]
+            .iter()
+            .copied()
+            .take_while(|b| b.is_ascii_digit())
+            .collect();
+        if minor.is_empty() {
+            continue;
+        }
+        let (Ok(major), Ok(minor)) = (
+            std::str::from_utf8(major).unwrap_or("x").parse::<u16>(),
+            std::str::from_utf8(&minor).unwrap_or("x").parse::<u16>(),
+        ) else {
+            continue;
+        };
+        return Some((major, minor));
+    }
+    None
+}
+
+/// Read the first `$VER:` marker in `data`, tolerant of a NUL run between
+/// the marker and the name (see the module note above `LOOSE_SCAN_BYTES`).
+pub fn read_loose(data: &[u8]) -> LooseVersion {
+    let mut result = LooseVersion::default();
+    let Some(at) = data.windows(MARKER.len()).position(|w| w == MARKER) else {
+        return result;
+    };
+    let start = at + MARKER.len();
+    let end = start.saturating_add(LOOSE_SCAN_BYTES).min(data.len());
+    let Some(window) = data.get(start..end) else {
+        return result;
+    };
+
+    // The first non-empty token: a name, unless it is shaped like a
+    // version, in which case this marker names no program (`program_name_
+    // from_ver_string`'s original rule — it does not keep looking for a
+    // name past a version-shaped first token).
+    if let Some(first) = window
+        .split(|b| b.is_ascii_whitespace() || *b == 0)
+        .find(|token| !token.is_empty())
+    {
+        if !looks_like_version_token(first) {
+            result.name = Some(String::from_utf8_lossy(first).into_owned());
+        }
+    }
+
+    // The version is looked for across the whole window, independently of
+    // where (or whether) a name was found — `version_from_ver_string`'s
+    // original rule.
+    result.version = first_version_token(window);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +481,24 @@ mod tests {
         bytes.extend_from_slice(&[0x01, 0x02, 0x03]);
         bytes.extend_from_slice(b" 12.34 (1.1.99)");
         assert!(read(&bytes).is_none());
+    }
+
+    /// **Item 4 of the third debt round, pinned before the unification.**
+    /// ART-117's driver embedding needs to read a name out of
+    /// `$VER:\0\0pfs3aio.device 4.1` (a NUL run between the marker and the
+    /// name — see `core::rdbedit::driver_tests`). `read`'s own
+    /// `is_plausible_name` rejects any control byte in the name, NUL
+    /// included, so the strict reader answers `None` here; that rejection
+    /// is exactly what every current caller of `read`
+    /// (`core::osinstall::collide::read_own_marker`,
+    /// `core::amigainstall::packagevol::stated_version`,
+    /// `core::osinstall::apply::read_stated_version`) relies on to reject
+    /// binary noise, and it is why `read` was kept separate from the
+    /// NUL-tolerant name reader rather than made to accept this shape too
+    /// (docs/ISSUES.md ART-117 M5).
+    #[test]
+    fn a_nul_run_before_the_name_is_rejected_by_the_strict_reader() {
+        assert!(read(b"$VER:\0\0pfs3aio 19.2 (2.10.18)").is_none());
     }
 
     /// The 31% figure the spec rests on, re-measurable rather than quoted.
@@ -508,5 +655,80 @@ mod tests {
     #[test]
     fn an_empty_name_answers_nothing() {
         assert_eq!(read_id_string(b"anything 1.2 (x)", ""), None);
+    }
+
+    // ---- read_loose (item 4 of the third debt round) -----------------------
+    //
+    // These mirror the characterization tests pinned against
+    // `core::rdb::version_from_ver_string` and
+    // `core::rdbedit::program_name_from_ver_string` before they became thin
+    // calls into this function — see `core::rdb::tests` and
+    // `core::rdbedit::driver_tests`, whose own tests exercise the thin
+    // wrappers and stayed green across the refactor.
+
+    #[test]
+    fn read_loose_reads_the_name_past_a_nul_run() {
+        let got = read_loose(b"$VER:\0\0pfs3aio.device 4.1");
+        assert_eq!(got.name.as_deref(), Some("pfs3aio.device"));
+        assert_eq!(got.version, Some((4, 1)));
+    }
+
+    #[test]
+    fn read_loose_keeps_control_bytes_in_the_name_verbatim() {
+        let got = read_loose(b"$VER: \x01\x02\x03 12.34 (1.1.99)");
+        assert_eq!(got.name.as_deref(), Some("\u{1}\u{2}\u{3}"));
+        assert_eq!(got.version, Some((12, 34)));
+    }
+
+    #[test]
+    fn read_loose_names_no_program_when_the_first_token_is_a_version() {
+        let got = read_loose(b"$VER: 19.2 (1.1.26)");
+        assert_eq!(got.name, None);
+        assert_eq!(got.version, Some((19, 2)));
+    }
+
+    #[test]
+    fn read_loose_finds_a_version_with_no_program_name() {
+        let got = read_loose(b"$VER: 44.5 (1.1.26)");
+        assert_eq!(got.name, None);
+        assert_eq!(got.version, Some((44, 5)));
+    }
+
+    #[test]
+    fn read_loose_tolerates_extra_whitespace() {
+        let got = read_loose(b"$VER:    pfs3aio    19.2   (2.10.18)");
+        assert_eq!(got.name.as_deref(), Some("pfs3aio"));
+        assert_eq!(got.version, Some((19, 2)));
+    }
+
+    #[test]
+    fn read_loose_answers_nothing_for_a_marker_that_states_neither() {
+        assert_eq!(read_loose(b"$VER:    "), LooseVersion::default());
+    }
+
+    #[test]
+    fn read_loose_answers_nothing_for_a_file_with_no_marker() {
+        assert_eq!(read_loose(&[0u8; 512]), LooseVersion::default());
+    }
+
+    /// The bound that keeps a hostile file from making this expensive —
+    /// `read`'s own `a_marker_followed_by_megabytes_of_digits_is_bounded`,
+    /// for the tolerant reader.
+    #[test]
+    fn read_loose_is_bounded_past_a_marker_followed_by_megabytes_of_digits() {
+        let mut bytes = b"$VER: thing 44.".to_vec();
+        bytes.extend(std::iter::repeat_n(b'9', 4 * 1024 * 1024));
+        let _ = read_loose(&bytes);
+    }
+
+    /// Every length from nothing to past the marker — `core::rdb`'s own
+    /// `the_search_does_not_run_off_the_end_of_a_short_file`, for the shared
+    /// reader.
+    #[test]
+    fn read_loose_does_not_run_off_the_end_of_a_short_file() {
+        let full = b"$VER: x 1.2";
+        for len in 0..=full.len() {
+            let _ = read_loose(&full[..len]);
+        }
     }
 }
