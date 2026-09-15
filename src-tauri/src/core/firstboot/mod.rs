@@ -83,6 +83,24 @@ impl WizardWindow {
     }
 }
 
+/// A window `90-prefs` opens in the foreground, so the whole boot waits in it
+/// (experiment 3: 4 of 4). ScreenMode runs detached and is not one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ForegroundWindow {
+    Locale,
+    Input,
+}
+
+impl ForegroundWindow {
+    pub fn amiga_name(self) -> &'static str {
+        match self {
+            Self::Locale => "Locale",
+            Self::Input => "Input",
+        }
+    }
+}
+
 /// `core::amigainstall::workvol::FAIL_AT`'s reason, verbatim (ART-188).
 pub const FAIL_AT: i64 = 2_000_000_000;
 

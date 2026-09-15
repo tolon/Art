@@ -469,6 +469,9 @@ mod tests {
                 ending: Ending::Unfinished,
                 fat_copy_failed: false,
                 reboot_requested_by: None,
+                reboot_unavailable: false,
+                restarted_after_request: false,
+                waiting_in: None,
                 unknown: Vec::new(),
             },
         };

@@ -9,6 +9,8 @@
 
 use serde::Serialize;
 
+use super::{ForegroundWindow, WIZARD_STEP};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirstBootReport {
@@ -18,6 +20,16 @@ pub struct FirstBootReport {
     pub ending: Ending,
     pub fat_copy_failed: bool,
     pub reboot_requested_by: Option<String>,
+    /// `reboot unavailable` after the latest request: the tree had no
+    /// `C:Reboot`, and the run carried on without restarting.
+    pub reboot_unavailable: bool,
+    /// A `system` line — a new boot — after the latest request that was not
+    /// unavailable. The request alone says a restart was asked for; only a
+    /// later boot says one happened.
+    pub restarted_after_request: bool,
+    /// The foreground window an unfinished `90-prefs` is waiting in: its last
+    /// `detail` is `opened Locale` or `opened Input`.
+    pub waiting_in: Option<ForegroundWindow>,
     pub unknown: Vec<String>,
 }
 
@@ -83,6 +95,9 @@ pub fn parse(text: &str) -> FirstBootReport {
         ending: Ending::NotBooted,
         fat_copy_failed: false,
         reboot_requested_by: None,
+        reboot_unavailable: false,
+        restarted_after_request: false,
+        waiting_in: None,
         unknown: Vec::new(),
     };
     let mut saw_text = false;
@@ -104,6 +119,9 @@ pub fn parse(text: &str) -> FirstBootReport {
                     rpi: rpi.to_string(),
                     kick,
                 });
+                if report.reboot_requested_by.is_some() && !report.reboot_unavailable {
+                    report.restarted_after_request = true;
+                }
             }
             ["step", name, "started"] => {
                 report.steps.push(StepReport {
@@ -150,7 +168,10 @@ pub fn parse(text: &str) -> FirstBootReport {
             }
             ["reboot", "requested", "by", name] => {
                 report.reboot_requested_by = Some(name.to_string());
+                report.reboot_unavailable = false;
+                report.restarted_after_request = false;
             }
+            ["reboot", "unavailable"] => report.reboot_unavailable = true,
             ["done", "all"] => done = Some(Ending::DoneAll),
             ["done", "partial"] => done = Some(Ending::DonePartial),
             ["copy-to-fat", "failed"] => report.fat_copy_failed = true,
@@ -163,6 +184,7 @@ pub fn parse(text: &str) -> FirstBootReport {
         (true, None) => Ending::Unfinished,
         (true, Some(ending)) => ending,
     };
+    report.waiting_in = waiting_in(&report);
     report
 }
 
@@ -172,9 +194,23 @@ fn step_named<'a>(report: &'a mut FirstBootReport, name: &str) -> Option<&'a mut
     report.steps.iter_mut().rev().find(|s| s.name == name)
 }
 
+/// See [`FirstBootReport::waiting_in`]. The words are the script's own, built
+/// from [`ForegroundWindow::amiga_name`] rather than copied here.
+fn waiting_in(report: &FirstBootReport) -> Option<ForegroundWindow> {
+    let step = report.steps.iter().rev().find(|s| s.name == WIZARD_STEP)?;
+    if step.outcome != StepOutcome::Unfinished {
+        return None;
+    }
+    let last = step.details.last()?;
+    [ForegroundWindow::Locale, ForegroundWindow::Input]
+        .into_iter()
+        .find(|window| *last == format!("opened {}", window.amiga_name()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::firstboot::ForegroundWindow;
 
     const FULL: &str = "art-firstboot 1\nsystem PiStorm RPi4 kick 3.2\nstep 10-hardware started\nstep 10-hardware detail sd0-mounted RPi4\nstep 10-hardware ok\nstep 20-aux started\nstep 20-aux skipped not-3.9\nstep 20-aux ok\nstep 50-pkg-boingbag-39-1 started\nstep 50-pkg-boingbag-39-1 refused rc=20\nstep 90-prefs started\nstep 90-prefs ok\nreboot requested by 90-prefs\ndone partial\n";
 
@@ -268,11 +304,96 @@ mod tests {
         assert_eq!(json["steps"][2]["outcome"]["rc"], 20);
         assert_eq!(json["rebootRequestedBy"], "90-prefs");
         assert_eq!(json["fatCopyFailed"], false);
+        assert_eq!(json["rebootUnavailable"], false);
+        assert_eq!(json["restartedAfterRequest"], false);
+        assert!(json["waitingIn"].is_null());
+        let waiting =
+            parse("art-firstboot 1\nstep 90-prefs started\nstep 90-prefs detail opened Locale\n");
+        assert_eq!(
+            serde_json::to_value(&waiting).unwrap()["waitingIn"],
+            "locale"
+        );
     }
 
     #[test]
     fn an_outcome_without_a_start_is_unknown() {
         let r = parse("art-firstboot 1\nstep x ok\ndone all\n");
         assert_eq!(r.unknown, vec!["step x ok".to_string()]);
+    }
+
+    /// Design §6: today this line would fall into `unknown`.
+    #[test]
+    fn reboot_unavailable_is_its_own_flag_and_the_run_carries_on() {
+        let r = parse("art-firstboot 1\nsystem UAE none kick 3.9\nstep 15-probe started\nstep 15-probe ok\nreboot requested by 15-probe\nreboot unavailable\nstep 20-aux started\nstep 20-aux skipped uae\nstep 20-aux ok\ndone all\n");
+        assert!(r.reboot_unavailable);
+        assert!(!r.restarted_after_request);
+        assert_eq!(r.reboot_requested_by.as_deref(), Some("15-probe"));
+        assert!(r.unknown.is_empty(), "{:?}", r.unknown);
+        assert_eq!(r.ending, Ending::DoneAll);
+    }
+
+    /// Design §6: a log spanning boots is read with the latest step of a name
+    /// and the latest `done` — a test, not a change.
+    #[test]
+    fn a_log_spanning_three_boots_reads_the_latest_step_and_the_latest_done() {
+        let r = parse("art-firstboot 1\nsystem UAE none kick 3.2\nstep 10-hardware started\nstep 10-hardware ok\nstep 15-probe started\nstep 15-probe ok\nreboot requested by 15-probe\nsystem UAE none kick 3.2\nstep 20-aux started\nstep 20-aux refused rc=20\ndone partial\nsystem UAE none kick 3.2\nstep 20-aux started\nstep 20-aux skipped uae\nstep 20-aux ok\ndone all\n");
+        let names: Vec<&str> = r.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["10-hardware", "15-probe", "20-aux", "20-aux"]);
+        assert_eq!(r.steps[2].outcome, StepOutcome::Refused { rc: 20 });
+        assert_eq!(
+            r.steps[3].outcome,
+            StepOutcome::Skipped {
+                reason: "uae".into()
+            }
+        );
+        assert_eq!(r.ending, Ending::DoneAll);
+        assert!(r.restarted_after_request);
+        assert!(!r.reboot_unavailable);
+    }
+
+    /// Asked for, and the log stops: neither restarted nor unavailable — a
+    /// third thing, which the screen says as a third sentence.
+    #[test]
+    fn a_request_the_log_does_not_show_coming_back_is_neither_restarted_nor_unavailable() {
+        let r = parse("art-firstboot 1\nsystem UAE none kick 3.2\nstep 15-probe started\nstep 15-probe ok\nreboot requested by 15-probe\n");
+        assert_eq!(r.reboot_requested_by.as_deref(), Some("15-probe"));
+        assert!(!r.restarted_after_request);
+        assert!(!r.reboot_unavailable);
+        assert_eq!(r.ending, Ending::Unfinished);
+    }
+
+    #[test]
+    fn a_later_request_replaces_what_an_earlier_one_said() {
+        let r = parse("art-firstboot 1\nsystem UAE none kick 3.9\nreboot requested by a\nreboot unavailable\nsystem UAE none kick 3.9\nreboot requested by b\nsystem UAE none kick 3.9\n");
+        assert_eq!(r.reboot_requested_by.as_deref(), Some("b"));
+        assert!(!r.reboot_unavailable);
+        assert!(r.restarted_after_request);
+    }
+
+    #[test]
+    fn waiting_in_names_only_a_foreground_window_that_is_the_wizards_last_word() {
+        let head = "art-firstboot 1\nsystem UAE none kick 3.2\nstep 90-prefs started\n";
+        let at = |tail: &str| parse(&format!("{head}{tail}")).waiting_in;
+        assert_eq!(
+            at("step 90-prefs detail opened Locale\n"),
+            Some(ForegroundWindow::Locale)
+        );
+        assert_eq!(
+            at("step 90-prefs detail opened Locale\nstep 90-prefs detail opened Input\n"),
+            Some(ForegroundWindow::Input)
+        );
+        assert_eq!(
+            at("step 90-prefs detail opened Locale\nstep 90-prefs detail not-asked Input\nstep 90-prefs detail opened ScreenMode\n"),
+            None,
+            "ScreenMode runs detached and holds nothing"
+        );
+        assert_eq!(
+            at("step 90-prefs detail opened Locale\nstep 90-prefs ok\n"),
+            None
+        );
+        assert_eq!(
+            parse("art-firstboot 1\nstep 10-hardware started\n").waiting_in,
+            None
+        );
     }
 }
