@@ -79,20 +79,6 @@ owner has also read the Workbench menus of a Turkish tree ART built, which is
 a different claim — that is AmigaOS rendering ART's *output*, not ART's own
 interface.)
 
-**ART-321** 🔵 **`mbr_slot_of` can name the wrong MBR slot when an earlier Amiga area is unreadable** — *found 2026-09-14 by the final whole-branch review of `art-debt-2-0914` (`.superpowers/sdd/2026-09-14-art-117-rdb-embed/final-review.md`, M12), by reading; not fixed*
-`src-tauri/src/core/preload/mod.rs::mbr_slot_of` · `mbr_slot_of(card, area_index)` indexes `mbr.amiga_areas()` —
-every `0x76` MBR entry — with an index into `card.areas`. But `read_card` (`src-tauri/src/core/card/mod.rs`) skips
-an area it cannot read, so `card.areas` can be shorter than `amiga_areas()`: when an earlier `0x76` area is
-unreadable, every later area's index shifts by one, and `mbr_slot_of` names the slot of the area before it.
-**What it reaches:** `plan()` puts that slot into the `FormatPartition` and `CopyIn` steps (the format path predates
-ART-117) and, since ART-117, into a replace's target slot. The RDB edit itself cannot write the wrong area:
-`core/preload/embed.rs::area_offset_for` accepts a slot only when its start is one of `card.areas`' own readable
-offsets, so a wrong slot there becomes a refusal — a wrong-slot plan note — never a wrong write (the reviewer's
-reading, re-read for this entry). How the format and copy steps resolve a wrong slot was **not** re-read for this
-entry. **Found by reading, not by a test or an experiment:** no card with an unreadable leading `0x76` area has been
-built to show it. Direction, not designed: carry each area's MBR slot on the area when `read_card` builds it,
-rather than re-deriving it by position.
-
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -111,6 +97,33 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-321** 🔵 ✅ **`mbr_slot_of` could name the wrong MBR slot when an earlier Amiga area is unreadable — fixed by carrying each area's own slot** — *found 2026-09-14 by the final whole-branch review of `art-debt-2-0914` (`.superpowers/sdd/2026-09-14-art-117-rdb-embed/final-review.md`, M12), by reading; fixed 2026-09-15 on `art-debt-3-0915`, item 1 of the third debt round*
+`src-tauri/src/core/preload/mod.rs::mbr_slot_of(card, area_index)` indexed `mbr.amiga_areas()` — every `0x76` MBR
+entry — with an index into `card.areas`. But `read_card` (`src-tauri/src/core/card/mod.rs`) skips an area it cannot
+read, so `card.areas` could be shorter than `amiga_areas()`: when an earlier `0x76` area was unreadable, every later
+area's index shifted by one, and `mbr_slot_of` named the slot of the area before it — reaching the `FormatPartition`
+and `CopyIn` steps (the format path predates ART-117) and, since ART-117, a replace's target slot. **Fixed by
+carrying the slot instead of re-deriving it.** `AmigaArea` (`core/card/mod.rs`) gained `mbr_slot: Option<usize>`, set
+in `read_card_from` from the same MBR entry the area's own base came from — so the slot survives an earlier area
+being skipped, by construction rather than by a second pass over the table. `core/preload/mod.rs`'s two call sites
+(the per-partition MBR slot and a replace's `target_slot`) now read `area.mbr_slot` directly; `mbr_slot_of` became
+redundant once both callers held the area itself and was removed. `native.rs::area_for_slot` already resolved a
+slot back to an area by matching MBR offsets against `card.areas`, and `embed::area_offset_for` already refused a
+slot whose offset was not one of `card.areas`' own — both unchanged, and both now see the correct slot. TDD:
+`core::preload::tests::a_format_uses_the_readable_areas_own_mbr_slot_when_an_earlier_area_is_unreadable` builds a
+card with two `0x76` areas, the first left zeroed (no `RDSK`, unreadable) and the second a real `DOS\0` partition,
+and plans a format on it — red before the fix (`left: slot Some(2), right: slot Some(3)`, i.e. named the unreadable
+first area's own slot instead of the readable second area's), green after. Mutation: reverting both call sites in
+`core/preload/mod.rs` to a position-derived slot (the pre-fix `mbr_slot_of`, backed up to
+`D:\Projeler\Amiga\scratch-0913\art321-preload-mod.rs.bak`, grep-confirmed) reproduced the identical red line;
+restored via `shutil.copyfile`, green again. `AmigaArea`'s only constructor is in `read_card_from`; the frontend's
+`AmigaArea` TS type gained the matching `mbr_slot: number | null` field, and every test fixture that builds one
+(`src/lib/card.test.ts`, `src/lib/preload.test.ts`, `src/pages/HardDiskStudio.test.tsx`,
+`src/components/osbuilder/VolumePreload.test.tsx`) was updated; `pnpm lint` clean. `cd src-tauri && cargo test --lib
+core::preload` and `core::card` both green (141 and 115 passed); fmt and clippy clean; `cargo test --lib` (once):
+`test result: ok. 3422 passed; 0 failed; 60 ignored; 0 measured; 0 filtered out` (361.85 s, `TMP`/`TEMP` on `E:`);
+`scripts/scratch-guard-sweep.py` clean.
 
 **ART-320** 🔵 ✅ **`cargo test` forced `TMP`/`TEMP` onto `D:`, against the owner's own rule — moved to `E:`, CI overrides it with the runner's own temp directory** — *found 2026-09-14, Task 12 of `.superpowers/sdd/2026-09-14-art-117-rdb-embed/`, verifying ART-117's records; fixed 2026-09-14 on `art-debt-2-0914`, brief `.superpowers/sdd/2026-09-14-art-117-rdb-embed/tmp-fix-brief.md`*
 `src-tauri/.cargo/config.toml`'s `[env]` now forces `TMP`/`TEMP` to
