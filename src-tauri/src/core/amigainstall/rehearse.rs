@@ -242,11 +242,10 @@ fn poll(
             return Ok(RehearsalOutcome::TimedOut { waited, report });
         }
 
-        let so_far = report.steps.len();
         sink.report(
             waited.as_secs(),
             deadline_secs(&request.limits),
-            &format!("Waiting for the Amiga — {so_far} steps reported so far"),
+            &waiting_message(&report),
         );
         clock.sleep(request.limits.poll_interval);
     }
@@ -264,9 +263,29 @@ fn read_report(path: &Path) -> CoreResult<FirstBootReport> {
     }
 }
 
+/// The job bar's line while the poll waits. A foreground Preferences window
+/// holds the whole boot until a person answers it (experiment 3), so a wizard
+/// rehearsal names that window rather than counting steps that will not move.
+/// English, like every `sink.report` message: the job bar shows it as it is.
+fn waiting_message(report: &FirstBootReport) -> String {
+    match report.waiting_in {
+        Some(window) => format!(
+            "The Amiga is waiting for you in the {} window — answer it in the WinUAE window",
+            window.amiga_name()
+        ),
+        None => format!(
+            "Waiting for the Amiga — {} steps reported so far",
+            report.steps.len()
+        ),
+    }
+}
+
 /// `done` is the only ending the Amiga writes; which of the two outcomes it
 /// is comes from whether any step refused, not from the `all`/`partial` word
-/// alone — a `partial` with no refusal is a reboot request, phase 3's case.
+/// alone. **A reboot is not an ending** (first-boot phase 3 design §7): the
+/// step wrapper carries it out, WinUAE keeps the same process and the same
+/// directory mount across it (measured 2026-09-15, 18 of 18), and the log
+/// simply continues on the next boot — so the poll goes on until `done`.
 fn finished(report: &FirstBootReport) -> Option<RehearsalOutcome> {
     match report.ending {
         Ending::DoneAll | Ending::DonePartial => {
@@ -293,6 +312,7 @@ mod tests {
     use super::super::run::fakes::{CancelAfter, FakeLauncher, TestClock};
     use super::super::run::GrowthCeiling;
     use super::*;
+    use crate::core::firstboot::ForegroundWindow;
     use crate::core::jobs::NoProgress;
     use crate::core::profile::AmigaProfile;
     use crate::core::ScratchDir;
@@ -622,5 +642,139 @@ mod tests {
 
         assert!(matches!(err, CoreError::Cancelled));
         assert_eq!(launcher.launches(), 0);
+    }
+
+    /// What the job bar was told, in order.
+    #[derive(Default)]
+    struct Said(std::sync::Mutex<Vec<String>>);
+
+    impl ProgressSink for Said {
+        fn report(&self, _done: u64, _total: Option<u64>, message: &str) {
+            self.0.lock().unwrap().push(message.to_string());
+        }
+        fn is_cancelled(&self) -> bool {
+            false
+        }
+    }
+
+    /// Design §7 and experiment 2 (18 of 18): the same WinUAE process and the
+    /// same directory mount carry on across a guest reboot, so a reboot is a
+    /// mid-run event and the poll goes on to the next boot's `done`.
+    #[test]
+    fn a_reboot_mid_run_is_not_an_ending_and_the_next_boots_done_all_finishes() {
+        let profile = AmigaProfile::a1200_aga();
+        let d = copy_with_report(
+            "reboot",
+            "art-firstboot 1\nsystem UAE none kick 3.2\nstep 10-hardware started\nstep 10-hardware skipped uae\nstep 10-hardware ok\nstep 15-probe started\nstep 15-probe ok\nreboot requested by 15-probe\n",
+        );
+        let rom = d.join("kick.rom");
+        fs::write(&rom, vec![0u8; 16]).unwrap();
+        let mut req = request(d.path(), d.path(), &profile, &rom);
+        req.limits = RunLimits {
+            deadline: Duration::from_secs(60),
+            poll_interval: Duration::from_secs(2),
+            ..RunLimits::default()
+        };
+        let log = d.join("S/FirstBoot.log");
+        let clock = TestClock::new(move |n| {
+            if n == 2 {
+                let mut text = fs::read_to_string(&log).unwrap();
+                text.push_str("system UAE none kick 3.2\nstep 20-aux started\nstep 20-aux skipped uae\nstep 20-aux ok\ndone all\n");
+                fs::write(&log, text).unwrap();
+            }
+        });
+        let launcher = FakeLauncher::running_forever();
+
+        let outcome = rehearse_with(&req, &launcher, &clock, &NoProgress).unwrap();
+
+        match outcome {
+            RehearsalOutcome::Finished { report } => {
+                assert_eq!(report.ending, Ending::DoneAll);
+                assert_eq!(report.reboot_requested_by.as_deref(), Some("15-probe"));
+                assert!(report.restarted_after_request);
+            }
+            other => panic!("a reboot is a mid-run event, got {other:?}"),
+        }
+        assert_eq!(clock.sleeps(), 2, "the poll carried on through the reboot");
+        assert_eq!(launcher.log.terminated.lock().unwrap().as_slice(), &[4242]);
+    }
+
+    /// Design §7: a wizard rehearsal is interactive; the job bar names the
+    /// window the boot is holding in, and the deadline carries that report.
+    #[test]
+    fn a_wizard_waiting_in_locale_is_named_while_polling_and_at_the_deadline() {
+        let profile = AmigaProfile::a1200_aga();
+        let d = copy_with_report(
+            "locale",
+            "art-firstboot 1\nsystem UAE none kick 3.2\nstep 90-prefs started\nstep 90-prefs detail opened Locale\n",
+        );
+        let rom = d.join("kick.rom");
+        fs::write(&rom, vec![0u8; 16]).unwrap();
+        let mut req = request(d.path(), d.path(), &profile, &rom);
+        req.limits = RunLimits {
+            deadline: Duration::from_secs(2),
+            poll_interval: Duration::from_secs(1),
+            ..RunLimits::default()
+        };
+        let said = Said::default();
+
+        let outcome = rehearse_with(
+            &req,
+            &FakeLauncher::running_forever(),
+            &TestClock::idle(),
+            &said,
+        )
+        .unwrap();
+
+        match outcome {
+            RehearsalOutcome::TimedOut { report, .. } => {
+                assert_eq!(report.waiting_in, Some(ForegroundWindow::Locale))
+            }
+            other => panic!("expected the deadline, got {other:?}"),
+        }
+        let lines = said.0.lock().unwrap();
+        assert!(
+            lines.iter().any(|l| l
+                == "The Amiga is waiting for you in the Locale window — answer it in the WinUAE window"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("steps reported so far")),
+            "{lines:?}"
+        );
+    }
+
+    /// The control: with no window open the line still counts steps.
+    #[test]
+    fn a_rehearsal_with_no_window_open_counts_steps_as_before() {
+        let profile = AmigaProfile::a1200_aga();
+        let d = copy_with_report("no-window", "art-firstboot 1\nstep 10-hardware started\n");
+        let rom = d.join("kick.rom");
+        fs::write(&rom, vec![0u8; 16]).unwrap();
+        let mut req = request(d.path(), d.path(), &profile, &rom);
+        req.limits = RunLimits {
+            deadline: Duration::from_secs(2),
+            poll_interval: Duration::from_secs(1),
+            ..RunLimits::default()
+        };
+        let said = Said::default();
+        rehearse_with(
+            &req,
+            &FakeLauncher::running_forever(),
+            &TestClock::idle(),
+            &said,
+        )
+        .unwrap();
+        let lines = said.0.lock().unwrap();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l == "Waiting for the Amiga — 1 steps reported so far"),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("waiting for you")),
+            "{lines:?}"
+        );
     }
 }
