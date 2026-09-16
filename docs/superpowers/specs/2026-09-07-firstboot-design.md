@@ -439,6 +439,13 @@ depth), and the Amiga decides. `AskPrefs` became one tick,
 
 ## 6. Package actions (family C)
 
+*Corrected 2026-09-16, before phase 4 was planned: this section's three packages were checked against the tree
+and two no longer need the Amiga. BoingBag 3.9-1 and 3.9-2 are placed from Windows since ART-166's fix
+(2026-09-08), and the Turkish locale's `türkçe` drawer is host-placed correctly since ART-168's fix (2026-08-20;
+`locale-39-turkish.json`). What still has a `host_placement_block` is `boingbags-39-3-4` (`needs-installer-script`)
+and `euro-update` (`needs-fixfonts`), so phase 4 is narrowed to those two and waits; the owner put the one-button
+card's round 2 first. The text below is the design as written.*
+
 ### 6.1 Declared in the recipe, as data
 
 ```json

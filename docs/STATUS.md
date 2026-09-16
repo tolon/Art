@@ -348,10 +348,13 @@ silently — reachable only on a damaged card.
 (2026-09-15, 22 min; the Node 24 action majors ran on `windows-latest`), and `release.yml`'s, release run
 34969262720 on `v0.9.4`, completed `success` and attached one NSIS and one MSI.
 
-**0.9.4 is released** (2026-09-15, published on the owner's word). **Next**, on the owner's word (2026-09-16): first
-boot's phase 4, packages (design § 11 item 4 — `unpack` first, then `run`); round 2 of the one-button card
-(`core/card/content.rs`, its own plan) after it. Phase 3 is merged and awaits only the owner's closing measurement
-(Task 12).
+**0.9.4 is released** (2026-09-15, published on the owner's word). **Next**, on the owner's word (2026-09-16): round 2 of the one-button card
+(`core/card/content.rs`, its own plan). First boot's phase 4 was checked against the tree first and **most of its
+reason had gone**: its `run` of BoingBag 3.9-1/3.9-2 is superseded by ART-166's fix (both placed from Windows since
+2026-09-08), and its `unpack` of the Turkish locale by ART-168's (names decoded as Latin-1 since 2026-08-20;
+`locale-39-turkish` is host-placed). What is still Amiga-only is `boingbags-39-3-4` (`needs-installer-script`, its
+`Install` unmeasured) and `euro-update` (`needs-fixfonts`); phase 4 waits, narrowed to those two. Phase 3 is merged
+and awaits only the owner's closing measurement (Task 12).
 
 **Still owed by a person** (each as last recorded; none is code):
 
@@ -397,7 +400,8 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
   `10-hardware`/`20-aux`/`30-datatypes` steps, the `S/FirstBoot.log` report,
   reading that report back off a card's FAT, FFS or PFS3), and phase 3 — the
   wizard and the reboot — merged 2026-09-16 and awaiting the owner's
-  hand-answered rehearsal. Phase 4 (packages) is not built; the Pi3/Pi4 branch of `10-hardware` is unmeasured because it needs
+  hand-answered rehearsal. Phase 4 (packages) is not built and is narrowed to
+  `boingbags-39-3-4` and `euro-update` (2026-09-16); the Pi3/Pi4 branch of `10-hardware` is unmeasured because it needs
   a real card.
 - **Aminet and the package catalogue** — Stage A and Stage B are both built
   and tested, catalogue sync through install-to-HDF and the update view. The
@@ -406,8 +410,8 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
 - **The Emu68 Hatcher intake** (`rootrootde/emu68hatcher`, MIT) — scoped at six
   rounds of taking what is worth taking. Five have landed on `main`: prefs and
   wallpaper (1), drawer icons (2), refusal evidence (3), media identification
-  by hash (4), and first boot phases 1–3 (5). Round 5's own phase 4 is the next
-  code work; the one-button card's round 2 follows it.
+  by hash (4), and first boot phases 1–3 (5). Round 5's own phase 4 waits, narrowed;
+  the one-button card's round 2 is the next code work.
 - **The 2026-09-04 work list**
   ([superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md))
   — items 3, 5 and 7 are closed. **Every item left on it is the owner's**:
