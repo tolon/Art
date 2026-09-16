@@ -85,11 +85,11 @@ pub struct CopySummary {
     pub directories: u64,
     pub bytes: Option<u64>,
     /// ART-116: how many entries carried a `.uaem` comment that could not be
-    /// written. Always `0` on the FFS branch, whose own writer (`FileMeta`)
-    /// does carry a comment through; only `native::copy_in_pfs3` ever
-    /// increments this, because `libpfs3` 0.1.3 exposes no setter for one.
-    /// Not a refusal — information the caller can choose to say something
-    /// about, same as `dates_lost`.
+    /// written. Not a refusal — information the caller can choose to say
+    /// something about, same as `dates_lost`. Since card round 2 (ART-335,
+    /// ART-337) `NativeFormatter` writes a sidecar's comment and date on both
+    /// PFS3 and FFS, so no path increments it; the field stays for callers
+    /// that still read it.
     #[serde(default)]
     pub comments_lost: u64,
     /// The same, for a `.uaem` date. See `comments_lost`.
