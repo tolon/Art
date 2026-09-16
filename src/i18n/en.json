@@ -3115,7 +3115,7 @@
       },
       "reboot": {
         "restarted": "{{step}} asked for a restart, and the Amiga restarted.",
-        "unavailable": "{{step}} asked for a restart, and this Amiga has no command for it — restart it yourself to finish.",
+        "unavailable": "A step asked for a restart. This Amiga has no restart command, so what that step set up may not take effect until you restart the machine yourself.",
         "pending": "{{step}} asked for a restart; the log does not show the Amiga coming back up yet."
       }
     },

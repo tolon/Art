@@ -61,6 +61,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Phase, PhaseEnding, PhaseReport } from "@/lib/buildRun";
+import { firstBootAsksPrefs } from "@/lib/buildSession";
 import { firstbootWrite } from "@/lib/firstboot";
 import {
   awaitJobResult,
@@ -275,7 +276,7 @@ export function useBuildRun(args: BuildRunArgs): BuildRun {
           case "firstboot": {
             // The second tick rides on the phase (`sequenceFor`); absent
             // means ticked, the session's own rule.
-            const written = await firstbootWrite(destination, phase.askPrefs ?? true);
+            const written = await firstbootWrite(destination, firstBootAsksPrefs(phase.askPrefs));
             if (mounted.current) argsRef.current.onFirstBootWritten();
             return { state: "succeeded", outcome: written, elapsedMs: performance.now() - startedAt };
           }

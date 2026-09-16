@@ -52,6 +52,7 @@ import { useTranslation } from "react-i18next";
 
 import { slotOverrides } from "@/lib/amigainstall";
 import { folderOf, type SequenceInputs } from "@/lib/buildRun";
+import { firstBootAsksPrefs } from "@/lib/buildSession";
 import { chainLines, choiceRowState, type ChainLine } from "@/lib/chain";
 import {
   fatMountPhrase,
@@ -533,8 +534,9 @@ export function ChoiceTab() {
   const [firstbootReboot, setFirstbootReboot] = useState<RebootCommand | null>(null);
   const [firstbootWizard, setFirstbootWizard] = useState<WizardPlan | null>(null);
   const firstbootWanted = session.firstboot.wanted ?? true;
-  /** The second tick (first-boot phase 3 design §5): absent means ticked. */
-  const askPrefs = session.firstboot.askPrefs ?? true;
+  /** The second tick (first-boot phase 3 design §5): absent means ticked,
+   *  through the session's own helper so the rule has one home. */
+  const askPrefs = firstBootAsksPrefs(session.firstboot.askPrefs);
   useEffect(() => {
     if (!treeSettled) return;
     const forget = () => {

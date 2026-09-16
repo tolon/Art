@@ -9,6 +9,7 @@ use super::{WizardWindow, WIZARD_PATH, WIZARD_STEP};
 use crate::core::amigaprefs::env;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::osinstall::plan::KEYMAP_SELECTION;
+use crate::core::osinstall::resolve_ci_optional;
 use crate::core::osinstall::startup::has_block;
 
 #[derive(Debug, Clone)]
@@ -149,7 +150,7 @@ pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
     };
     let input_set_by_art = keymap_block_present(tree)?;
     let wizard = if request.ask_prefs {
-        Some(wizard_rows(tree, input_set_by_art))
+        Some(wizard_rows(tree, input_set_by_art)?)
     } else {
         None
     };
@@ -223,26 +224,38 @@ fn keymap_block_present(tree: &Path) -> CoreResult<bool> {
 /// The rows `90-prefs` will act on, decided in the script's own order: a
 /// window ART set is not asked whether or not its editor exists; otherwise an
 /// editor that is there is asked, and one that is not is missing.
-fn wizard_rows(tree: &Path, input_set_by_art: bool) -> WizardPlan {
-    let rows = WizardWindow::ALL
-        .iter()
-        .map(|&window| {
-            let set_by_art = match window {
-                WizardWindow::Locale => false,
-                WizardWindow::Input => input_set_by_art,
-                WizardWindow::ScreenMode => tree.join(env::ART_SET_SCREENMODE_PATH).is_file(),
-            };
-            let state = if set_by_art {
-                WindowState::SetByArt
-            } else if tree.join("Prefs").join(window.amiga_name()).is_file() {
-                WindowState::Ask
-            } else {
-                WindowState::Missing
-            };
-            WizardRow { window, state }
-        })
-        .collect();
-    WizardPlan { rows }
+/// Whether a tree-relative path is a file, resolved the way AmigaDOS reads a
+/// name (M6, final review).
+///
+/// The rows used to ask `tree.join(..).is_file()`, which is the *host's*
+/// answer to a question `90-prefs` asks case-insensitively: `IF EXISTS
+/// SYS:Prefs/Locale` finds a drawer entry named `locale`, and a real tree's
+/// case is whatever the material shipped. NTFS happens to agree, so nothing
+/// was wrong on the only supported host — but `core/` is meant to be
+/// promotable to a standalone crate, and `core::appearance` already resolves
+/// this very drawer through [`resolve_ci_optional`]. One answer, one helper.
+fn file_present_ci(tree: &Path, rel: &str) -> CoreResult<bool> {
+    Ok(resolve_ci_optional(tree, rel)?.is_some_and(|path| path.is_file()))
+}
+
+fn wizard_rows(tree: &Path, input_set_by_art: bool) -> CoreResult<WizardPlan> {
+    let mut rows = Vec::with_capacity(WizardWindow::ALL.len());
+    for window in WizardWindow::ALL {
+        let set_by_art = match window {
+            WizardWindow::Locale => false,
+            WizardWindow::Input => input_set_by_art,
+            WizardWindow::ScreenMode => file_present_ci(tree, env::ART_SET_SCREENMODE_PATH)?,
+        };
+        let state = if set_by_art {
+            WindowState::SetByArt
+        } else if file_present_ci(tree, &format!("Prefs/{}", window.amiga_name()))? {
+            WindowState::Ask
+        } else {
+            WindowState::Missing
+        };
+        rows.push(WizardRow { window, state });
+    }
+    Ok(WizardPlan { rows })
 }
 
 #[cfg(test)]
@@ -521,6 +534,29 @@ mod tests {
             [
                 (WizardWindow::Locale, WindowState::Ask),
                 (WizardWindow::Input, WindowState::Missing),
+                (WizardWindow::ScreenMode, WindowState::SetByArt),
+            ]
+        );
+    }
+
+    /// **M6 (final review).** AmigaDOS names are case-insensitive and a real
+    /// tree's drawer is whatever case the material shipped, so an editor
+    /// named `locale` is the same editor and a marker named
+    /// `art_set_screenmode` is the same marker — `90-prefs` asks both with
+    /// AmigaDOS's own case-insensitive `IF EXISTS`. The rows go through
+    /// `core::osinstall::resolve_ci_optional`, the resolution Appearance
+    /// already uses, rather than a literal `is_file()`.
+    #[test]
+    fn an_editor_and_a_marker_in_another_case_are_the_same_editor_and_marker() {
+        let d = tree("case-folded");
+        editors(&d, &["locale", "INPUT"]);
+        fs::create_dir_all(d.join("prefs/env-archive")).unwrap();
+        fs::write(d.join("prefs/env-archive/art_set_screenmode"), b"TRUE").unwrap();
+        assert_eq!(
+            rows(&asked(&d)),
+            [
+                (WizardWindow::Locale, WindowState::Ask),
+                (WizardWindow::Input, WindowState::Ask),
                 (WizardWindow::ScreenMode, WindowState::SetByArt),
             ]
         );

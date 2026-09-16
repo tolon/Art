@@ -778,11 +778,19 @@ pub fn apply_appearance_with(
         // The marker, with no cancellation check before it: a depth written
         // without its marker would have the Amiga ask a question ART already
         // answered. Never removed afterwards — a depth ART wrote stays written.
+        //
+        // `BackupPolicy::NONE`, unlike the prefs file above it (M4, final
+        // review): the marker is ART's own generated flag, four bytes it
+        // wrote itself, not a file a person edits — so a generation of it is
+        // worth nothing, and `CONFIG` fanned a `.art-backup` drawer into
+        // `Prefs/Env-Archive/` on the second apply and had the panel count
+        // two backups for one depth change. The same question the icon
+        // writes below answer the same way.
         let message = plan.marker.display().to_string();
         commit_write(
             plan.marker,
             &plan.marker_bytes,
-            BackupPolicy::CONFIG,
+            BackupPolicy::NONE,
             &mut committed,
         )?;
         done += 1;
@@ -1374,6 +1382,34 @@ mod tests {
         apply_appearance_with(&tree, &depth_only(Some(8)), &sink)
             .expect("the one check before the depth passes; nothing else asks");
         assert!(screenmode_marker_path(&tree).is_file());
+    }
+
+    /// **M4 (final review, first-boot phase 3).** The marker is ART's own
+    /// generated flag, not a file a person edits: applying a depth twice used
+    /// to keep a backup generation of a four-byte `TRUE` beside it, and the
+    /// Appearance panel then counted two backups for one depth change. The
+    /// prefs file beside it is a user's own and still takes one.
+    #[test]
+    fn applying_a_depth_twice_backs_up_the_prefs_file_and_not_the_marker() {
+        let (_scratch, tree) = build_tree("screen-marker-twice");
+        apply_appearance(&tree, &depth_only(Some(8))).unwrap();
+        let outcome = apply_appearance(&tree, &depth_only(Some(4))).unwrap();
+        assert!(
+            outcome
+                .backups
+                .iter()
+                .any(|p| p.to_string_lossy().contains("ScreenMode.prefs")),
+            "the user's own prefs file is still backed up: {:?}",
+            outcome.backups
+        );
+        assert!(
+            !outcome
+                .backups
+                .iter()
+                .any(|p| p.to_string_lossy().contains(env::ART_SET_SCREENMODE)),
+            "ART's own marker takes no backup: {:?}",
+            outcome.backups
+        );
     }
 
     #[test]

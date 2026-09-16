@@ -3115,7 +3115,7 @@
       },
       "reboot": {
         "restarted": "{{step}} yeniden başlatma istedi ve Amiga yeniden başladı.",
-        "unavailable": "{{step}} yeniden başlatma istedi, ama bu Amiga'da bunun için komut yok — bitirmek için onu kendiniz yeniden başlatın.",
+        "unavailable": "Bir adım yeniden başlatma istedi. Bu Amiga'da yeniden başlatma komutu yok; o adımın hazırladığı şey siz makineyi yeniden başlatana kadar etkili olmayabilir.",
         "pending": "{{step}} yeniden başlatma istedi; günlük Amiga'nın yeniden açıldığını henüz göstermiyor."
       }
     },

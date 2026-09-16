@@ -32,8 +32,15 @@ pub struct Written {
     pub files: Vec<String>,
     /// Tree-relative paths ART removed, in order: its own `90-prefs` when the
     /// wizard was not asked, `ART_Set_Input` when the keymap block is gone.
-    /// Only what was there — a removal nobody is told about is a thing ART
-    /// did and did not say.
+    /// Only what was there.
+    ///
+    /// **Where a removal is told** (M3, final review): `commands/firstboot.rs`
+    /// records it in the operation log as a `Files removed` detail, and it
+    /// crosses the wire in `FirstBootWritten`. No screen renders it — the
+    /// build's first-boot row draws one sentence, and that one is about
+    /// `S/User-Startup`. This comment used to claim that a removal nobody is
+    /// told about is a thing ART did and did not say, which promised a
+    /// sentence the product does not print; the log is where it is told.
     pub removed: Vec<String>,
     pub user_startup_backup: Option<PathBuf>,
     pub user_startup_created: bool,
@@ -87,6 +94,13 @@ pub fn write(plan: &FirstBootPlan) -> CoreResult<Written> {
     // pairing; the marker says what that read found.
     let marker = tree.join(env::ART_SET_INPUT_PATH);
     if plan.input_set_by_art {
+        // Its own drawer, not the flag's (M2, final review): the two land in
+        // the same `Prefs/Env-Archive/` today, so without this the write
+        // depended on the flag above having run first — order nothing here
+        // declared, and a reorder would have broken it silently.
+        if let Some(parent) = marker.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         atomic_write(&marker, &env::encode_value(env::MARKER_VALUE)?)?;
         files.push(env::ART_SET_INPUT_PATH.to_string());
     } else if marker.is_file() {
@@ -339,6 +353,29 @@ mod tests {
             b";BEGIN keymap-selection\nSetKeyboard usa\n;END keymap-selection\n",
         )
         .unwrap();
+        let w = super::write(&planned(&d, false)).unwrap();
+        assert_eq!(fs::read(d.join(env::ART_SET_INPUT_PATH)).unwrap(), b"TRUE");
+        assert!(w.files.contains(&env::ART_SET_INPUT_PATH.to_string()));
+    }
+
+    /// **M2 (final review).** The marker's write makes its own drawer. The
+    /// flag written a few lines above it lands in the same
+    /// `Prefs/Env-Archive/`, so before the guard this write worked only
+    /// because that one had run first — a dependency on statement order that
+    /// nothing in the file declared. This tree has no `Prefs/Env-Archive`
+    /// until the write makes one.
+    #[test]
+    fn the_input_marker_makes_its_own_drawer() {
+        let d = tree("marker-drawer");
+        fs::write(
+            d.join("S/User-Startup"),
+            b";BEGIN keymap-selection\nSetKeyboard usa\n;END keymap-selection\n",
+        )
+        .unwrap();
+        assert!(
+            !d.join("Prefs/Env-Archive").exists(),
+            "nothing has made the drawer yet"
+        );
         let w = super::write(&planned(&d, false)).unwrap();
         assert_eq!(fs::read(d.join(env::ART_SET_INPUT_PATH)).unwrap(), b"TRUE");
         assert!(w.files.contains(&env::ART_SET_INPUT_PATH.to_string()));

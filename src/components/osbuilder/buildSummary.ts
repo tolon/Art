@@ -22,6 +22,7 @@ import {
   type Phase,
   type ReplacesSummary,
 } from "@/lib/buildRun";
+import { firstBootAsksPrefs } from "@/lib/buildSession";
 import { componentDef, componentLabel, rememberedComponentKey, type InstallRelease } from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
@@ -129,7 +130,7 @@ export function useBuildSummary({
   // line went on counting them.
   const ticked = useTickedUpdates(revision);
   const firstBootWanted = session.firstboot.wanted ?? true;
-  const firstBootAskPrefs = session.firstboot.askPrefs ?? true;
+  const firstBootAskPrefs = firstBootAsksPrefs(session.firstboot.askPrefs);
 
   // **Every ticked row, always.** There was a `previewReplacements: false`
   // arm here for the bar under the tabs, which drew a size line and not the

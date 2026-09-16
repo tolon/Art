@@ -5,6 +5,7 @@ import { recallInto } from "@/lib/remembered";
 import {
   DEFAULT_FIRSTBOOT,
   FIRSTBOOT_SPEC,
+  firstBootAsksPrefs,
   foldersForPlan,
   isMaterialFolders,
   MATERIAL_SPEC,
@@ -514,5 +515,23 @@ describe("FIRSTBOOT_SPEC", () => {
 
   it("ships no askPrefs in the default, so rendering the second tick stores nothing", () => {
     expect("askPrefs" in DEFAULT_FIRSTBOOT).toBe(false);
+  });
+
+  // **One fact, one place** (M5, final review). The `?? true` was spelled out
+  // in `ChoiceTab.tsx`, `buildSummary.ts` and `useBuildRun.ts`; all three now
+  // ask this helper, so the rule cannot be half-changed.
+  it("reads an absent askPrefs as ticked and a stored false as unticked", () => {
+    expect(firstBootAsksPrefs(undefined)).toBe(true);
+    expect(firstBootAsksPrefs(false)).toBe(false);
+    expect(firstBootAsksPrefs(true)).toBe(true);
+    // Absent in the store means absent in the recalled session, and that
+    // means ticked — the two halves of the rule, joined.
+    const recalled = recallInto<FirstBootChoice>(
+      { [SESSION_KEYS.firstboot]: { written: true, wanted: true } },
+      SESSION_KEYS.firstboot,
+      FIRSTBOOT_SPEC,
+      DEFAULT_FIRSTBOOT
+    );
+    expect(firstBootAsksPrefs(recalled.askPrefs)).toBe(true);
   });
 });

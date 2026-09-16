@@ -251,7 +251,11 @@ export function wizardDetail(detail: string): WizardDetail | null {
 export function rebootReportPhrase(report: FirstBootReport): Phrase | null {
   const step = report.rebootRequestedBy;
   if (step === null) return null;
-  if (report.rebootUnavailable) return { key: "firstboot.report.reboot.unavailable", params: { step } };
+  // No `step`: this one sentence names the effect rather than the step (the
+  // owner's ruling on M1, final review), because it can print beside "every
+  // first-boot step has run" — the real 3.9 run did exactly that — and a
+  // sentence about finishing would then out-claim the ending above it.
+  if (report.rebootUnavailable) return { key: "firstboot.report.reboot.unavailable" };
   if (report.restartedAfterRequest) return { key: "firstboot.report.reboot.restarted", params: { step } };
   return { key: "firstboot.report.reboot.pending", params: { step } };
 }

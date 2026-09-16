@@ -374,6 +374,24 @@ export const FIRSTBOOT_SPEC: { [K in keyof FirstBootChoice]: Guard<FirstBootChoi
   askPrefs: isFlag,
 };
 
+/**
+ * Whether first boot asks the remaining Preferences on the Amiga.
+ *
+ * **The absent-means-ticked half of the `wanted` rule, in one place** (M5,
+ * final whole-branch review). `askPrefs` is guarded and absent from
+ * {@link DEFAULT_FIRSTBOOT}, so a session stored before the second tick
+ * existed — and one belonging to a user who has never touched the tick —
+ * comes back with the field missing, and missing means ticked. That `?? true`
+ * was written out in `ChoiceTab.tsx`, `buildSummary.ts` and `useBuildRun.ts`:
+ * three copies of one rule, each pinned by its own test, any of which could
+ * have been changed alone. `useBuildRun` asks it of the phase's own copy
+ * (`Phase.askPrefs`), which is this same value frozen when the run started,
+ * so a tick changed mid-run still does not change what that run writes.
+ */
+export function firstBootAsksPrefs(askPrefs: boolean | undefined): boolean {
+  return askPrefs ?? true;
+}
+
 export const DEFAULT_MATERIAL: MaterialChoice = { folders: [] };
 export const DEFAULT_TREE: TreeChoice = { root: null, builtHere: false };
 export const DEFAULT_MEDIA: MediaChoice = { folder: null, reuseScan: true };
