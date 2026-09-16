@@ -348,9 +348,10 @@ silently — reachable only on a damaged card.
 (2026-09-15, 22 min; the Node 24 action majors ran on `windows-latest`), and `release.yml`'s, release run
 34969262720 on `v0.9.4`, completed `success` and attached one NSIS and one MSI.
 
-**0.9.4 is released** (2026-09-15, published on the owner's word). **Next**, the code work as last recorded: first
-boot's phase 3 landed on its own branch as recorded above and awaits the owner's closing measurement (Task 12);
-round 2 of the one-button card (`core/card/content.rs`, its own plan) is otherwise next.
+**0.9.4 is released** (2026-09-15, published on the owner's word). **Next**, on the owner's word (2026-09-16): first
+boot's phase 4, packages (design § 11 item 4 — `unpack` first, then `run`); round 2 of the one-button card
+(`core/card/content.rs`, its own plan) after it. Phase 3 is merged and awaits only the owner's closing measurement
+(Task 12).
 
 **Still owed by a person** (each as last recorded; none is code):
 
@@ -371,7 +372,7 @@ round 2 of the one-button card (`core/card/content.rs`, its own plan) is otherwi
   both kept; 28 px text; narrow a pane; Reset.
 
 **Owner decisions still open:** the unreferenced trial images under `E:\amiga\ProjeART` (about 80 GB, nothing
-deleted); `D:\tmp\art-tests` (left untouched by ART-320, nothing deleted).
+deleted). `D:\tmp\art-tests` is settled: deleted on the owner's word on 2026-09-15 (719 directories, 1.56 GB).
 
 **Deliberately open, disclosed:** `scripts/control-byte-sweep.py` walks the real filesystem, not `git ls-files`
 (its header says why); the WinUAE studio asks `osinstall_describe_tree` twice per destination (four-tabs round 5
@@ -394,8 +395,9 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
   [ART-251](ISSUES.md) (no rule for `Utilities` or `WBStartup`).
 - **First boot on the Amiga** — phases 1 and 2 built (dispatcher, the
   `10-hardware`/`20-aux`/`30-datatypes` steps, the `S/FirstBoot.log` report,
-  reading that report back off a card's FAT, FFS or PFS3). Phases 3 and 4 are
-  not built; the Pi3/Pi4 branch of `10-hardware` is unmeasured because it needs
+  reading that report back off a card's FAT, FFS or PFS3), and phase 3 — the
+  wizard and the reboot — merged 2026-09-16 and awaiting the owner's
+  hand-answered rehearsal. Phase 4 (packages) is not built; the Pi3/Pi4 branch of `10-hardware` is unmeasured because it needs
   a real card.
 - **Aminet and the package catalogue** — Stage A and Stage B are both built
   and tested, catalogue sync through install-to-HDF and the update view. The
@@ -404,12 +406,12 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
 - **The Emu68 Hatcher intake** (`rootrootde/emu68hatcher`, MIT) — scoped at six
   rounds of taking what is worth taking. Five have landed on `main`: prefs and
   wallpaper (1), drawer icons (2), refusal evidence (3), media identification
-  by hash (4), and first boot phases 1–2 (5). Round 5's own phases 3 and 4 are
-  the next code work; nothing else is queued.
+  by hash (4), and first boot phases 1–3 (5). Round 5's own phase 4 is the next
+  code work; the one-button card's round 2 follows it.
 - **The 2026-09-04 work list**
   ([superpowers/specs/2026-09-04-work-list.md](superpowers/specs/2026-09-04-work-list.md))
   — items 3, 5 and 7 are closed. **Every item left on it is the owner's**:
-  items 1, 2 and 4 need a person (a card, a screen driven by hand, a real
+  items 1 and 4 need a person, item 2 closed with ART-118, (a card, a screen driven by hand, a real
   catalogue looked at) and item 6 is blocked on the owner bringing a real
   distribution image.
 - **v0.9.0 is out and in the community's hands.** Reading what came back is
