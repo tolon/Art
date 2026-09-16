@@ -185,6 +185,14 @@ export interface FirstBootChoice {
    * tick puts a boolean there. A stored `false` is a boolean and survives.
    */
   wanted?: boolean;
+
+  /**
+   * Whether first boot asks the remaining Preferences on the Amiga — the
+   * second tick (first-boot phase 3 design §5). **The `wanted` rule exactly:**
+   * absent means ticked, rendering writes nothing, a stored `false` survives.
+   * It is a preference, not a fact about a folder, so `setTree` leaves it.
+   */
+  askPrefs?: boolean;
 }
 
 /**
@@ -362,7 +370,27 @@ export const FIRSTBOOT_SPEC: { [K in keyof FirstBootChoice]: Guard<FirstBootChoi
   // default is what keeps an untouched tick out of `settings.json`. See
   // `FirstBootChoice.wanted`.
   wanted: isFlag,
+  // Guarded, and absent from DEFAULT_FIRSTBOOT, for `wanted`'s reason.
+  askPrefs: isFlag,
 };
+
+/**
+ * Whether first boot asks the remaining Preferences on the Amiga.
+ *
+ * **The absent-means-ticked half of the `wanted` rule, in one place** (M5,
+ * final whole-branch review). `askPrefs` is guarded and absent from
+ * {@link DEFAULT_FIRSTBOOT}, so a session stored before the second tick
+ * existed — and one belonging to a user who has never touched the tick —
+ * comes back with the field missing, and missing means ticked. That `?? true`
+ * was written out in `ChoiceTab.tsx`, `buildSummary.ts` and `useBuildRun.ts`:
+ * three copies of one rule, each pinned by its own test, any of which could
+ * have been changed alone. `useBuildRun` asks it of the phase's own copy
+ * (`Phase.askPrefs`), which is this same value frozen when the run started,
+ * so a tick changed mid-run still does not change what that run writes.
+ */
+export function firstBootAsksPrefs(askPrefs: boolean | undefined): boolean {
+  return askPrefs ?? true;
+}
 
 export const DEFAULT_MATERIAL: MaterialChoice = { folders: [] };
 export const DEFAULT_TREE: TreeChoice = { root: null, builtHere: false };

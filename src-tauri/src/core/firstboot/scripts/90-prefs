@@ -1,0 +1,39 @@
+; ART first boot: the Preferences ART did not set, asked on the Amiga.
+; Locale always; Input unless ENVARC:ART_Set_Input exists (ART wrote a
+; keymap); ScreenMode unless ENVARC:ART_Set_ScreenMode exists (ART wrote a
+; screen depth). Locale and Input run in the foreground and the boot waits
+; for each; ScreenMode runs detached and is saved once the Workbench is up
+; (measured under WinUAE, 2026-09-15). Every command by full path; no Quit.
+FailAt 2000000000
+IF ${ART_FirstBootBanner} EQ "TRUE"
+  Echo "ART first boot: ${ART_System} ${ART_RpiType}, Kickstart ${ART_Kick}"
+ENDIF
+IF EXISTS SYS:Prefs/Locale
+  Echo >>S:FirstBoot.log "step 90-prefs detail opened Locale"
+  Echo "Choose your language and country, then press Save."
+  SYS:Prefs/Locale
+ELSE
+  Echo >>S:FirstBoot.log "step 90-prefs detail missing Locale"
+ENDIF
+IF EXISTS ENVARC:ART_Set_Input
+  Echo >>S:FirstBoot.log "step 90-prefs detail not-asked Input"
+ELSE
+  IF EXISTS SYS:Prefs/Input
+    Echo >>S:FirstBoot.log "step 90-prefs detail opened Input"
+    Echo "Choose your keyboard, then press Save."
+    SYS:Prefs/Input
+  ELSE
+    Echo >>S:FirstBoot.log "step 90-prefs detail missing Input"
+  ENDIF
+ENDIF
+IF EXISTS ENVARC:ART_Set_ScreenMode
+  Echo >>S:FirstBoot.log "step 90-prefs detail not-asked ScreenMode"
+ELSE
+  IF EXISTS SYS:Prefs/ScreenMode
+    Echo >>S:FirstBoot.log "step 90-prefs detail opened ScreenMode"
+    Echo "The screen mode window opens on the Workbench: choose a mode, then press Save."
+    Run <NIL: >NIL: SYS:Prefs/ScreenMode
+  ELSE
+    Echo >>S:FirstBoot.log "step 90-prefs detail missing ScreenMode"
+  ENDIF
+ENDIF

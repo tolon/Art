@@ -252,6 +252,7 @@ const WRITTEN: FirstBootWritten = {
   files: ["S:ART-FirstBoot", "S:ART-FirstBoot-Report"],
   userStartupBackup: null,
   userStartupCreated: true,
+  removed: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -477,6 +478,9 @@ beforeEach(() => {
     userStartupExists: false,
     alreadyWritten: false,
     bytesAdded: 4096,
+    reboot: { kind: "available" },
+    wizard: null,
+    inputSetByArt: false,
   });
   applyMock.mockReset().mockImplementation(async () => {
     order.push("apply");
@@ -1170,6 +1174,7 @@ describe("the first-boot phase says what happened to S/User-Startup", () => {
       files: ["S:ART-FirstBoot"],
       userStartupBackup: BACKUP,
       userStartupCreated: false,
+      removed: [],
     });
     // The path itself, not just "it was backed up": a user told their file
     // was replaced and not told where the old one went has been given
@@ -1184,6 +1189,7 @@ describe("the first-boot phase says what happened to S/User-Startup", () => {
       files: ["S:ART-FirstBoot"],
       userStartupBackup: null,
       userStartupCreated: true,
+      removed: [],
     });
     expect(row.textContent).toContain(i18n.t("osBuilder.build.phase.firstboot.created"));
   });
@@ -1195,6 +1201,7 @@ describe("the first-boot phase says what happened to S/User-Startup", () => {
       files: ["S:ART-FirstBoot"],
       userStartupBackup: null,
       userStartupCreated: false,
+      removed: [],
     });
     expect(row.textContent).not.toContain(i18n.t("osBuilder.build.phase.firstboot.created"));
     expect(within(row).queryByTestId("build-phase-detail")).toBeNull();

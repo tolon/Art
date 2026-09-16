@@ -41,7 +41,7 @@ import type {
   SlotState,
   TreeSummary,
 } from "@/lib/osinstall";
-import type { FirstBootPlan } from "@/lib/firstboot";
+import type { FirstBootPlan, WizardPlan } from "@/lib/firstboot";
 import type { RomInfo } from "@/lib/pistorm";
 
 const componentsMock = vi.hoisted(() => vi.fn());
@@ -345,6 +345,9 @@ beforeEach(() => {
     userStartupExists: false,
     alreadyWritten: false,
     bytesAdded: 4096,
+    reboot: { kind: "available" },
+    wizard: null,
+    inputSetByArt: false,
   } satisfies FirstBootPlan);
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
@@ -365,6 +368,29 @@ function destinationIsATree() {
 }
 
 /** What `osinstallChain` answers, with `rows` in it. */
+/** A preview holding all three wizard states and no reboot command. */
+function previewWithWizard(wizard: WizardPlan | null, reboot: FirstBootPlan["reboot"]) {
+  firstbootPreviewMock.mockResolvedValue({
+    tree: "E:\\dist39",
+    steps: [],
+    fatMount: { kind: "available" },
+    userStartupExists: true,
+    alreadyWritten: false,
+    bytesAdded: 4096,
+    reboot,
+    wizard,
+    inputSetByArt: true,
+  } satisfies FirstBootPlan);
+}
+
+const ALL_THREE: WizardPlan = {
+  rows: [
+    { window: "locale", state: "ask" },
+    { window: "input", state: "set-by-art" },
+    { window: "screen-mode", state: "missing" },
+  ],
+};
+
 function chainOf(rows: ChainRow[]): ChainReport {
   return {
     rows,
@@ -1190,6 +1216,9 @@ describe("the first-boot tick", () => {
       userStartupExists: true,
       alreadyWritten: true,
       bytesAdded: 4096,
+      reboot: { kind: "available" },
+      wizard: null,
+      inputSetByArt: false,
     } satisfies FirstBootPlan);
 
     await renderChoice("AmigaOS 3.9");
@@ -1225,6 +1254,9 @@ describe("the first-boot tick", () => {
       userStartupExists: true,
       alreadyWritten: false,
       bytesAdded: 4096,
+      reboot: { kind: "available" },
+      wizard: null,
+      inputSetByArt: false,
     } satisfies FirstBootPlan);
 
     await renderChoice("AmigaOS 3.9");
@@ -1242,6 +1274,9 @@ describe("the first-boot tick", () => {
       userStartupExists: true,
       alreadyWritten: false,
       bytesAdded: 4096,
+      reboot: { kind: "available" },
+      wizard: null,
+      inputSetByArt: false,
     } satisfies FirstBootPlan);
 
     await renderChoice("AmigaOS 3.9");
@@ -1298,6 +1333,153 @@ describe("the first-boot tick", () => {
     ) as HTMLInputElement;
     expect(box.checked).toBe(true);
   });
+
+  it("draws the second tick ticked when nothing is remembered, and rendering writes nothing", async () => {
+    await renderChoice("AmigaOS 3.9");
+    const box = within(screen.getByTestId("choice-firstboot-askprefs")).getByRole("checkbox") as HTMLInputElement;
+    expect(box.checked).toBe(true);
+    expect(screen.getByTestId("choice-firstboot-askprefs").textContent).toContain(
+      i18n.t("osBuilder.choice.askPrefsRow")
+    );
+    expect(rememberedBag()["buildSession.firstboot"]).toBeUndefined();
+  });
+
+  it("unticking the second tick writes askPrefs=false, and it survives a reload", async () => {
+    await renderChoice("AmigaOS 3.9");
+    await userEvent.click(within(screen.getByTestId("choice-firstboot-askprefs")).getByRole("checkbox"));
+    await waitFor(() =>
+      expect(rememberedBag()["buildSession.firstboot"]).toMatchObject({ askPrefs: false })
+    );
+    cleanup();
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-part-row");
+    const again = within(screen.getByTestId("choice-firstboot-askprefs")).getByRole("checkbox") as HTMLInputElement;
+    expect(again.checked).toBe(false);
+  });
+
+  it("with first boot off, the second tick stays enabled and says it has no effect", async () => {
+    seedRemembered({
+      ...FULL_FIELDS,
+      "buildSession.release": "AmigaOS 3.9",
+      "buildSession.firstboot": { written: false, wanted: false },
+    });
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-part-row");
+    const box = within(screen.getByTestId("choice-firstboot-askprefs")).getByRole("checkbox") as HTMLInputElement;
+    expect(box.disabled).toBe(false);
+    expect(screen.getByTestId("choice-firstboot-askprefs-no-effect").textContent).toBe(
+      i18n.t("osBuilder.choice.askPrefsNoEffect")
+    );
+  });
+
+  it("names the windows that will open and why the others will not, without file names", async () => {
+    destinationIsATree();
+    previewWithWizard(ALL_THREE, { kind: "available" });
+    await renderChoice("AmigaOS 3.9");
+    const lines = await screen.findByTestId("choice-firstboot-windows");
+    expect(lines.textContent).toContain(
+      i18n.t("osBuilder.choice.askPrefsAsk", { windows: i18n.t("firstboot.wizard.window.locale") })
+    );
+    expect(lines.textContent).toContain(
+      i18n.t("osBuilder.choice.askPrefsSetByArt", { windows: i18n.t("firstboot.wizard.window.input") })
+    );
+    expect(lines.textContent).toContain(
+      i18n.t("osBuilder.choice.askPrefsMissing", { windows: i18n.t("firstboot.wizard.window.screenMode") })
+    );
+    expect(lines.textContent).toContain(i18n.t("osBuilder.choice.askPrefsAsOf"));
+    expect(lines.textContent).not.toContain("SYS:Prefs");
+    expect(screen.queryByTestId("choice-firstboot-windows-files")).toBeNull();
+  });
+
+  it("shows the editors' file names in Power mode only", async () => {
+    destinationIsATree();
+    previewWithWizard(ALL_THREE, { kind: "available" });
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...DEFAULT_SETTINGS,
+        uxMode: "power",
+        remembered: { ...FULL_FIELDS, "buildSession.release": "AmigaOS 3.9" },
+      },
+    });
+    render(<ChoiceTab />);
+    const files = await screen.findByTestId("choice-firstboot-windows-files");
+    expect(files.textContent).toBe("SYS:Prefs/Locale");
+  });
+
+  it("asks the preview with the second tick's own value, and draws no windows when it is off", async () => {
+    destinationIsATree();
+    previewWithWizard(ALL_THREE, { kind: "available" });
+    await renderChoice("AmigaOS 3.9");
+    await screen.findByTestId("choice-firstboot-windows");
+
+    // The re-ask is held open on purpose, so the assertion right after the
+    // click is against the render guard itself and not against a second
+    // preview answer that happened to already land. Mutation pass: dropping
+    // `askPrefs &&` from the windows block's own condition survived a version
+    // of this test that re-mocked the preview *before* clicking — by the
+    // time `waitFor` polled, the second answer (`wizard: null`) had already
+    // replaced the state the guard was supposed to be hiding, so the render
+    // guard's own absence was never observed.
+    let resolveSecond: ((plan: FirstBootPlan) => void) | null = null;
+    firstbootPreviewMock.mockReturnValue(
+      new Promise<FirstBootPlan>((resolve) => {
+        resolveSecond = resolve;
+      })
+    );
+    await userEvent.click(within(screen.getByTestId("choice-firstboot-askprefs")).getByRole("checkbox"));
+    await waitFor(() => expect(firstbootPreviewMock).toHaveBeenLastCalledWith(expect.any(String), false));
+    // Still holding the **first** answer's wizard rows in state — the tick's
+    // own value is what must hide the windows here, not a fresh answer.
+    expect(screen.queryByTestId("choice-firstboot-windows")).toBeNull();
+
+    resolveSecond!({
+      tree: "E:\\dist39",
+      steps: [],
+      fatMount: { kind: "available" },
+      userStartupExists: true,
+      alreadyWritten: false,
+      bytesAdded: 4096,
+      reboot: { kind: "available" },
+      wizard: null,
+      inputSetByArt: true,
+    } satisfies FirstBootPlan);
+    await waitFor(() => expect(screen.queryByTestId("choice-firstboot-windows")).toBeNull());
+  });
+
+  it("names the catalogue's reboot package when the tree has no reboot command", async () => {
+    destinationIsATree();
+    previewWithWizard(ALL_THREE, { kind: "unavailable", needs: "reboot" });
+    await renderChoice("AmigaOS 3.9");
+    const said = await screen.findByTestId("choice-firstboot-reboot");
+    expect(said.textContent).toBe(i18n.t("firstboot.reboot.unavailable", { needs: "reboot" }));
+  });
+
+  it("says nothing about a reboot command the tree has", async () => {
+    destinationIsATree();
+    previewWithWizard(ALL_THREE, { kind: "available" });
+    await renderChoice("AmigaOS 3.9");
+    await screen.findByTestId("choice-firstboot-windows");
+    expect(screen.queryByTestId("choice-firstboot-reboot")).toBeNull();
+  });
+
+  it("for a fresh build, says the windows are known once the tree exists", async () => {
+    // Not `renderChoice()`: its `FULL_FIELDS` always carries the bare
+    // `osinstall.destination` legacy key, which `seedTreeRoot` falls back to
+    // whenever `buildSession.tree` is unset — so `treeRoot` is never actually
+    // null there, only unreal. This is the same narrower bag "asks nothing at
+    // all when this build has no tree yet" seeds, for the same reason.
+    seedRemembered({
+      "osinstall.mediaFolder.AmigaOS 3.9": "E:\\media39",
+      "buildSession.release": "AmigaOS 3.9",
+    });
+    render(<ChoiceTab />);
+    await screen.findAllByTestId("choice-part-row");
+    expect(screen.getByTestId("choice-firstboot-windows-after-build").textContent).toBe(
+      i18n.t("osBuilder.choice.askPrefsAfterBuild")
+    );
+    expect(firstbootPreviewMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("in Turkish", () => {
@@ -1309,6 +1491,7 @@ describe("in Turkish", () => {
     // compares the catalogues to each other rather than to a screen.
     await changeLanguage("tr");
     destinationIsATree();
+    previewWithWizard(ALL_THREE, { kind: "unavailable", needs: "reboot" });
     // Seeded so that **every** sentence this tab can draw is on screen at
     // once, including the two that only a remembered id produces: an id with
     // no row (`notInList` and its untick control) and a tick on a row that
@@ -1327,6 +1510,8 @@ describe("in Turkish", () => {
     await screen.findAllByTestId("choice-update-row");
     await screen.findByTestId("choice-update-unknown");
     await screen.findByTestId("choice-update-closed-tick");
+    await screen.findByTestId("choice-firstboot-windows");
+    await screen.findByTestId("choice-firstboot-reboot");
 
     const tab = screen.getByTestId("choice-tab");
     expect(tab.textContent).not.toMatch(/osinstall\.|osBuilder\./);

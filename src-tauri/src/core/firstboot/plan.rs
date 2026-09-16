@@ -4,12 +4,19 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::scripts::fixed_files;
+use super::scripts::{fixed_files, WIZARD_FILE};
+use super::{WizardWindow, WIZARD_PATH, WIZARD_STEP};
+use crate::core::amigaprefs::env;
 use crate::core::error::{CoreError, CoreResult};
+use crate::core::osinstall::plan::KEYMAP_SELECTION;
+use crate::core::osinstall::resolve_ci_optional;
+use crate::core::osinstall::startup::has_block;
 
 #[derive(Debug, Clone)]
 pub struct FirstBootRequest {
     pub tree: PathBuf,
+    /// Write `S:FirstBoot/90-prefs`, the wizard (phase 3 design §2 decision 5).
+    pub ask_prefs: bool,
 }
 
 /// Whether `10-hardware` can mount the FAT boot partition.
@@ -22,6 +29,46 @@ pub struct FirstBootRequest {
 pub enum FatMount {
     Available,
     Unavailable { needs: &'static str },
+}
+
+/// The catalogue id of Aminet `util/boot/reboot`
+/// (`core/sources/bundle/catalogue/acilis.json`).
+pub const REBOOT_PACKAGE: &str = "reboot";
+
+/// Whether the step wrapper can carry out a reboot request. Not a refusal —
+/// the `FatMount` rule: first boot is still written, the Amiga logs `reboot
+/// unavailable` and carries on, and the preview names the package (design §2
+/// decision 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum RebootCommand {
+    Available,
+    Unavailable { needs: &'static str },
+}
+
+/// What `90-prefs` will do with one window, read from the tree at preview
+/// time. The Amiga decides on the day; Appearance applied after this preview
+/// can still turn an `Ask` into a skipped window (design §5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowState {
+    Ask,
+    SetByArt,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WizardRow {
+    pub window: WizardWindow,
+    pub state: WindowState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WizardPlan {
+    /// Locale, Input, ScreenMode — the order the script asks them.
+    pub rows: Vec<WizardRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -48,6 +95,13 @@ pub struct FirstBootPlan {
     pub already_written: bool,
     /// What the fixed files add to the tree, for the card step's arithmetic.
     pub bytes_added: u64,
+    pub reboot: RebootCommand,
+    /// `None` when the wizard was not asked for.
+    pub wizard: Option<WizardPlan>,
+    /// `S/User-Startup` carries a well-formed `keymap-selection` block, so
+    /// the write puts `ART_Set_Input` down (design §4.3) — decided here, from
+    /// the block, so the preview's Input row and the marker cannot disagree.
+    pub input_set_by_art: bool,
 }
 
 /// Disk commands (not shell-internal ones) the fixed scripts run. `List`,
@@ -57,8 +111,9 @@ pub struct FirstBootPlan {
 /// `.new`/`_AUX` file into place (M1, final review — missing from this list
 /// even though both scripts already ran it; a completeness gap in the guard,
 /// not a live bug, since every real release ships `C:Rename` too).
-pub const NEEDED_COMMANDS: [&str; 8] = [
-    "List", "Sort", "Delete", "Copy", "Rename", "Version", "Mount", "Assign",
+/// `Wait` joined in phase 3: the step wrapper runs `C:Wait 3` before `C:Reboot` (design §3.4). `Reboot` is not here — it is an availability, not a requirement.
+pub const NEEDED_COMMANDS: [&str; 9] = [
+    "List", "Sort", "Delete", "Copy", "Rename", "Version", "Mount", "Assign", "Wait",
 ];
 
 pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
@@ -86,6 +141,19 @@ pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
     } else {
         FatMount::Unavailable { needs: "fat95" }
     };
+    let reboot = if tree.join("C").join("Reboot").is_file() {
+        RebootCommand::Available
+    } else {
+        RebootCommand::Unavailable {
+            needs: REBOOT_PACKAGE,
+        }
+    };
+    let input_set_by_art = keymap_block_present(tree)?;
+    let wizard = if request.ask_prefs {
+        Some(wizard_rows(tree, input_set_by_art)?)
+    } else {
+        None
+    };
 
     let mut steps = Vec::new();
     let mut bytes_added = 0u64;
@@ -99,7 +167,18 @@ pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
             });
         }
     }
+    if wizard.is_some() {
+        bytes_added += WIZARD_FILE.text.len() as u64;
+        steps.push(PlannedStep {
+            name: WIZARD_STEP.to_string(),
+            tree_path: WIZARD_PATH.to_string(),
+            fixed: true,
+        });
+    }
     bytes_added += b"TRUE\n".len() as u64;
+    if input_set_by_art {
+        bytes_added += env::MARKER_VALUE.len() as u64;
+    }
 
     Ok(FirstBootPlan {
         tree: tree.clone(),
@@ -108,6 +187,9 @@ pub fn plan(request: &FirstBootRequest) -> CoreResult<FirstBootPlan> {
         user_startup_exists: tree.join("S").join("User-Startup").is_file(),
         already_written: tree.join(super::DISPATCHER_PATH).is_file(),
         bytes_added,
+        reboot,
+        wizard,
+        input_set_by_art,
     })
 }
 
@@ -125,9 +207,62 @@ fn calls_user_startup(sequence: &Path) -> CoreResult<bool> {
         .any(|w| w == b"execute s:user-startup"))
 }
 
+/// Whether `S/User-Startup` carries a well-formed `keymap-selection` block —
+/// through `core::osinstall::startup`'s own pairing, never a substring search,
+/// so a stray `;BEGIN` is no keymap (design §4.3). Read Latin-1, the way
+/// `write` reads the same file.
+fn keymap_block_present(tree: &Path) -> CoreResult<bool> {
+    let bytes = match std::fs::read(tree.join("S").join("User-Startup")) {
+        Ok(bytes) => bytes,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err.into()),
+    };
+    let text: String = bytes.iter().map(|&b| b as char).collect();
+    Ok(has_block(&text, KEYMAP_SELECTION))
+}
+
+/// The rows `90-prefs` will act on, decided in the script's own order: a
+/// window ART set is not asked whether or not its editor exists; otherwise an
+/// editor that is there is asked, and one that is not is missing.
+/// Whether a tree-relative path is a file, resolved the way AmigaDOS reads a
+/// name (M6, final review).
+///
+/// The rows used to ask `tree.join(..).is_file()`, which is the *host's*
+/// answer to a question `90-prefs` asks case-insensitively: `IF EXISTS
+/// SYS:Prefs/Locale` finds a drawer entry named `locale`, and a real tree's
+/// case is whatever the material shipped. NTFS happens to agree, so nothing
+/// was wrong on the only supported host — but `core/` is meant to be
+/// promotable to a standalone crate, and `core::appearance` already resolves
+/// this very drawer through [`resolve_ci_optional`]. One answer, one helper.
+fn file_present_ci(tree: &Path, rel: &str) -> CoreResult<bool> {
+    Ok(resolve_ci_optional(tree, rel)?.is_some_and(|path| path.is_file()))
+}
+
+fn wizard_rows(tree: &Path, input_set_by_art: bool) -> CoreResult<WizardPlan> {
+    let mut rows = Vec::with_capacity(WizardWindow::ALL.len());
+    for window in WizardWindow::ALL {
+        let set_by_art = match window {
+            WizardWindow::Locale => false,
+            WizardWindow::Input => input_set_by_art,
+            WizardWindow::ScreenMode => file_present_ci(tree, env::ART_SET_SCREENMODE_PATH)?,
+        };
+        let state = if set_by_art {
+            WindowState::SetByArt
+        } else if file_present_ci(tree, &format!("Prefs/{}", window.amiga_name()))? {
+            WindowState::Ask
+        } else {
+            WindowState::Missing
+        };
+        rows.push(WizardRow { window, state });
+    }
+    Ok(WizardPlan { rows })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::amigaprefs::env;
+    use crate::core::firstboot::WizardWindow;
     use crate::core::ScratchDir;
     use std::fs;
 
@@ -157,6 +292,7 @@ mod tests {
         fs::remove_file(d.join("C/Sort")).unwrap();
         let err = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap_err();
         match err {
@@ -175,10 +311,27 @@ mod tests {
         fs::remove_file(d.join("C/Rename")).unwrap();
         let err = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap_err();
         match err {
             CoreError::FirstBootNeedsCommand { command } => assert_eq!(command, "Rename"),
+            other => panic!("wrong refusal: {other:?}"),
+        }
+    }
+
+    /// Phase 3: the step wrapper waits with `C:Wait 3` before `C:Reboot`.
+    #[test]
+    fn a_tree_without_c_wait_is_refused_by_name() {
+        let d = tree("nowait");
+        fs::remove_file(d.join("C/Wait")).unwrap();
+        let err = plan(&FirstBootRequest {
+            tree: d.path().to_path_buf(),
+            ask_prefs: false,
+        })
+        .unwrap_err();
+        match err {
+            CoreError::FirstBootNeedsCommand { command } => assert_eq!(command, "Wait"),
             other => panic!("wrong refusal: {other:?}"),
         }
     }
@@ -188,6 +341,7 @@ mod tests {
         let d = tree("plain");
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         let names: Vec<&str> = p.steps.iter().map(|s| s.name.as_str()).collect();
@@ -196,6 +350,9 @@ mod tests {
         assert!(!p.user_startup_exists);
         assert!(!p.already_written);
         assert!(p.bytes_added > 0);
+        assert!(p.wizard.is_none(), "not asked, no wizard");
+        assert_eq!(p.reboot, RebootCommand::Unavailable { needs: "reboot" });
+        assert!(!p.input_set_by_art);
     }
 
     #[test]
@@ -204,6 +361,7 @@ mod tests {
         fs::write(d.join("L/fat95"), b"x").unwrap();
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         assert_eq!(p.fat_mount, FatMount::Available);
@@ -219,6 +377,7 @@ mod tests {
         .unwrap();
         let err = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap_err();
         match err {
@@ -238,7 +397,8 @@ mod tests {
         )
         .unwrap();
         assert!(plan(&FirstBootRequest {
-            tree: d.path().to_path_buf()
+            tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .is_ok());
     }
@@ -248,6 +408,7 @@ mod tests {
         let d = ScratchDir::new("art-firstboot-plan", "notree");
         let err = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap_err();
         assert!(matches!(err, CoreError::FirstBootNotATree { .. }));
@@ -259,8 +420,168 @@ mod tests {
         fs::write(d.join("S/ART-FirstBoot"), b"x").unwrap();
         let p = plan(&FirstBootRequest {
             tree: d.path().to_path_buf(),
+            ask_prefs: false,
         })
         .unwrap();
         assert!(p.already_written);
+    }
+
+    fn asked(d: &ScratchDir) -> FirstBootPlan {
+        plan(&FirstBootRequest {
+            tree: d.path().to_path_buf(),
+            ask_prefs: true,
+        })
+        .unwrap()
+    }
+
+    fn editors(d: &ScratchDir, names: &[&str]) {
+        fs::create_dir_all(d.join("Prefs")).unwrap();
+        for name in names {
+            fs::write(d.join("Prefs").join(name), b"\x00\x00\x03\xf3").unwrap();
+        }
+    }
+
+    fn rows(p: &FirstBootPlan) -> Vec<(WizardWindow, WindowState)> {
+        p.wizard
+            .as_ref()
+            .expect("asked, so planned")
+            .rows
+            .iter()
+            .map(|r| (r.window, r.state))
+            .collect()
+    }
+
+    #[test]
+    fn asking_plans_the_wizard_as_the_last_step_and_counts_its_bytes() {
+        let d = tree("ask");
+        editors(&d, &["Locale", "Input", "ScreenMode"]);
+        let off = plan(&FirstBootRequest {
+            tree: d.path().to_path_buf(),
+            ask_prefs: false,
+        })
+        .unwrap();
+        let on = asked(&d);
+        let names: Vec<&str> = on.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["10-hardware", "20-aux", "30-datatypes", "90-prefs"]);
+        assert_eq!(on.steps[3].tree_path, "S/FirstBoot/90-prefs");
+        assert_eq!(
+            on.bytes_added - off.bytes_added,
+            super::super::scripts::STEP_90_PREFS.len() as u64
+        );
+    }
+
+    #[test]
+    fn every_editor_present_and_nothing_set_asks_all_three() {
+        let d = tree("all-asked");
+        editors(&d, &["Locale", "Input", "ScreenMode"]);
+        assert_eq!(
+            rows(&asked(&d)),
+            [
+                (WizardWindow::Locale, WindowState::Ask),
+                (WizardWindow::Input, WindowState::Ask),
+                (WizardWindow::ScreenMode, WindowState::Ask),
+            ]
+        );
+    }
+
+    /// Design §4.3's own case: a tree ART built before phase 3 carries the
+    /// block and no marker. The preview must say what the write is about to
+    /// make true, not what the drawer holds this second.
+    #[test]
+    fn a_keymap_block_is_input_set_by_art_before_any_marker_exists() {
+        let d = tree("keymap");
+        editors(&d, &["Locale", "Input", "ScreenMode"]);
+        fs::write(
+            d.join("S/User-Startup"),
+            b"; mine\n;BEGIN keymap-selection\nSetKeyboard usa\n;END keymap-selection\n",
+        )
+        .unwrap();
+        let p = asked(&d);
+        assert!(p.input_set_by_art);
+        assert!(!d.join(env::ART_SET_INPUT_PATH).exists());
+        assert_eq!(rows(&p)[1], (WizardWindow::Input, WindowState::SetByArt));
+
+        // The marker's four bytes are counted only while the block is there.
+        let with_block = p.bytes_added;
+        fs::write(d.join("S/User-Startup"), b"; mine\n").unwrap();
+        let without_block = asked(&d).bytes_added;
+        assert_eq!(with_block - without_block, env::MARKER_VALUE.len() as u64);
+    }
+
+    #[test]
+    fn a_stray_keymap_opener_is_not_a_keymap_art_set() {
+        let d = tree("stray");
+        editors(&d, &["Locale", "Input", "ScreenMode"]);
+        fs::write(
+            d.join("S/User-Startup"),
+            b";BEGIN keymap-selection\nSetKeyboard usa\n",
+        )
+        .unwrap();
+        let p = asked(&d);
+        assert!(!p.input_set_by_art);
+        assert_eq!(rows(&p)[1], (WizardWindow::Input, WindowState::Ask));
+    }
+
+    /// The script asks the marker before the editor; so does the plan.
+    #[test]
+    fn a_set_window_is_set_whether_or_not_its_editor_exists_and_a_missing_one_is_missing() {
+        let d = tree("mixed");
+        editors(&d, &["Locale"]);
+        fs::create_dir_all(d.join("Prefs/Env-Archive")).unwrap();
+        fs::write(d.join(env::ART_SET_SCREENMODE_PATH), b"TRUE").unwrap();
+        assert_eq!(
+            rows(&asked(&d)),
+            [
+                (WizardWindow::Locale, WindowState::Ask),
+                (WizardWindow::Input, WindowState::Missing),
+                (WizardWindow::ScreenMode, WindowState::SetByArt),
+            ]
+        );
+    }
+
+    /// **M6 (final review).** AmigaDOS names are case-insensitive and a real
+    /// tree's drawer is whatever case the material shipped, so an editor
+    /// named `locale` is the same editor and a marker named
+    /// `art_set_screenmode` is the same marker — `90-prefs` asks both with
+    /// AmigaDOS's own case-insensitive `IF EXISTS`. The rows go through
+    /// `core::osinstall::resolve_ci_optional`, the resolution Appearance
+    /// already uses, rather than a literal `is_file()`.
+    #[test]
+    fn an_editor_and_a_marker_in_another_case_are_the_same_editor_and_marker() {
+        let d = tree("case-folded");
+        editors(&d, &["locale", "INPUT"]);
+        fs::create_dir_all(d.join("prefs/env-archive")).unwrap();
+        fs::write(d.join("prefs/env-archive/art_set_screenmode"), b"TRUE").unwrap();
+        assert_eq!(
+            rows(&asked(&d)),
+            [
+                (WizardWindow::Locale, WindowState::Ask),
+                (WizardWindow::Input, WindowState::Ask),
+                (WizardWindow::ScreenMode, WindowState::SetByArt),
+            ]
+        );
+    }
+
+    #[test]
+    fn c_reboot_in_the_tree_makes_the_reboot_available() {
+        let d = tree("reboot");
+        fs::write(d.join("C/Reboot"), b"\x00\x00\x03\xf3").unwrap();
+        assert_eq!(asked(&d).reboot, RebootCommand::Available);
+    }
+
+    /// The package the preview names is the catalogue's own id, read from the
+    /// file rather than trusted from a copy (CLAUDE.md, "a test that reads a
+    /// table instead of the file is a copy").
+    #[test]
+    fn the_reboot_package_is_the_catalogues_aminet_reboot() {
+        let json: serde_json::Value =
+            serde_json::from_str(include_str!("../sources/bundle/catalogue/acilis.json")).unwrap();
+        let entry = json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["id"] == REBOOT_PACKAGE)
+            .expect("the catalogue carries the reboot package");
+        assert_eq!(entry["source"]["aminet"]["path"], "util/boot/reboot");
     }
 }

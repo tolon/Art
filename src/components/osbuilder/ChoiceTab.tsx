@@ -52,8 +52,20 @@ import { useTranslation } from "react-i18next";
 
 import { slotOverrides } from "@/lib/amigainstall";
 import { folderOf, type SequenceInputs } from "@/lib/buildRun";
+import { firstBootAsksPrefs } from "@/lib/buildSession";
 import { chainLines, choiceRowState, type ChainLine } from "@/lib/chain";
-import { fatMountPhrase, firstbootPreview, type FatMount } from "@/lib/firstboot";
+import {
+  fatMountPhrase,
+  firstbootPreview,
+  rebootCommandPhrase,
+  wizardEditorPath,
+  wizardLines,
+  wizardWindowPhrase,
+  type FatMount,
+  type RebootCommand,
+  type WizardPlan,
+  type WizardWindow,
+} from "@/lib/firstboot";
 import type { Phrase } from "@/lib/phrase";
 import {
   collisionGroupHeadingKey,
@@ -85,6 +97,7 @@ import { useChainTree } from "@/lib/useChainTree";
 import { useInstallPlan } from "@/lib/useInstallPlan";
 import { useRemembered } from "@/lib/useRemembered";
 import { useRomIdentity } from "@/lib/useRomIdentity";
+import { usePowerMode } from "@/lib/uxmode";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
@@ -375,6 +388,7 @@ export function useTickedUpdates(revision: unknown = null): TickedUpdates {
 
 export function ChoiceTab() {
   const { t } = useTranslation();
+  const power = usePowerMode();
   const { session, setComponents, setPackages, setFirstBoot } = useBuildSession();
   const release = session.release;
 
@@ -515,34 +529,48 @@ export function ChoiceTab() {
    * looked at is exactly the confident wrong sentence.
    */
   const [firstbootFat, setFirstbootFat] = useState<FatMount | null>(null);
+  /** The preview's reboot availability and wizard rows — `null` until it has
+   *  answered for this tree, for `firstbootFat`'s reason. */
+  const [firstbootReboot, setFirstbootReboot] = useState<RebootCommand | null>(null);
+  const [firstbootWizard, setFirstbootWizard] = useState<WizardPlan | null>(null);
+  const firstbootWanted = session.firstboot.wanted ?? true;
+  /** The second tick (first-boot phase 3 design §5): absent means ticked,
+   *  through the session's own helper so the rule has one home. */
+  const askPrefs = firstBootAsksPrefs(session.firstboot.askPrefs);
   useEffect(() => {
-    // Same gate as the chain's: a folder the destination check has not
-    // answered for is not a folder to read a first-boot block out of.
     if (!treeSettled) return;
-    if (!treeRoot) {
+    const forget = () => {
       setFirstbootWritten(false);
       setFirstbootFat(null);
+      setFirstbootReboot(null);
+      setFirstbootWizard(null);
+    };
+    if (!treeRoot) {
+      forget();
       return;
     }
     let cancelled = false;
-    firstbootPreview(treeRoot)
+    firstbootPreview(treeRoot, askPrefs)
       .then((preview) => {
         if (!cancelled) {
           setFirstbootWritten(preview.alreadyWritten);
           setFirstbootFat(preview.fatMount);
+          setFirstbootReboot(preview.reboot);
+          setFirstbootWizard(preview.wizard);
         }
       })
       .catch(() => {
-        if (!cancelled) {
-          setFirstbootWritten(false);
-          setFirstbootFat(null);
-        }
+        if (!cancelled) forget();
       });
     return () => {
       cancelled = true;
     };
-  }, [treeRoot, treeSettled]);
+  }, [treeRoot, treeSettled, askPrefs]);
   const firstbootFatPhrase = firstbootFat ? fatMountPhrase(firstbootFat) : null;
+  const firstbootRebootPhrase = firstbootReboot ? rebootCommandPhrase(firstbootReboot) : null;
+  const firstbootWindows = firstbootWizard ? wizardLines(firstbootWizard) : null;
+  /** A window's label, never its file name. The one dynamic call site. */
+  const windowLabel = (window: WizardWindow) => t(wizardWindowPhrase(window).key);
 
   /** The one component id currently showing the "this will not boot"
    *  confirmation, or `null`. Only one at a time — a second click elsewhere
@@ -917,7 +945,7 @@ export function ChoiceTab() {
             border: "1px solid var(--border)",
             borderRadius: 4,
             padding: "6px 10px",
-            background: (session.firstboot.wanted ?? true) ? "var(--bg-hover)" : "var(--bg)",
+            background: firstbootWanted ? "var(--bg-hover)" : "var(--bg)",
           }}
         >
           <label
@@ -926,7 +954,7 @@ export function ChoiceTab() {
           >
             <input
               type="checkbox"
-              checked={session.firstboot.wanted ?? true}
+              checked={firstbootWanted}
               onChange={(e) => setFirstBoot({ wanted: e.target.checked })}
             />
             <span>{t("osBuilder.choice.firstbootRow")}</span>
@@ -955,7 +983,7 @@ export function ChoiceTab() {
               the tick as well as on the preview: *"will be mounted"* is a
               claim about a step that is going to run, and over an unticked
               first boot it is the screen out-claiming the build. */}
-          {(session.firstboot.wanted ?? true) && firstbootFatPhrase && (
+          {firstbootWanted && firstbootFatPhrase && (
             <p
               data-testid="choice-firstboot-fat"
               className="faint"
@@ -963,6 +991,66 @@ export function ChoiceTab() {
             >
               {t(firstbootFatPhrase.key, firstbootFatPhrase.params)}
             </p>
+          )}
+
+          {firstbootWanted && firstbootRebootPhrase && (
+            <p data-testid="choice-firstboot-reboot" className="faint" style={{ fontSize: 11, margin: "6px 0 0" }}>
+              {t(firstbootRebootPhrase.key, firstbootRebootPhrase.params)}
+            </p>
+          )}
+
+          {/* **The second tick** (first-boot phase 3 design §5). Absent means
+              ticked; only `onChange` writes. Never disabled: with first boot
+              off it says it has no effect, because Beginner mode hides and
+              nothing here disables a control. */}
+          <label
+            data-testid="choice-firstboot-askprefs"
+            style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 13, marginTop: 8 }}
+          >
+            <input
+              type="checkbox"
+              checked={askPrefs}
+              onChange={(e) => setFirstBoot({ askPrefs: e.target.checked })}
+            />
+            <span>{t("osBuilder.choice.askPrefsRow")}</span>
+          </label>
+          {!firstbootWanted && (
+            <p data-testid="choice-firstboot-askprefs-no-effect" className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+              {t("osBuilder.choice.askPrefsNoEffect")}
+            </p>
+          )}
+          {firstbootWanted && askPrefs && treeSettled && !treeRoot && (
+            <p data-testid="choice-firstboot-windows-after-build" className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+              {t("osBuilder.choice.askPrefsAfterBuild")}
+            </p>
+          )}
+          {/* What the preview read, and that it read the tree **as it is now**:
+              Appearance applied after the build writes its marker then, and
+              the Amiga decides on the day (design §5). */}
+          {firstbootWanted && askPrefs && firstbootWindows && (
+            <div data-testid="choice-firstboot-windows" className="faint" style={{ fontSize: 11, margin: "4px 0 0" }}>
+              {firstbootWindows.ask.length > 0 && (
+                <p style={{ margin: 0 }}>
+                  {t("osBuilder.choice.askPrefsAsk", { windows: firstbootWindows.ask.map(windowLabel).join(", ") })}
+                  {power && (
+                    <span data-testid="choice-firstboot-windows-files" style={{ marginLeft: 6 }}>
+                      {firstbootWindows.ask.map(wizardEditorPath).join(", ")}
+                    </span>
+                  )}
+                </p>
+              )}
+              {firstbootWindows.setByArt.length > 0 && (
+                <p style={{ margin: 0 }}>
+                  {t("osBuilder.choice.askPrefsSetByArt", { windows: firstbootWindows.setByArt.map(windowLabel).join(", ") })}
+                </p>
+              )}
+              {firstbootWindows.missing.length > 0 && (
+                <p style={{ margin: 0 }}>
+                  {t("osBuilder.choice.askPrefsMissing", { windows: firstbootWindows.missing.map(windowLabel).join(", ") })}
+                </p>
+              )}
+              <p style={{ margin: 0 }}>{t("osBuilder.choice.askPrefsAsOf")}</p>
+            </div>
           )}
         </div>
       </div>

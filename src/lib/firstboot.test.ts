@@ -8,18 +8,32 @@
 // that the Rust source still tags both enums `kebab-case` so the `kind`
 // strings this file assumes really are what serde writes.
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: (...args: unknown[]) => invokeMock(...args),
+}));
 
 import {
   endingPhrase,
   fatMountPhrase,
+  firstbootPreview,
+  firstbootWrite,
+  rebootCommandPhrase,
+  rebootReportPhrase,
   rehearsalNextStepPhrase,
   rehearsalOutcomePhrase,
   rehearsalTone,
   reportSourcePhrase,
   stepOutcomePhrase,
+  wizardDetail,
+  wizardEditorPath,
+  wizardLines,
+  wizardWindowPhrase,
+  WIZARD_STEP_NAME,
   FIRSTBOOT_REHEARSAL_EVENT,
   type Ending,
   type FatMount,
@@ -27,10 +41,21 @@ import {
   type RehearsalOutcome,
   type ReportSource,
   type StepOutcome,
+  type WizardPlan,
 } from "@/lib/firstboot";
 
 const REPORT = readFileSync(
   resolve(__dirname, "..", "..", "src-tauri", "src", "core", "firstboot", "report.rs"),
+  "utf8"
+);
+
+const PLAN = readFileSync(
+  resolve(__dirname, "..", "..", "src-tauri", "src", "core", "firstboot", "plan.rs"),
+  "utf8"
+);
+
+const MOD = readFileSync(
+  resolve(__dirname, "..", "..", "src-tauri", "src", "core", "firstboot", "mod.rs"),
   "utf8"
 );
 
@@ -131,6 +156,9 @@ const EMPTY_REPORT: FirstBootReport = {
   ending: "unfinished",
   fatCopyFailed: false,
   rebootRequestedBy: null,
+  rebootUnavailable: false,
+  restartedAfterRequest: false,
+  waitingIn: null,
   unknown: [],
 };
 
@@ -219,5 +247,91 @@ describe("the five rehearsal endings stay five sentences", () => {
     expect(rehearsalTone(REHEARSAL_ENDINGS[1])).toBe("err");
     expect(rehearsalTone(REHEARSAL_ENDINGS[2])).toBe("warn");
     expect(rehearsalTone(REHEARSAL_ENDINGS[3])).toBe("warn");
+  });
+});
+
+describe("the tick crosses the wire under one name, both ways", () => {
+  beforeEach(() => invokeMock.mockReset().mockResolvedValue({}));
+
+  it("firstbootPreview sends askPrefs", async () => {
+    await firstbootPreview("E:\\dist", false);
+    expect(invokeMock).toHaveBeenCalledWith("firstboot_preview", { tree: "E:\\dist", askPrefs: false });
+  });
+
+  it("firstbootWrite sends askPrefs", async () => {
+    await firstbootWrite("E:\\dist", true);
+    expect(invokeMock).toHaveBeenCalledWith("firstboot_write", { tree: "E:\\dist", askPrefs: true });
+  });
+
+  it("and the Rust commands take ask_prefs, which Tauri calls askPrefs", () => {
+    expect(COMMAND).toMatch(/pub fn firstboot_preview\(\s*tree: String,\s*ask_prefs: bool,?\s*\)/);
+    expect(COMMAND).toMatch(/pub fn firstboot_write\(\s*tree: String,\s*ask_prefs: bool,/);
+  });
+
+  it("the new enums are tagged the way this file reads them", () => {
+    expect(PLAN).toMatch(/#\[serde\(tag = "kind", rename_all = "kebab-case"\)\]\s*\r?\n\s*pub enum RebootCommand/);
+    expect(PLAN).toMatch(/#\[serde\(rename_all = "kebab-case"\)\]\s*\r?\n\s*pub enum WindowState/);
+    expect(MOD).toMatch(/#\[serde\(rename_all = "kebab-case"\)\]\s*\r?\n\s*pub enum WizardWindow/);
+    expect(MOD).toMatch(/#\[serde\(rename_all = "kebab-case"\)\]\s*\r?\n\s*pub enum ForegroundWindow/);
+    expect(MOD).toContain(`pub const WIZARD_STEP: &str = "${WIZARD_STEP_NAME}";`);
+  });
+});
+
+describe("the reboot and the wizard, as phrases", () => {
+  it("says nothing about an available reboot and names the package otherwise", () => {
+    expect(rebootCommandPhrase({ kind: "available" })).toBeNull();
+    expect(rebootCommandPhrase({ kind: "unavailable", needs: "reboot" })).toEqual({
+      key: "firstboot.reboot.unavailable",
+      params: { needs: "reboot" },
+    });
+  });
+
+  it("groups the rows by what the Amiga will do", () => {
+    const wizard: WizardPlan = {
+      rows: [
+        { window: "locale", state: "ask" },
+        { window: "input", state: "set-by-art" },
+        { window: "screen-mode", state: "missing" },
+      ],
+    };
+    expect(wizardLines(wizard)).toEqual({ ask: ["locale"], setByArt: ["input"], missing: ["screen-mode"] });
+  });
+
+  it("gives each window its own label and its own editor", () => {
+    const windows = ["locale", "input", "screen-mode"] as const;
+    expect(new Set(windows.map((w) => wizardWindowPhrase(w).key)).size).toBe(3);
+    expect(windows.map(wizardEditorPath)).toEqual(["SYS:Prefs/Locale", "SYS:Prefs/Input", "SYS:Prefs/ScreenMode"]);
+  });
+
+  it("reads 90-prefs's three detail words and nothing else", () => {
+    expect(wizardDetail("opened Locale")).toEqual({ phrase: { key: "firstboot.report.wizard.opened" }, window: "locale" });
+    expect(wizardDetail("not-asked Input")).toEqual({ phrase: { key: "firstboot.report.wizard.notAsked" }, window: "input" });
+    expect(wizardDetail("missing ScreenMode")).toEqual({ phrase: { key: "firstboot.report.wizard.missing" }, window: "screen-mode" });
+    expect(wizardDetail("sd0-mounted RPi4")).toBeNull();
+    expect(wizardDetail("opened constructor")).toBeNull();
+    expect(wizardDetail("opened Locale twice")).toBeNull();
+  });
+
+  it("keeps four restart states apart: none, restarted, no command, not back yet", () => {
+    const asked = { ...EMPTY_REPORT, rebootRequestedBy: "15-probe" };
+    expect(rebootReportPhrase(EMPTY_REPORT)).toBeNull();
+    expect(rebootReportPhrase({ ...asked, restartedAfterRequest: true })?.key).toBe("firstboot.report.reboot.restarted");
+    expect(rebootReportPhrase({ ...asked, rebootUnavailable: true })?.key).toBe("firstboot.report.reboot.unavailable");
+    expect(rebootReportPhrase(asked)).toEqual({ key: "firstboot.report.reboot.pending", params: { step: "15-probe" } });
+  });
+
+  it("names the window a timed-out rehearsal was waiting in, with its own next step", () => {
+    const waited = { secs: 120, nanos: 0 };
+    const plain: RehearsalOutcome = { kind: "timed-out", waited, report: EMPTY_REPORT };
+    const locale: RehearsalOutcome = { kind: "timed-out", waited, report: { ...EMPTY_REPORT, waitingIn: "locale" } };
+    const input: RehearsalOutcome = { kind: "timed-out", waited, report: { ...EMPTY_REPORT, waitingIn: "input" } };
+    const said = [plain, locale, input].map((o) => rehearsalOutcomePhrase(o).key);
+    const next = [plain, locale, input].map((o) => rehearsalNextStepPhrase(o).key);
+    expect(new Set(said).size).toBe(3);
+    expect(new Set(next).size).toBe(3);
+    expect(rehearsalOutcomePhrase(locale)).toEqual({
+      key: "firstboot.rehearsal.outcome.timedOutInLocale",
+      params: { seconds: 120 },
+    });
   });
 });

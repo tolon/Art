@@ -44,18 +44,24 @@ use crate::tools::winuae_launcher::WinUaeLauncher;
 
 /// §92 PREVIEW: what a first boot would run. Writes nothing.
 #[tauri::command]
-pub fn firstboot_preview(tree: String) -> AppResult<FirstBootPlan> {
+pub fn firstboot_preview(tree: String, ask_prefs: bool) -> AppResult<FirstBootPlan> {
     Ok(plan(&FirstBootRequest {
         tree: PathBuf::from(tree.trim()),
+        ask_prefs,
     })?)
 }
 
 /// §92 APPLY: put the files into the tree. `Safe` — nothing of the user's is
 /// overwritten except `S/User-Startup`, which is merged and backed up first.
 #[tauri::command]
-pub fn firstboot_write(tree: String, oplog: State<'_, JsonlOperationLog>) -> AppResult<Written> {
+pub fn firstboot_write(
+    tree: String,
+    ask_prefs: bool,
+    oplog: State<'_, JsonlOperationLog>,
+) -> AppResult<Written> {
     let request = FirstBootRequest {
         tree: PathBuf::from(tree.trim()),
+        ask_prefs,
     };
     let result = plan(&request)
         .and_then(|p| write(&p))
@@ -66,6 +72,11 @@ pub fn firstboot_write(tree: String, oplog: State<'_, JsonlOperationLog>) -> App
         &result,
         |record, done: &Written| {
             let record = record.detail("Files written", done.files.join(", "));
+            let record = if done.removed.is_empty() {
+                record
+            } else {
+                record.detail("Files removed", done.removed.join(", "))
+            };
             match &done.user_startup_backup {
                 Some(backup) => record.detail("User-Startup backup", backup.display().to_string()),
                 None => record,
@@ -381,8 +392,12 @@ pub fn firstboot_rehearse(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::firstboot::plan::{FatMount, PlannedStep};
+    use crate::core::firstboot::plan::{
+        FatMount, PlannedStep, RebootCommand, WindowState, WizardPlan, WizardRow,
+    };
     use crate::core::firstboot::report::{Ending, FirstBootReport, StepOutcome};
+    use crate::core::firstboot::ForegroundWindow;
+    use crate::core::firstboot::WizardWindow;
     use crate::core::firstboot::{REPORT_PATH, STEP_DIR};
     use crate::core::jobs::NoProgress;
     use crate::core::ScratchDir;
@@ -401,6 +416,14 @@ mod tests {
             user_startup_exists: false,
             already_written: false,
             bytes_added: 1,
+            reboot: RebootCommand::Unavailable { needs: "reboot" },
+            wizard: Some(WizardPlan {
+                rows: vec![WizardRow {
+                    window: WizardWindow::ScreenMode,
+                    state: WindowState::SetByArt,
+                }],
+            }),
+            input_set_by_art: true,
         };
         let json = serde_json::to_value(&p).unwrap();
         assert_eq!(json["fatMount"]["kind"], "unavailable");
@@ -409,6 +432,11 @@ mod tests {
         assert_eq!(json["alreadyWritten"], false);
         assert_eq!(json["bytesAdded"], 1);
         assert_eq!(json["steps"][0]["treePath"], "S/FirstBoot/10-hardware");
+        assert_eq!(json["reboot"]["kind"], "unavailable");
+        assert_eq!(json["reboot"]["needs"], "reboot");
+        assert_eq!(json["wizard"]["rows"][0]["window"], "screen-mode");
+        assert_eq!(json["wizard"]["rows"][0]["state"], "set-by-art");
+        assert_eq!(json["inputSetByArt"], true);
     }
 
     /// The result's own wire shape. `job_id` stays snake_case — `jobs.ts`
@@ -427,6 +455,9 @@ mod tests {
                     ending: Ending::Unfinished,
                     fat_copy_failed: false,
                     reboot_requested_by: None,
+                    reboot_unavailable: false,
+                    restarted_after_request: false,
+                    waiting_in: None,
                     unknown: Vec::new(),
                 },
             },
@@ -456,6 +487,9 @@ mod tests {
             ending: Ending::DoneAll,
             fat_copy_failed: false,
             reboot_requested_by: None,
+            reboot_unavailable: false,
+            restarted_after_request: false,
+            waiting_in: None,
             unknown: Vec::new(),
         };
         let endings = [
@@ -496,7 +530,7 @@ mod tests {
     /// what boots. A failure keeps the copy and prints where it is.
     ///
     /// ```text
-    /// ART_FIRSTBOOT_TREE=E:/amiga/ProjeART/art205-32 \
+    /// ART_FIRSTBOOT_TREE=E:/amiga/ProjeART/fb3-trees/art5 \
     /// ART_FIRSTBOOT_ROM="E:/amiga/Amigatolon/paketler/3.2/AmigaOs 3.2/ROM/kicka1200.rom" \
     /// ART_WINUAE="C:/Program Files/WinUAE/winuae64.exe" \
     /// cargo test rehearse_the_real_tree_when_asked -- --ignored --nocapture
@@ -534,7 +568,11 @@ mod tests {
         println!("rom: {}", rom.display());
         println!("machine: {} ({})", profile.name, profile.id);
 
-        let planned = plan(&FirstBootRequest { tree: copy.clone() }).expect("planning");
+        let planned = plan(&FirstBootRequest {
+            tree: copy.clone(),
+            ask_prefs: false,
+        })
+        .expect("planning");
         let written = write(&planned).expect("writing the first boot into the copy");
         println!("wrote {} files", written.files.len());
 
@@ -611,6 +649,192 @@ mod tests {
             "`done all` removes S/FirstBoot/, which is what makes the next boot inert"
         );
 
+        staged.discard().expect("removing the copy");
+        println!("the copy has been discarded");
+    }
+
+    /// The three variables every real-material rehearsal reads, or `None`
+    /// after printing which are missing.
+    fn real_material() -> Option<(PathBuf, PathBuf, PathBuf, AmigaProfile)> {
+        match (
+            std::env::var("ART_FIRSTBOOT_TREE"),
+            std::env::var("ART_FIRSTBOOT_ROM"),
+            std::env::var("ART_WINUAE"),
+        ) {
+            (Ok(tree), Ok(rom), Ok(winuae)) => Some((
+                PathBuf::from(tree),
+                PathBuf::from(rom),
+                PathBuf::from(winuae),
+                profile_for(std::env::var("ART_FIRSTBOOT_PROFILE").ok().as_deref()).unwrap(),
+            )),
+            _ => {
+                println!("skipped: set ART_FIRSTBOOT_TREE, ART_FIRSTBOOT_ROM and ART_WINUAE");
+                None
+            }
+        }
+    }
+
+    fn report_of(outcome: &RehearsalOutcome) -> &FirstBootReport {
+        match outcome {
+            RehearsalOutcome::Finished { report }
+            | RehearsalOutcome::StepRefused { report }
+            | RehearsalOutcome::TimedOut { report, .. }
+            | RehearsalOutcome::EmulatorClosed { report, .. }
+            | RehearsalOutcome::WroteWithoutStopping { report, .. } => report,
+        }
+    }
+
+    /// The test-only step that asks for one restart (phase 3 design §8.2: it
+    /// lives here, never in `scripts/`). Named `15-` so steps remain after it
+    /// and the next boot has to run them.
+    const REBOOT_PROBE: &str = "15-reboot-probe";
+
+    /// **Phase 3's reboot, on the owner's own trees** (design §8.2 rows 1–2).
+    ///
+    /// ```text
+    /// ART_FIRSTBOOT_TREE=E:/amiga/ProjeART/fb3-trees/art5 \
+    /// ART_FIRSTBOOT_ROM="E:/amiga/Amigatolon/paketler/3.2/AmigaOs 3.2/ROM/kicka1200.rom" \
+    /// ART_WINUAE="C:/Program Files/WinUAE/winuae64.exe" ART_FIRSTBOOT_EXPECT_REBOOT=restarted \
+    /// cargo test --lib rehearse_a_reboot_on_the_real_tree_when_asked -- --ignored --nocapture
+    /// ```
+    ///
+    /// and for 3.9 `ART_FIRSTBOOT_TREE=E:/amiga/ProjeART/fb3-trees/sonuclar`,
+    /// `ART_FIRSTBOOT_ROM="E:/amiga/Amigatolon/kickstart/Kickstart v3.1 rev 40.68 (1993)(Commodore)(A1200).rom"`,
+    /// `ART_FIRSTBOOT_EXPECT_REBOOT=unavailable`.
+    #[test]
+    #[ignore = "opens WinUAE against the owner's own tree and ROM; run explicitly"]
+    fn rehearse_a_reboot_on_the_real_tree_when_asked() {
+        let Some((tree, rom, winuae, profile)) = real_material() else {
+            return;
+        };
+        let expect = std::env::var("ART_FIRSTBOOT_EXPECT_REBOOT").unwrap_or_default();
+        assert!(
+            expect == "restarted" || expect == "unavailable",
+            "set ART_FIRSTBOOT_EXPECT_REBOOT to restarted (a tree with C/Reboot) or unavailable (one without)"
+        );
+        let scratch = ScratchDir::new("art-firstboot-real", "reboot");
+        let staged = stage_with(&tree, &NoProgress).expect("copying the tree");
+        let copy = staged.copy_path().to_path_buf();
+        println!("copy: {}", copy.display());
+        assert!(
+            !copy.join(REPORT_PATH).exists(),
+            "the tree already carries S/FirstBoot.log from an earlier boot; the rehearsal would \
+             read that boot's ending — point ART_FIRSTBOOT_TREE at a tree that has not booted first boot"
+        );
+
+        let planned = plan(&FirstBootRequest {
+            tree: copy.clone(),
+            ask_prefs: false,
+        })
+        .expect("planning");
+        println!("reboot: {:?}", planned.reboot);
+        write(&planned).expect("writing the first boot into the copy");
+        std::fs::write(
+            copy.join(STEP_DIR).join(REBOOT_PROBE),
+            "FailAt 2000000000\nSetEnv ART_Reboot \"TRUE\"\n",
+        )
+        .unwrap();
+
+        let launcher = WinUaeLauncher::new(&winuae, scratch.path());
+        let outcome = rehearse_with(
+            &RehearseRequest {
+                tree_copy: &copy,
+                scratch_root: scratch.path(),
+                profile: &profile,
+                kickstart_path: &rom,
+                limits: RunLimits::default(),
+            },
+            &launcher,
+            &RealClock::new(),
+            &NoProgress,
+        )
+        .expect("the rehearsal itself");
+
+        let log = std::fs::read_to_string(copy.join(REPORT_PATH)).unwrap_or_default();
+        println!("--- {REPORT_PATH} ---\n{log}--- as parsed ---\n{outcome:#?}");
+        let boots = log.lines().filter(|l| l.starts_with("system ")).count();
+        let report = report_of(&outcome);
+        assert_eq!(report.reboot_requested_by.as_deref(), Some(REBOOT_PROBE));
+        if expect == "restarted" {
+            assert_eq!(
+                boots, 2,
+                "a restart is a second boot writing a second system line"
+            );
+            assert!(report.restarted_after_request && !report.reboot_unavailable);
+        } else {
+            assert_eq!(boots, 1, "no reboot command, no second boot");
+            assert!(report.reboot_unavailable && !report.restarted_after_request);
+        }
+        let names: Vec<&str> = report.steps.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["10-hardware", REBOOT_PROBE, "20-aux", "30-datatypes"]
+        );
+        assert_eq!(report.ending, Ending::DoneAll);
+        assert!(matches!(outcome, RehearsalOutcome::Finished { .. }));
+        staged.discard().expect("removing the copy");
+        println!("the copy has been discarded");
+    }
+
+    /// **The wizard, with nobody at the keyboard** (design §8.2 row 3): the
+    /// boot waits in Locale until the deadline, and the ending says so.
+    ///
+    /// Same variables as above, without `ART_FIRSTBOOT_EXPECT_REBOOT`;
+    /// `ART_FIRSTBOOT_DEADLINE_SECS` (default 120) is how long to wait.
+    #[test]
+    #[ignore = "opens WinUAE against the owner's own tree and ROM; run explicitly"]
+    fn rehearse_the_wizard_on_the_real_tree_when_asked() {
+        let Some((tree, rom, winuae, profile)) = real_material() else {
+            return;
+        };
+        let deadline = std::env::var("ART_FIRSTBOOT_DEADLINE_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(120);
+        let scratch = ScratchDir::new("art-firstboot-real", "wizard");
+        let staged = stage_with(&tree, &NoProgress).expect("copying the tree");
+        let copy = staged.copy_path().to_path_buf();
+        println!("copy: {}", copy.display());
+        assert!(
+            !copy.join(REPORT_PATH).exists(),
+            "the tree has booted first boot before"
+        );
+
+        let planned = plan(&FirstBootRequest {
+            tree: copy.clone(),
+            ask_prefs: true,
+        })
+        .expect("planning");
+        println!("wizard: {:?}", planned.wizard);
+        write(&planned).expect("writing the first boot into the copy");
+
+        let launcher = WinUaeLauncher::new(&winuae, scratch.path());
+        let outcome = rehearse_with(
+            &RehearseRequest {
+                tree_copy: &copy,
+                scratch_root: scratch.path(),
+                profile: &profile,
+                kickstart_path: &rom,
+                limits: RunLimits {
+                    deadline: Duration::from_secs(deadline),
+                    ..RunLimits::default()
+                },
+            },
+            &launcher,
+            &RealClock::new(),
+            &NoProgress,
+        )
+        .expect("the rehearsal itself");
+
+        let log = std::fs::read_to_string(copy.join(REPORT_PATH)).unwrap_or_default();
+        println!("--- {REPORT_PATH} ---\n{log}--- as parsed ---\n{outcome:#?}");
+        assert!(log.contains("step 90-prefs detail opened Locale"));
+        match &outcome {
+            RehearsalOutcome::TimedOut { report, .. } => {
+                assert_eq!(report.waiting_in, Some(ForegroundWindow::Locale))
+            }
+            other => panic!("expected the deadline with Locale waiting, got {other:?}"),
+        }
         staged.discard().expect("removing the copy");
         println!("the copy has been discarded");
     }

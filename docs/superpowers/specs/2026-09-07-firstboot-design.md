@@ -298,6 +298,15 @@ removes it through `merge_user_startup`. Nothing on the Amiga edits
    **absent** on both AmigaOS 3.9 trees (`art159-boot`, `art205-39c`) — so
    phase 3 cannot assume the command exists and must check for it the same
    way phase 2 checks for `C:Sort`.
+
+   **Correction, 2026-09-15 (phase 3):** the step wrapper now carries the
+   reboot out — clear `ART_Reboot`, log `reboot requested by <name>`, then
+   `C:Wait 3` and `C:Reboot` when the tree has `C/Reboot`, else log `reboot
+   unavailable` and carry on. Plain `Reboot` on PiStorm too; `EMU68INFO
+   HARDRESET` is out of scope. The tree names above no longer exist: the
+   measured trees are `E:\amiga\Amigatolon\os39\art5` (AmigaOS 3.2, `C/Reboot`
+   present), `os39\art1` and `sonuclar` (3.9, absent). See
+   [the phase-3 design](2026-09-15-firstboot-phase-3-design.md) §3.3.
 5. `done all` if `S:FirstBoot/` is empty, else `done partial`. Delete
    `S:ART-FirstBoot` only on `done all`.
 
@@ -382,6 +391,15 @@ comment says why), so when ScreenMode is to be asked the step copies
 `ENV:ART_Reboot` — the same subdirectory-in-a-`$name` mistake, corrected the
 same way.
 
+**Correction, 2026-09-15 (phase 3):** superseded, and §5.2 with it. Measured
+under WinUAE, a ScreenMode change applies on the same boot with no reboot
+(experiment 4), the 3.2 tree has no `WBStartup/`, and a foreground Prefs
+editor holds the boot until answered (experiment 3). `90-prefs` is **fixed**
+text: Locale and Input in the foreground, ScreenMode through `Run`, each
+skipped when ART set it — decided on the Amiga from `ENVARC:ART_Set_Input` /
+`ART_Set_ScreenMode`. `ART-FirstBootWB` was never built. See the phase-3
+design §1.4 and §3.2.
+
 ### 5.2 `ART-FirstBootWB`, fixed
 
 Second boot, from `WBStartup`: one sentence, `Ask`, `Run <NIL: >NIL:
@@ -408,6 +426,14 @@ so it lives in the build-session facade (`buildSession.ts`,
 results — CLAUDE.md's one-question test for the facade, answered yes. It is
 not derived from which `.prefs` files exist in the tree (§1.5: the releases
 ship different sets).
+
+**Correction, 2026-09-15 (phase 3):** the build-session facade's
+`written: { keymap, screenmode }` was never built and cannot work — the
+Appearance panel is applied after the build's first-boot write. "Answered" is
+now two marker files written by whoever set the preference (the first-boot
+write from `S/User-Startup`'s `keymap-selection` block; Appearance with the
+depth), and the Amiga decides. `AskPrefs` became one tick,
+`buildSession.firstboot.askPrefs`. See the phase-3 design §4.
 
 ---
 

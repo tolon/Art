@@ -69,6 +69,9 @@ function report(over: Partial<FirstBootReport> = {}): FirstBootReport {
     ending: "done-all",
     fatCopyFailed: false,
     rebootRequestedBy: null,
+    rebootUnavailable: false,
+    restartedAfterRequest: false,
+    waitingIn: null,
     unknown: [],
     ...over,
   };

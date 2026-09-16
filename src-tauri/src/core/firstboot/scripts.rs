@@ -20,6 +20,23 @@ pub const STEP_20_AUX: &str = include_str!("scripts/20-aux");
 pub const STEP_30_DATATYPES: &str = include_str!("scripts/30-datatypes");
 pub const SD0_PI3: &str = include_str!("scripts/SD0pi3");
 pub const SD0_PI4: &str = include_str!("scripts/SD0pi4");
+pub const STEP_90_PREFS: &str = include_str!("scripts/90-prefs");
+
+/// The wizard (phase 3 design §3.2). Fixed text like every file here, but
+/// written **only when asked** — which is why it is not in [`fixed_files`],
+/// the list every write puts down.
+pub const WIZARD_FILE: FixedFile = FixedFile {
+    tree_path: super::WIZARD_PATH,
+    text: STEP_90_PREFS,
+};
+
+/// Every script ART can put in a tree, the conditional wizard included —
+/// what the text-level guards below scan, so a file written only sometimes
+/// is held to the same rules as the ones written always.
+pub fn every_script() -> [FixedFile; 8] {
+    let [a, b, c, d, e, f, g] = fixed_files();
+    [a, b, c, d, e, f, g, WIZARD_FILE]
+}
 
 /// Every fixed file, at the path it takes in the tree.
 pub fn fixed_files() -> [FixedFile; 7] {
@@ -58,12 +75,13 @@ pub fn fixed_files() -> [FixedFile; 7] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::amigaprefs::env;
 
     /// Every script is ASCII with LF endings — an AmigaDOS shell reads a CR
     /// as part of the line, and a stray high byte is the control-byte class.
     #[test]
     fn every_fixed_file_is_ascii_with_lf_endings() {
-        for file in fixed_files() {
+        for file in every_script() {
             assert!(file.text.is_ascii(), "{} is not ASCII", file.tree_path);
             assert!(!file.text.contains('\r'), "{} carries a CR", file.tree_path);
             assert!(
@@ -173,7 +191,7 @@ mod tests {
     /// `done` was never written. A step leaves through `Skip end` instead.
     #[test]
     fn no_script_ever_quits() {
-        for file in fixed_files() {
+        for file in every_script() {
             for line in file.text.lines() {
                 let word = line.split_whitespace().next().unwrap_or("");
                 assert!(
@@ -191,7 +209,7 @@ mod tests {
     /// instead of the file is a copy").
     #[test]
     fn every_variable_read_is_braced() {
-        for file in fixed_files() {
+        for file in every_script() {
             for (i, line) in file.text.lines().enumerate() {
                 let bytes = line.as_bytes();
                 for (j, &b) in bytes.iter().enumerate() {
@@ -289,23 +307,178 @@ mod tests {
     fn every_fixed_file_hash_is_pinned() {
         use sha2::{Digest, Sha256};
         let mut got = Vec::new();
-        for file in fixed_files() {
+        for file in every_script() {
             let hash = Sha256::digest(file.text.as_bytes());
             got.push(format!("{} {:x}", file.tree_path, hash));
         }
         // Fill in from the first run's output, then never change without a review.
-        let expected: [&str; 7] = [
+        let expected: [&str; 8] = [
             "S/ART-FirstBoot a52f88b0fe21d7df60c87c8b7a000829477c1b1499ebb389c621638f7e9ccdfb",
-            "S/ART-FirstBoot-Step 12e80a7abc1f80068679d8ee4b2e34e2bfcb1f4df07b354fec40c2665fb6f59d",
+            "S/ART-FirstBoot-Step e50607c914dce5b029e0e4c41922fd363b9f0bf5026acd93a264736adf1ecb75",
             "S/FirstBoot/10-hardware b0d3c3585c15c010b1d75b5ba0396a457a36ae5e62ae1c4a6f3ab11cc5f5a0fa",
             "S/FirstBoot/20-aux 35e7e0973830a73c708ecbdd70f7d4dc1962b4208a0429ebcd4160044bb223f9",
             "S/FirstBoot/30-datatypes 315d95fe3ed552f69a376a91b3a3fee308324595434f0bb5308413b5b87c67dd",
             "Storage/DOSDrivers/SD0pi3 8b6a120d5e4d8e1f98a9d41d2d42758d42d91b5047afb63f5155db04bf3fbb4a",
             "Storage/DOSDrivers/SD0pi4 75b989b50c5881f5f1030dce5131053675b00bbb554a34c153ebc6b89b35bff7",
+            "S/FirstBoot/90-prefs ca42cbd0017aff95b2de5eee98e3335a58c9e966fa97b14fe3fbd6367e76f796",
         ];
         assert_eq!(
             got, expected,
             "a fixed script changed; review the diff and re-pin"
         );
+    }
+
+    /// A script's command lines, trimmed, comments and blanks dropped — so a
+    /// guard asks what runs and in what order, not where a substring sits.
+    fn command_lines(text: &str) -> Vec<&str> {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with(';'))
+            .collect()
+    }
+
+    fn at(lines: &[&str], wanted: &str) -> usize {
+        lines
+            .iter()
+            .position(|l| *l == wanted)
+            .unwrap_or_else(|| panic!("no line {wanted:?}"))
+    }
+
+    #[test]
+    fn the_wizard_sits_in_the_step_directory_and_is_not_always_written() {
+        assert_eq!(
+            super::super::WIZARD_PATH,
+            format!("{}/{}", super::super::STEP_DIR, super::super::WIZARD_STEP)
+        );
+        assert_eq!(WIZARD_FILE.tree_path, super::super::WIZARD_PATH);
+        assert!(!fixed_files()
+            .iter()
+            .any(|f| f.tree_path == WIZARD_FILE.tree_path));
+        assert!(every_script()
+            .iter()
+            .any(|f| f.tree_path == WIZARD_FILE.tree_path));
+    }
+
+    /// Spec §3.3 and experiment 1b: 8 of 8 FFS volumes needed validation
+    /// after a reboot with no wait, 0 of 6 with `Wait 3`.
+    #[test]
+    fn the_wrapper_waits_before_it_reboots() {
+        let lines = command_lines(STEP_WRAPPER);
+        assert_eq!(at(&lines, "C:Wait 3") + 1, at(&lines, "C:Reboot"));
+    }
+
+    /// Spec §2 decision 4: 3.9 ships no `C:Reboot`; the run logs that and
+    /// carries on rather than failing on an unknown command.
+    #[test]
+    fn the_wrapper_reboots_only_when_the_tree_has_the_command() {
+        let lines = command_lines(STEP_WRAPPER);
+        let guard = at(&lines, "IF EXISTS C:Reboot");
+        let reboot = at(&lines, "C:Reboot");
+        let unavailable = at(&lines, "Echo >>S:FirstBoot.log \"reboot unavailable\"");
+        let else_after = reboot + lines[reboot..].iter().position(|l| *l == "ELSE").unwrap();
+        assert!(guard < reboot && reboot < else_after && else_after < unavailable);
+        assert!(!lines[guard..reboot].contains(&"ENDIF"));
+    }
+
+    /// Spec §3.3: on 3.2 `ENV:` may be `ENVARC:` itself, so a `TRUE` left
+    /// behind would restart the next boot too.
+    #[test]
+    fn the_wrapper_clears_and_reports_the_request_before_it_reboots() {
+        let lines = command_lines(STEP_WRAPPER);
+        let request = at(&lines, "IF ${ART_Reboot} EQ \"TRUE\"");
+        let clear = at(&lines, "SetEnv ART_Reboot \"FALSE\"");
+        let said = at(
+            &lines,
+            "Echo >>S:FirstBoot.log \"reboot requested by [name]\"",
+        );
+        let guard = at(&lines, "IF EXISTS C:Reboot");
+        assert!(request < clear && clear < said && said < guard);
+        let deleted = at(&lines, "Delete >NIL: S:FirstBoot/[name]");
+        assert!(
+            deleted < request,
+            "the step is reported and deleted before any reboot"
+        );
+    }
+
+    /// Experiment 3: Locale and Input in the foreground hold the boot (4/4);
+    /// under `Run` they do not (4/4). ScreenMode is saved on a Workbench with
+    /// no console (experiment 4), so it must not hold the boot.
+    #[test]
+    fn the_wizard_opens_locale_and_input_in_the_foreground_and_screenmode_detached() {
+        let lines = command_lines(STEP_90_PREFS);
+        at(&lines, "SYS:Prefs/Locale");
+        at(&lines, "SYS:Prefs/Input");
+        at(&lines, "Run <NIL: >NIL: SYS:Prefs/ScreenMode");
+        assert!(
+            !lines.contains(&"SYS:Prefs/ScreenMode"),
+            "ScreenMode in the foreground"
+        );
+        assert!(!lines
+            .iter()
+            .any(|l| l.starts_with("Run ") && (l.ends_with("/Locale") || l.ends_with("/Input"))));
+    }
+
+    /// The marker is asked before the editor, exactly as `plan`'s rows decide:
+    /// a window ART set is not asked whether or not its editor is there.
+    #[test]
+    fn the_wizard_asks_the_hosts_marker_before_the_editor() {
+        let lines = command_lines(STEP_90_PREFS);
+        for (marker, window) in [
+            (env::ART_SET_INPUT, "Input"),
+            (env::ART_SET_SCREENMODE, "ScreenMode"),
+        ] {
+            let asked = at(&lines, &format!("IF EXISTS ENVARC:{marker}"));
+            let not_asked = at(
+                &lines,
+                &format!("Echo >>S:FirstBoot.log \"step 90-prefs detail not-asked {window}\""),
+            );
+            let editor = at(&lines, &format!("IF EXISTS SYS:Prefs/{window}"));
+            let opened = at(
+                &lines,
+                &format!("Echo >>S:FirstBoot.log \"step 90-prefs detail opened {window}\""),
+            );
+            assert!(
+                asked < not_asked && not_asked < editor && editor < opened,
+                "{window}"
+            );
+        }
+        assert!(
+            !STEP_90_PREFS.contains("not-asked Locale"),
+            "ART never sets Locale (spec §0)"
+        );
+    }
+
+    /// A machine switched off inside a window leaves the `opened` line as the
+    /// step's last word, which is what names the window afterwards.
+    #[test]
+    fn the_wizard_logs_each_window_before_it_opens_it_and_names_a_missing_one() {
+        let lines = command_lines(STEP_90_PREFS);
+        for (window, run) in [
+            ("Locale", "SYS:Prefs/Locale"),
+            ("Input", "SYS:Prefs/Input"),
+            ("ScreenMode", "Run <NIL: >NIL: SYS:Prefs/ScreenMode"),
+        ] {
+            let opened = at(
+                &lines,
+                &format!("Echo >>S:FirstBoot.log \"step 90-prefs detail opened {window}\""),
+            );
+            assert!(opened < at(&lines, run), "{window}");
+            at(
+                &lines,
+                &format!("Echo >>S:FirstBoot.log \"step 90-prefs detail missing {window}\""),
+            );
+        }
+    }
+
+    #[test]
+    fn the_wizard_banner_is_the_first_boot_flags_and_nothing_skips_a_window() {
+        let lines = command_lines(STEP_90_PREFS);
+        let gate = at(&lines, "IF ${ART_FirstBootBanner} EQ \"TRUE\"");
+        let banner = lines
+            .iter()
+            .position(|l| l.starts_with("Echo \"ART first boot:"))
+            .unwrap();
+        assert!(gate < banner && banner < at(&lines, "IF EXISTS SYS:Prefs/Locale"));
+        assert!(!lines.iter().any(|l| l.starts_with("Skip")));
     }
 }

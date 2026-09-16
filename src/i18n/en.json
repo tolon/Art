@@ -762,6 +762,13 @@
       "notATree": "This folder is not an AmigaOS tree ART built: it holds no distribution.json, so ART cannot say what is in it or what an update would replace. Choose another on the Kickstart and destination tab, or build one first:"
     },
     "choice": {
+      "askPrefsAfterBuild": "Which windows open is known once the tree exists.",
+      "askPrefsAsk": "The Amiga will open: {{windows}}.",
+      "askPrefsAsOf": "Read from the tree as it is now. A screen depth applied on Prepare volumes after the build is set then, and the Amiga skips that window on the day.",
+      "askPrefsMissing": "Not asked, because this release has no window for it: {{windows}}.",
+      "askPrefsNoEffect": "First boot is off, so this has no effect.",
+      "askPrefsRow": "Ask the remaining preferences on the Amiga at first boot",
+      "askPrefsSetByArt": "Not asked, because ART set it: {{windows}}.",
       "firstboot": "At first boot on the Amiga",
       "firstbootHint": "Runs once, then removes itself. You read the report on the card lane.",
       "firstbootRow": "At first boot on the Amiga: detect the hardware, mount the extra disks and datatypes, write the report to S:FirstBoot.log",
@@ -3060,11 +3067,23 @@
       "available": "The FAT boot partition will be mounted as EMU68BOOT: (L:fat95 is in the tree).",
       "unavailable": "The FAT boot partition will not be mounted: the tree has no L:{{needs}}. Aminet disk/misc/{{needs}} supplies it; the step skips without it."
     },
+    "reboot": {
+      "unavailable": "This release has no reboot command: a step that asks for a restart will leave the restart to you. Aminet util/boot/{{needs}} supplies one."
+    },
+    "wizard": {
+      "window": {
+        "locale": "language and country",
+        "input": "keyboard",
+        "screenMode": "screen mode"
+      }
+    },
     "rehearsal": {
       "outcome": {
         "finished": "Every step ran under WinUAE and the block removed itself.",
         "stepRefused": "A step refused. The copy is kept so you can read the Amiga's own log.",
         "timedOut": "Nobody answered. The Amiga had not written its ending {{seconds}} seconds in, so ART ended the emulator it had started; the copy is kept.",
+        "timedOutInLocale": "Nobody answered the language and country window. The Amiga was still waiting in it {{seconds}} seconds in, so ART ended the emulator it had started; the copy is kept.",
+        "timedOutInInput": "Nobody answered the keyboard window. The Amiga was still waiting in it {{seconds}} seconds in, so ART ended the emulator it had started; the copy is kept.",
         "emulatorClosed": "The emulator window was closed {{seconds}} seconds in, before the first boot had reached its end; the copy is kept.",
         "wroteWithoutStopping": "The first boot was writing without stopping: {{seconds}} seconds in, the copy had grown by {{written}} MB, past the {{ceiling}} MB a run may add to it, so ART ended the emulator it had started; the copy is kept."
       },
@@ -3072,6 +3091,8 @@
         "finished": "Write the tree to a card. The hardware step skips under an emulator and runs only on the real machine.",
         "stepRefused": "Open S/FirstBoot.log in the copy: the refused step's own lines say why, and it will be tried again on the next boot.",
         "timedOut": "Run it again and watch the emulator window this time. A first boot that never writes its ending has stopped or hung on a step, and the copy's S/FirstBoot.log says which.",
+        "timedOutInLocale": "Run it again and answer the language and country window inside the WinUAE window: first boot waits there until you press Save.",
+        "timedOutInInput": "Run it again and answer the keyboard window inside the WinUAE window: first boot waits there until you press Save.",
         "emulatorClosed": "Run it again and let the window finish. ART cannot say what the remaining steps would have done, so nothing was decided either way.",
         "wroteWithoutStopping": "Do not simply run it again. Open S/FirstBoot.log in the copy: a step that started and never finished is the likeliest one to have kept writing. The copy is safe to delete."
       }
@@ -3086,7 +3107,17 @@
       "fatCopyFailed": "Copying onto the FAT boot partition failed; the files stayed on the AmigaDOS side.",
       "unknown": "Lines from a newer ART, carried rather than dropped:",
       "details": "Details",
-      "readFailed": "This card's first-boot report could not be read:"
+      "readFailed": "This card's first-boot report could not be read:",
+      "wizard": {
+        "opened": "{{window}}: the window opened",
+        "notAsked": "{{window}}: not asked — ART set it",
+        "missing": "{{window}}: not asked — this release has no window for it"
+      },
+      "reboot": {
+        "restarted": "{{step}} asked for a restart, and the Amiga restarted.",
+        "unavailable": "A step asked for a restart. This Amiga has no restart command, so what that step set up may not take effect until you restart the machine yourself.",
+        "pending": "{{step}} asked for a restart; the log does not show the Amiga coming back up yet."
+      }
     },
     "rehearse": {
       "needsTree": "Choose the tree above (the installer's Distribution tree field) or the destination on the OS Builder's Kickstart and destination tab."

@@ -34,6 +34,24 @@ pub const SHELL_DEFAULTS: [(&str, &str); 5] = [
     ("Sys/def_height", "256"),
 ];
 
+/// The first-boot wizard's markers (phase 3 design §3.1, §4.1).
+///
+/// Written into `Prefs/Env-Archive/` by whichever part of ART set that
+/// preference — `core::firstboot::write` for the keymap, `core::appearance`
+/// for a screen depth — and asked by `S:FirstBoot/90-prefs` with
+/// `IF EXISTS ENVARC:<name>`, so the Amiga skips a window ART already
+/// answered whatever order the build's screens ran in. The names live here,
+/// in the lower-level module, so those two modules never import each other.
+pub const ART_SET_INPUT: &str = "ART_Set_Input";
+pub const ART_SET_SCREENMODE: &str = "ART_Set_ScreenMode";
+/// Tree-relative, `/`-separated, as `distribution.json` spells paths.
+pub const ART_SET_INPUT_PATH: &str = "Prefs/Env-Archive/ART_Set_Input";
+pub const ART_SET_SCREENMODE_PATH: &str = "Prefs/Env-Archive/ART_Set_ScreenMode";
+/// A marker's content. The Amiga only asks `IF EXISTS`; the word is for a
+/// person reading the drawer, and it goes through [`encode_value`] like every
+/// other value here, so no newline follows it.
+pub const MARKER_VALUE: &str = "TRUE";
+
 /// Encode a value as ISO-8859-1 bytes with bare LF line endings. `\r\n` is
 /// normalised to `\n` first; no newline is appended to a value that has
 /// none. A character with no ISO-8859-1 byte is refused, not silently
@@ -119,5 +137,32 @@ mod tests {
         for v in ["Workbench:", "C:Ed", "640", "CON:0/50//150/Shell/CLOSE"] {
             assert_eq!(decode_value(&encode_value(v).unwrap()), v);
         }
+    }
+
+    /// Phase 3 design §3.1/§4.1: the host writes these, `S:FirstBoot/90-prefs`
+    /// asks `IF EXISTS ENVARC:<name>` of them. One name, one place.
+    #[test]
+    fn the_two_markers_are_the_names_the_design_fixed() {
+        assert_eq!(
+            (ART_SET_INPUT, ART_SET_SCREENMODE),
+            ("ART_Set_Input", "ART_Set_ScreenMode")
+        );
+    }
+
+    #[test]
+    fn a_marker_path_is_its_name_directly_under_env_archive() {
+        assert_eq!(
+            ART_SET_INPUT_PATH,
+            format!("Prefs/Env-Archive/{ART_SET_INPUT}")
+        );
+        assert_eq!(
+            ART_SET_SCREENMODE_PATH,
+            format!("Prefs/Env-Archive/{ART_SET_SCREENMODE}")
+        );
+    }
+
+    #[test]
+    fn a_marker_is_true_with_no_trailing_newline() {
+        assert_eq!(encode_value(MARKER_VALUE).unwrap(), b"TRUE".to_vec());
     }
 }

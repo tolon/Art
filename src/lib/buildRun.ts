@@ -65,6 +65,9 @@ export interface Phase {
    *  and the folder it sits in — `osinstall_add_package` takes both. */
   file?: string;
   folder?: string;
+  /** First-boot phases only: the second tick, as confirmed when the run was
+   *  started — so a tick changed mid-run does not change what this run writes. */
+  askPrefs?: boolean;
 }
 
 /**
@@ -134,6 +137,7 @@ export interface SequenceInputs {
     file: string;
   }[];
   firstBootWanted: boolean;
+  firstBootAskPrefs: boolean;
 }
 
 /**
@@ -171,7 +175,12 @@ export function sequenceFor(inputs: SequenceInputs): Phase[] {
     });
   }
   if (inputs.firstBootWanted) {
-    phases.push({ id: "firstboot", kind: "firstboot", name: FIRST_BOOT_PHASE_NAME });
+    phases.push({
+      id: "firstboot",
+      kind: "firstboot",
+      name: FIRST_BOOT_PHASE_NAME,
+      askPrefs: inputs.firstBootAskPrefs,
+    });
   }
   return phases;
 }
