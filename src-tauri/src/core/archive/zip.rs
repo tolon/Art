@@ -42,7 +42,9 @@ use std::path::{Path, PathBuf};
 
 use zip::ZipArchive;
 
-use super::{ArchiveBackend, ArchiveEntry};
+use zip::HasZipMetadata;
+
+use super::{AmigaAttributes, ArchiveBackend, ArchiveEntry, EntryDate};
 use crate::core::error::{CoreError, CoreResult};
 
 pub struct ZipBackend {
@@ -139,6 +141,18 @@ impl ZipBackend {
     }
 }
 
+/// UnZip's Amiga port (`amiga/amiga.c:181-187`): flip PKAZip's FIB-style high
+/// word into Zip's set-means-granted form, clear the archive bit, then invert
+/// RWED back into the FIB form ART stores (R3 § 2). Low byte only: `.uaem`
+/// and PFS3 hold eight bits.
+pub(crate) fn zip_amiga_protection(external: u32) -> u32 {
+    let mut tmp = external;
+    if (tmp & 1) == ((tmp >> 18) & 1) {
+        tmp ^= 0x000F_0000;
+    }
+    (((tmp >> 16) & 0xFF) & !0x10) ^ 0x0F
+}
+
 impl ArchiveBackend for ZipBackend {
     fn format(&self) -> &'static str {
         "zip"
@@ -152,6 +166,9 @@ impl ArchiveBackend for ZipBackend {
                 .archive
                 .by_index_raw(index)
                 .map_err(|e| malformed(format!("entry {index} could not be read: {e}")))?;
+            let data = entry.get_metadata();
+            let amiga_host = data.system == zip::System::Amiga;
+            let comment = entry.comment();
             entries.push(ArchiveEntry {
                 // The name exactly as stored. A ZIP writes `/` as its
                 // separator whatever made it, and a hostile one writes
@@ -159,6 +176,15 @@ impl ArchiveBackend for ZipBackend {
                 name: entry.name().to_string(),
                 is_dir: entry.is_dir(),
                 declared_bytes: entry.size(),
+                amiga: AmigaAttributes {
+                    protection: amiga_host.then(|| zip_amiga_protection(data.external_attributes)),
+                    comment: (amiga_host && !comment.is_empty()).then(|| comment.to_string()),
+                    date: entry.last_modified().map(|dt| {
+                        EntryDate::MsDos(
+                            (u32::from(dt.datepart()) << 16) | u32::from(dt.timepart()),
+                        )
+                    }),
+                },
             });
         }
         Ok(entries)
@@ -577,6 +603,40 @@ pub mod tests {
     /// A directory entry is a directory, not a zero-byte file — get this
     /// wrong and an archive's folders arrive as empty files with the folder's
     /// name, and every path under them is refused.
+    #[test]
+    fn an_amiga_host_s_attributes_become_fib_protection_bits() {
+        // Info-ZIP: `----rwed` stored set-means-granted, read-only bit clear.
+        assert_eq!(zip_amiga_protection(0x000F_0000), 0x00);
+        // PKAZip: FIB bits stored as they are (0 = `----rwed`), read-only bit clear.
+        assert_eq!(zip_amiga_protection(0x0000_0000), 0x00);
+        // Info-ZIP `-s--rwed`: S set, RWED granted.
+        assert_eq!(zip_amiga_protection(0x004F_0000), 0x40);
+        // Info-ZIP `----rw-d` (E not granted): high 0x0D, read-only bit clear.
+        assert_eq!(zip_amiga_protection(0x000D_0000), 0x02);
+        // The archive bit is cleared on the way out, as UnZip does.
+        assert_eq!(zip_amiga_protection(0x001F_0000), 0x00);
+    }
+
+    /// A ZIP made on a PC carries no Amiga bits and no comment claim, only its date.
+    #[test]
+    fn a_pc_made_zip_entry_has_a_date_and_no_amiga_bits() {
+        let (_guard, dir) = scratch("zip-attrs-pc");
+        let path = dir.join("pc.zip");
+        {
+            let file = std::fs::File::create(&path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            writer
+                .start_file("Readme", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            std::io::Write::write_all(&mut writer, b"x").unwrap();
+            writer.finish().unwrap();
+        }
+        let entries = ZipBackend::open(&path).unwrap().entries().unwrap();
+        assert_eq!(entries[0].amiga.protection, None);
+        assert_eq!(entries[0].amiga.comment, None);
+        assert!(matches!(entries[0].amiga.date, Some(EntryDate::MsDos(_))));
+    }
+
     #[test]
     fn a_directory_entry_is_reported_as_one() {
         let (_guard, dir) = scratch("dirs");

@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use sevenz_rust2::{ArchiveReader, Password};
 
-use super::{ArchiveBackend, ArchiveEntry};
+use super::{AmigaAttributes, ArchiveBackend, ArchiveEntry, EntryDate};
 use crate::core::error::{CoreError, CoreResult};
 
 pub struct SevenZBackend {
@@ -60,6 +60,11 @@ impl SevenZBackend {
     }
 }
 
+/// A FILETIME (100 ns since 1601-01-01 UTC) as Unix seconds.
+pub(crate) fn filetime_to_unix(ft: u64) -> i64 {
+    (ft / 10_000_000) as i64 - 11_644_473_600
+}
+
 impl ArchiveBackend for SevenZBackend {
     fn format(&self) -> &'static str {
         "7z"
@@ -78,6 +83,13 @@ impl ArchiveBackend for SevenZBackend {
                 name: file.name.clone(),
                 is_dir: file.is_directory,
                 declared_bytes: file.size,
+                amiga: AmigaAttributes {
+                    protection: None,
+                    comment: None,
+                    date: file.has_last_modified_date.then(|| {
+                        EntryDate::Unix(filetime_to_unix(u64::from(file.last_modified_date)))
+                    }),
+                },
             })
             .collect())
     }
@@ -405,6 +417,22 @@ pub mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_filetime_becomes_unix_seconds() {
+        // 2025-01-01T00:00:00Z
+        assert_eq!(filetime_to_unix(133_801_632_000_000_000), 1_735_689_600);
+    }
+
+    #[test]
+    fn a_7z_entry_never_claims_amiga_bits_or_a_comment() {
+        let (_guard, dir) = scratch("7z-attrs");
+        let path = dir.join("a.7z");
+        std::fs::write(&path, make_7z_with(&[("C/Assign", b"x")])).unwrap();
+        let entries = SevenZBackend::open(&path).unwrap().entries().unwrap();
+        assert_eq!(entries[0].amiga.protection, None);
+        assert_eq!(entries[0].amiga.comment, None);
     }
 
     #[test]

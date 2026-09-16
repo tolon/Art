@@ -245,12 +245,14 @@ impl ArchiveTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::archive::AmigaAttributes;
 
     fn file(name: &str, bytes: u64) -> ArchiveEntry {
         ArchiveEntry {
             name: name.to_string(),
             is_dir: false,
             declared_bytes: bytes,
+            amiga: AmigaAttributes::default(),
         }
     }
 
@@ -259,6 +261,7 @@ mod tests {
             name: name.to_string(),
             is_dir: true,
             declared_bytes: 0,
+            amiga: AmigaAttributes::default(),
         }
     }
 

@@ -46,6 +46,43 @@ pub struct ArchiveEntry {
     /// The size the archive *claims*, which is a claim and not a measurement.
     /// The gate budgets from it and then checks what actually arrives.
     pub declared_bytes: u64,
+    /// What this entry says about protection bits, an AmigaDOS comment and a
+    /// date — never more than the format itself states. LHA and ZIP can both
+    /// carry a genuine Amiga origin (R3 § 1, § 2); 7z never does, so its
+    /// backend always reports `AmigaAttributes::default()` with only the
+    /// date filled in.
+    pub amiga: AmigaAttributes,
+}
+
+/// What an archive entry says about its Amiga-side attributes.
+///
+/// Every field is `None`/absent by default: an archive that says nothing
+/// about protection, a comment or a date must not be read as though it said
+/// "none of these are set" in the AmigaDOS sense — those are two different
+/// facts, and only the format's own bytes can tell them apart (R3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AmigaAttributes {
+    /// `HSPARWED` as a header block stores it — RWED inverted, `uaem::parse_bits`'
+    /// form.
+    pub protection: Option<u32>,
+    /// The file note, Latin-1 decoded; `None` when absent or empty.
+    pub comment: Option<String>,
+    pub date: Option<EntryDate>,
+}
+
+/// An entry's timestamp, in whichever form the archive itself stores it.
+///
+/// Kept as two variants rather than converted to one on the way in: an
+/// MS-DOS date/time pair is wall-clock with no time zone, and turning it into
+/// a `Unix` instant here would be inventing a zone the archive never stated.
+/// That conversion is a consumer's job (Task 9), done with the clock the
+/// consumer is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryDate {
+    /// MS-DOS date (high word) and time (low word): wall-clock time, no zone.
+    MsDos(u32),
+    /// Seconds since 1970, UTC.
+    Unix(i64),
 }
 
 /// What a format has to answer for its bytes to reach the disk.

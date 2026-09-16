@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use delharc::LhaDecodeReader;
 
-use super::{ArchiveBackend, ArchiveEntry};
+use super::{AmigaAttributes, ArchiveBackend, ArchiveEntry, EntryDate};
 use crate::core::error::{CoreError, CoreResult};
 
 pub struct LhaBackend {
@@ -109,6 +109,19 @@ impl LhaBackend {
     }
 }
 
+/// XADMaster `XADLZHParser.m`: the OS id decides; a level-0 header with none is
+/// Amiga when the archive is named `.lha`/`.run` (R3 § 1).
+fn lha_amiga_bits(header: &delharc::LhaHeader, archive: &Path) -> bool {
+    match header.parse_os_type() {
+        Ok(delharc::OsType::Amiga) => true,
+        Ok(delharc::OsType::Generic) if header.level == 0 => archive
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("lha") || e.eq_ignore_ascii_case("run")),
+        _ => false,
+    }
+}
+
 impl ArchiveBackend for LhaBackend {
     fn format(&self) -> &'static str {
         "lha"
@@ -120,10 +133,22 @@ impl ArchiveBackend for LhaBackend {
         loop {
             let header = reader.header();
             let method = String::from_utf8_lossy(&header.compression).to_string();
+            let name = crate::core::lha::entry_name(header);
+            let amiga_bits = lha_amiga_bits(header, &self.path);
+            let date = match header.level {
+                0 | 1 => Some(EntryDate::MsDos(header.last_modified)),
+                2 => Some(EntryDate::Unix(i64::from(header.last_modified))),
+                _ => None,
+            };
             entries.push(ArchiveEntry {
-                name: crate::core::lha::entry_path(header),
+                name: name.path,
                 is_dir: method == "-lhd-",
                 declared_bytes: header.original_size,
+                amiga: AmigaAttributes {
+                    protection: amiga_bits.then(|| u32::from(header.msdos_attrs.bits() as u8)),
+                    comment: (!name.comment.is_empty()).then(|| name.comment.clone()),
+                    date,
+                },
             });
 
             let has_more = reader
@@ -232,5 +257,48 @@ mod tests {
 
         assert!(LhaBackend::open(&bogus).is_err());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// R3 § 1: an Amiga LhA's attribute byte is the FIB protection byte and is
+    /// carried as it is; its date is MS-DOS wall-clock bits.
+    #[test]
+    fn an_amiga_level_one_entry_carries_its_protection_byte_and_dos_date() {
+        let (_guard, dir) = scratch("lha-attrs-l1");
+        let path = dir.join("pack.lha");
+        std::fs::write(
+            &path,
+            crate::core::lha::tests::make_level1_lha(b"C", b"Assign", b"x"),
+        )
+        .unwrap();
+        let entries = LhaBackend::open(&path).unwrap().entries().unwrap();
+        let dos = ((45u32 << 9) | (1 << 5) | 1) << 16;
+        assert_eq!(entries[0].amiga.protection, Some(0x20));
+        assert_eq!(entries[0].amiga.date, Some(EntryDate::MsDos(dos)));
+    }
+
+    /// XADMaster's guess (R3 § 1): a level-0 header without an OS id is Amiga
+    /// when the archive is called `.lha`/`.run`, MS-DOS otherwise — so the same
+    /// bytes carry bits under one name and none under the other.
+    #[test]
+    fn a_level_zero_entry_without_an_os_id_is_amiga_only_by_the_archive_name() {
+        let (_guard, dir) = scratch("lha-attrs-l0");
+        let mut bytes = crate::core::lha::tests::level0_entry(b"README", b"x");
+        bytes.push(0);
+        let lha = dir.join("a.lha");
+        let lzh = dir.join("a.lzh");
+        std::fs::write(&lha, &bytes).unwrap();
+        std::fs::write(&lzh, &bytes).unwrap();
+        assert_eq!(
+            LhaBackend::open(&lha).unwrap().entries().unwrap()[0]
+                .amiga
+                .protection,
+            Some(0x20)
+        );
+        assert_eq!(
+            LhaBackend::open(&lzh).unwrap().entries().unwrap()[0]
+                .amiga
+                .protection,
+            None
+        );
     }
 }

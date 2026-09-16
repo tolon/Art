@@ -108,6 +108,77 @@ pub fn crc16_arc(data: &[u8]) -> u16 {
     crc
 }
 
+/// The CRC-32/ISO-HDLC (a.k.a. IEEE 802.3, "zip CRC-32") table: reflected,
+/// polynomial `0xEDB8_8320`.
+///
+/// Built once, at compile time, with a `while` loop rather than an iterator —
+/// `const fn` cannot use `for`. This is the **one** CRC-32 table in ART:
+/// `core::rom::compute_crc32` and every archive backend's checksum go through
+/// [`crc32_ieee`]/[`Crc32`] rather than each carrying its own copy.
+const CRC32_TABLE: [u32; 256] = {
+    let mut table = [0u32; 256];
+    let mut n = 0usize;
+    while n < 256 {
+        let mut c = n as u32;
+        let mut k = 0;
+        while k < 8 {
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+            k += 1;
+        }
+        table[n] = c;
+        n += 1;
+    }
+    table
+};
+
+/// CRC-32/ISO-HDLC, computed incrementally.
+///
+/// The one-shot [`crc32_ieee`] is a thin wrapper over this; use `Crc32`
+/// directly when the bytes do not all arrive at once (an archive backend
+/// reading a stream in chunks, for instance) — the two must and do agree,
+/// which `crc32_matches_the_standard_vector_whole_and_in_pieces` checks.
+pub struct Crc32(u32);
+
+impl Crc32 {
+    pub fn new() -> Self {
+        Self(0xFFFF_FFFF)
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        let mut crc = self.0;
+        for &b in bytes {
+            crc = CRC32_TABLE[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
+        }
+        self.0 = crc;
+    }
+
+    pub fn finish(&self) -> u32 {
+        !self.0
+    }
+}
+
+impl Default for Crc32 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// CRC-32/ISO-HDLC (a.k.a. IEEE 802.3) over a whole byte slice — the standard
+/// checksum ZIP, PNG and Ethernet all use.
+///
+/// One place: [`core::rom::compute_crc32`](crate::core::rom::compute_crc32)
+/// delegates here, and every archive backend that has to report or verify a
+/// CRC-32 uses this rather than keeping its own table.
+pub fn crc32_ieee(bytes: &[u8]) -> u32 {
+    let mut crc = Crc32::new();
+    crc.update(bytes);
+    crc.finish()
+}
+
 /// Lowercase hex encoding of a byte slice.
 pub fn hex_encode(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -136,6 +207,19 @@ mod tests {
     #[test]
     fn crc16_matches_the_arc_check_vector() {
         assert_eq!(crc16_arc(b"123456789"), 0xBB3D);
+    }
+
+    /// The standard CRC-32 check vector, whole and split across two
+    /// `update` calls — the incremental path must land on the same value as
+    /// the one-shot function.
+    #[test]
+    fn crc32_matches_the_standard_vector_whole_and_in_pieces() {
+        assert_eq!(crc32_ieee(b""), 0);
+        assert_eq!(crc32_ieee(b"123456789"), 0xCBF4_3926);
+        let mut split = Crc32::new();
+        split.update(b"1234");
+        split.update(b"56789");
+        assert_eq!(split.finish(), 0xCBF4_3926);
     }
 
     /// The empty input is the init value, unmodified. WHDLoad's own routine

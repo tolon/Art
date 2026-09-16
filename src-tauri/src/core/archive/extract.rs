@@ -397,7 +397,7 @@ pub fn extract_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::archive::ArchiveEntry;
+    use crate::core::archive::{AmigaAttributes, ArchiveEntry};
     use crate::core::jobs::NoProgress;
 
     fn scratch(tag: &str) -> (crate::core::ScratchDir, std::path::PathBuf) {
@@ -431,6 +431,7 @@ mod tests {
             name: name.to_string(),
             is_dir: false,
             declared_bytes: declared,
+            amiga: AmigaAttributes::default(),
         }
     }
 

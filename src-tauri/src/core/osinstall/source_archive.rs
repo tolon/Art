@@ -118,7 +118,9 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use crate::core::adf::bcpl::AmigaDate;
-use crate::core::archive::{extract::MAX_ENTRY_OUTPUT, ArchiveBackend, ArchiveEntry};
+use crate::core::archive::{
+    extract::MAX_ENTRY_OUTPUT, AmigaAttributes, ArchiveBackend, ArchiveEntry,
+};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::security::safe_join;
 use crate::core::volume::write::file::default_protection;
@@ -261,6 +263,7 @@ impl ArchiveSource {
                         name: ancestor.to_string(),
                         is_dir: true,
                         declared_bytes: 0,
+                        amiga: AmigaAttributes::default(),
                     },
                 ));
             }

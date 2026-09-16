@@ -404,7 +404,7 @@ pub mod tests {
     }
 
     /// One level-0 header plus its stored payload.
-    fn level0_entry(filename: &[u8], content: &[u8]) -> Vec<u8> {
+    pub(crate) fn level0_entry(filename: &[u8], content: &[u8]) -> Vec<u8> {
         let compressed_size: u32 = content.len() as u32;
         let uncompressed_size: u32 = content.len() as u32;
         let dos_date: u16 = (((2025 - 1980) << 9) | (1 << 5) | 1) as u16;
