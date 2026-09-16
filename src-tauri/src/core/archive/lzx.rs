@@ -150,7 +150,7 @@ fn read_exact_or(
 }
 
 /// A group's decode error, restated for one member — keeping its kind: a
-/// compressed block ART does not read yet is not a damaged archive.
+/// pack mode ART does not read is not a damaged archive.
 fn for_member(name: &str, error: &CoreError) -> CoreError {
     match error {
         CoreError::UnsupportedFormat(detail) => {
@@ -172,11 +172,281 @@ fn read_stored(packed: impl Read, stop_at: u64) -> CoreResult<Vec<u8>> {
     Ok(out)
 }
 
-/// A compressed (pack mode 2) group, decoded up to `stop_at` bytes.
-fn decode_lzx<R: Read>(_packed: R, _stop_at: u64) -> CoreResult<Vec<u8>> {
-    Err(CoreError::UnsupportedFormat(
-        "compressed LZX blocks are not read yet".into(),
-    ))
+/// Extra bits per offset/length slot (the "footer").
+const ONE: [u8; 32] = [
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13, 14, 14,
+];
+/// Base value per offset/length slot.
+const TWO: [u32; 32] = [
+    0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536,
+    2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768, 49152,
+];
+const MAX_CODE_LEN: usize = 16;
+const LITERAL_SYMBOLS: usize = 768;
+
+/// The compressed stream's bits: 16-bit big-endian words, each taken least
+/// significant bit first. The reader holds one word; nothing is sized from
+/// the stream.
+struct Bits<R> {
+    inner: R,
+    word: u16,
+    left: u8,
+}
+
+impl<R: Read> Bits<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            word: 0,
+            left: 0,
+        }
+    }
+
+    fn bit(&mut self) -> CoreResult<u32> {
+        if self.left == 0 {
+            let mut two = [0u8; 2];
+            let mut got = 0;
+            // `got < 2` keeps the slice in range; `read` returns at most its length.
+            while got < 2 {
+                let n = self.inner.read(&mut two[got..])?;
+                if n == 0 {
+                    break;
+                }
+                got += n;
+            }
+            if got == 0 {
+                return Err(malformed("the compressed stream ends before its data does"));
+            }
+            self.word = u16::from_be_bytes(two);
+            self.left = 16;
+        }
+        let b = u32::from(self.word & 1);
+        self.word >>= 1;
+        self.left -= 1;
+        Ok(b)
+    }
+
+    /// An n-bit value, its least significant bit read first.
+    fn bits(&mut self, n: u8) -> CoreResult<u32> {
+        let mut value = 0;
+        for i in 0..n {
+            value |= self.bit()? << i;
+        }
+        Ok(value)
+    }
+}
+
+/// A canonical Huffman table: codes assigned in (length, symbol) order. Only
+/// a complete table (Kraft sum exactly 1) is accepted.
+struct Huffman {
+    counts: [u16; MAX_CODE_LEN + 1],
+    symbols: Vec<u16>,
+}
+
+impl Huffman {
+    fn new(lengths: &[u8]) -> CoreResult<Self> {
+        let mut counts = [0u16; MAX_CODE_LEN + 1];
+        for &len in lengths {
+            let slot = counts
+                .get_mut(usize::from(len))
+                .ok_or_else(|| malformed(format!("a code length of {len}")))?;
+            *slot += 1;
+        }
+        counts[0] = 0;
+        let mut left: i64 = 1;
+        for &count in &counts[1..] {
+            left = (left << 1) - i64::from(count);
+            if left < 0 {
+                return Err(malformed("a Huffman table is over-subscribed"));
+            }
+        }
+        if left != 0 {
+            return Err(malformed("a Huffman table is incomplete"));
+        }
+        // `lengths` is a slice this module owns: 8, 20 or 768 entries.
+        let mut symbols = Vec::with_capacity(lengths.len());
+        for len in 1..=MAX_CODE_LEN {
+            for (symbol, &l) in lengths.iter().enumerate() {
+                if usize::from(l) == len {
+                    symbols.push(symbol as u16);
+                }
+            }
+        }
+        Ok(Self { counts, symbols })
+    }
+
+    /// One symbol, the code read most significant bit first.
+    fn decode<R: Read>(&self, bits: &mut Bits<R>) -> CoreResult<u16> {
+        let (mut code, mut first, mut index) = (0i64, 0i64, 0i64);
+        for &count in &self.counts[1..] {
+            code |= i64::from(bits.bit()?);
+            let count = i64::from(count);
+            if code - count < first {
+                return usize::try_from(index + code - first)
+                    .ok()
+                    .and_then(|i| self.symbols.get(i).copied())
+                    .ok_or_else(|| malformed("a Huffman code names no symbol"));
+            }
+            index += count;
+            first = (first + count) << 1;
+            code <<= 1;
+        }
+        Err(malformed("a Huffman code runs past 16 bits"))
+    }
+}
+
+/// A code length is stored as a change to the one before it, modulo 17.
+fn delta(previous: u8, symbol: u16) -> u8 {
+    ((u16::from(previous) + 17 - symbol) % 17) as u8
+}
+
+/// The 768 literal code lengths, in two passes (0..256 with `fix` 1, then
+/// 256..768 with `fix` 0), each through its own 20-symbol pretree. The
+/// lengths are deltas against the previous block's, so `lengths` persists.
+fn read_literal_lengths<R: Read>(
+    bits: &mut Bits<R>,
+    lengths: &mut [u8; LITERAL_SYMBOLS],
+) -> CoreResult<()> {
+    let mut pos = 0usize;
+    for (fix, end) in [(1u32, 256usize), (0u32, LITERAL_SYMBOLS)] {
+        let mut pre = [0u8; 20];
+        for l in pre.iter_mut() {
+            *l = bits.bits(4)? as u8;
+        }
+        let pretree = Huffman::new(&pre)?;
+        while pos < end {
+            let symbol = pretree.decode(bits)?;
+            let (run, value) = match symbol {
+                17 => (3 + bits.bits(4)? + fix, 0),
+                18 => (19 + bits.bits((6 - fix) as u8)? + fix, 0),
+                19 => {
+                    let run = 3 + bits.bits(1)? + fix;
+                    let next = pretree.decode(bits)?;
+                    if next > 16 {
+                        return Err(malformed("a length repeat names another repeat"));
+                    }
+                    (run, delta(lengths[pos], next))
+                }
+                s => {
+                    lengths[pos] = delta(lengths[pos], s);
+                    pos += 1;
+                    continue;
+                }
+            };
+            for _ in 0..run {
+                if pos >= end {
+                    break;
+                }
+                lengths[pos] = value;
+                pos += 1;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A compressed (pack mode 2) group, decoded up to `stop_at` bytes — exactly
+/// `stop_at` or an error. The caller keeps `stop_at` within
+/// [`MAX_GROUP_OUTPUT`], and that is the only bound `out` grows to.
+///
+/// ```text
+/// block     method = bits(3): 1 reuse the literal table, 2 new table,
+///           3 new table + aligned offsets (8 × bits(3) lengths first);
+///           then length = bits(8)<<16 | bits(8)<<8 | bits(8);
+///           then, for 2 and 3, the literal lengths
+/// symbol    < 256 a literal; else slot = s & 31 gives the offset
+///           (TWO + extra bits, the low 3 from the aligned table in a
+///           method-3 block when ONE ≥ 3; 0 means the last offset) and
+///           (s >> 5) & 15 the length (TWO + 3 + extra bits)
+/// ```
+///
+/// State resets per group: lengths zero, last offset 1, no table. A match
+/// reaching before the group's first byte is refused.
+fn decode_lzx<R: Read>(packed: R, stop_at: u64) -> CoreResult<Vec<u8>> {
+    let mut bits = Bits::new(packed);
+    let mut out: Vec<u8> = Vec::new();
+    let mut literal_len = [0u8; LITERAL_SYMBOLS];
+    let mut literal: Option<Huffman> = None;
+    let mut aligned: Option<Huffman> = None;
+    let mut method = 0u32;
+    let mut block_left = 0u64;
+    let mut last_offset = 1usize;
+
+    while (out.len() as u64) < stop_at {
+        if block_left == 0 {
+            method = bits.bits(3)?;
+            if !(1..=3).contains(&method) {
+                return Err(malformed(format!(
+                    "block type {method} is not one Amiga LZX writes"
+                )));
+            }
+            if method == 3 {
+                let mut offset_len = [0u8; 8];
+                for l in offset_len.iter_mut() {
+                    *l = bits.bits(3)? as u8;
+                }
+                aligned = Some(Huffman::new(&offset_len)?);
+            }
+            block_left = u64::from(bits.bits(8)?) << 16;
+            block_left |= u64::from(bits.bits(8)?) << 8;
+            block_left |= u64::from(bits.bits(8)?);
+            if method != 1 {
+                read_literal_lengths(&mut bits, &mut literal_len)?;
+                literal = Some(Huffman::new(&literal_len)?);
+            }
+            if literal.is_none() {
+                return Err(malformed(
+                    "a block reuses a literal table no earlier block built",
+                ));
+            }
+            continue;
+        }
+        let table = literal
+            .as_ref()
+            .ok_or_else(|| malformed("no literal table"))?;
+        let symbol = usize::from(table.decode(&mut bits)?);
+        if symbol < 256 {
+            out.push(symbol as u8);
+            block_left = block_left.saturating_sub(1);
+            continue;
+        }
+        let symbol = symbol - 256;
+        let slot = symbol & 31;
+        let footer = ONE[slot];
+        let mut offset = TWO[slot] as usize;
+        if method == 3 && footer >= 3 {
+            offset += (bits.bits(footer - 3)? as usize) << 3;
+            let aligned = aligned
+                .as_ref()
+                .ok_or_else(|| malformed("an aligned block has no offset table"))?;
+            offset += usize::from(aligned.decode(&mut bits)?);
+        } else {
+            offset += bits.bits(footer)? as usize;
+            if offset == 0 {
+                offset = last_offset;
+            }
+        }
+        last_offset = offset;
+        let len_slot = (symbol >> 5) & 15;
+        let length = TWO[len_slot] as usize + 3 + bits.bits(ONE[len_slot])? as usize;
+        let start = out.len().checked_sub(offset).ok_or_else(|| {
+            malformed(format!(
+                "a match reaches {offset} bytes back, before the start of the data"
+            ))
+        })?;
+        for k in 0..length {
+            if out.len() as u64 >= stop_at {
+                break;
+            }
+            let byte = *out
+                .get(start + k)
+                .ok_or_else(|| malformed("a match reads past what was decoded"))?;
+            out.push(byte);
+        }
+        block_left = block_left.saturating_sub(length as u64);
+    }
+    Ok(out)
 }
 
 impl LzxBackend {
@@ -784,5 +1054,259 @@ pub(crate) mod tests {
             "lzx"
         );
         assert_eq!(crate::core::archive::open(&path).unwrap().format(), "lzx");
+    }
+
+    struct BitWriter {
+        bytes: Vec<u8>,
+        word: u16,
+        used: u32,
+    }
+
+    impl BitWriter {
+        fn new() -> Self {
+            Self {
+                bytes: Vec::new(),
+                word: 0,
+                used: 0,
+            }
+        }
+        fn bit(&mut self, b: u32) {
+            self.word |= ((b & 1) as u16) << self.used;
+            self.used += 1;
+            if self.used == 16 {
+                self.bytes.extend_from_slice(&self.word.to_be_bytes());
+                self.word = 0;
+                self.used = 0;
+            }
+        }
+        /// An n-bit value, least significant bit first.
+        fn put(&mut self, value: u32, n: u32) {
+            for i in 0..n {
+                self.bit(value >> i);
+            }
+        }
+        /// A Huffman code, most significant bit first.
+        fn code(&mut self, code: u32, len: u32) {
+            for i in (0..len).rev() {
+                self.bit(code >> i);
+            }
+        }
+        fn finish(mut self) -> Vec<u8> {
+            if self.used > 0 {
+                self.bytes.extend_from_slice(&self.word.to_be_bytes());
+            }
+            self.bytes
+        }
+    }
+
+    /// One block whose literal table gives symbols 0..512 nine-bit codes
+    /// (code = symbol) and 512..768 none. The pretree gives symbol 0 and 8
+    /// one-bit codes (0 → `0`, 8 → `1`): 8 turns a 0 into 9, 0 leaves a 0.
+    fn nine_bit_table(w: &mut BitWriter) {
+        let pretree = |w: &mut BitWriter| {
+            for s in 0..20 {
+                w.put(if s == 0 || s == 8 { 1 } else { 0 }, 4);
+            }
+        };
+        pretree(w); // pass A: 256 × "9"
+        for _ in 0..256 {
+            w.code(1, 1);
+        }
+        pretree(w); // pass B: 256 × "9", then 256 × "0"
+        for _ in 0..256 {
+            w.code(1, 1);
+        }
+        for _ in 0..256 {
+            w.code(0, 1);
+        }
+    }
+
+    fn put_len(w: &mut BitWriter, length: u32) {
+        w.put((length >> 16) & 0xFF, 8);
+        w.put((length >> 8) & 0xFF, 8);
+        w.put(length & 0xFF, 8);
+    }
+
+    fn one_member(path: &Path, data: &[u8], stream: &[u8]) {
+        std::fs::write(
+            path,
+            archive(&[Rec {
+                name: "Out",
+                comment: "",
+                attrs: 0x0F,
+                unpacked: data.len() as u32,
+                method: 2,
+                data_crc: crc(data),
+                packed: stream,
+            }]),
+        )
+        .unwrap();
+    }
+
+    /// Literals, a match with three LSB-first extra offset bits (value 6, not a
+    /// palindrome, so a reversed read gives 3), then a repeat of the last offset.
+    #[test]
+    fn a_compressed_block_of_literals_and_matches_decodes() {
+        let expected = b"0123456789ABCDEFGHIJKLMN2345678";
+        let mut w = BitWriter::new();
+        w.put(2, 3);
+        put_len(&mut w, expected.len() as u32);
+        nine_bit_table(&mut w);
+        for &b in &expected[..24] {
+            w.code(u32::from(b), 9);
+        }
+        w.code(256 + 8, 9); // offset slot 8: 16 + bits(3); length slot 0: 3
+        w.put(6, 3); // offset 22 → "234"
+        w.code(256 + 32, 9); // offset slot 0 → last offset 22; length slot 1: 4 → "5678"
+        let (_guard, dir) = scratch("lzx-block");
+        let path = dir.join("b.lzx");
+        one_member(&path, expected, &w.finish());
+        assert_eq!(
+            LzxBackend::open(&path).unwrap().read(0, 1 << 20).unwrap(),
+            expected
+        );
+    }
+
+    /// The same table as [`nine_bit_table`], built from the run symbols. The
+    /// pretree gives 8, 17, 18 and 19 two-bit codes (`00`, `01`, `10`, `11`).
+    /// Pass A (fix 1): one 8, then 51 × symbol 19 with bits(1) = 1 → runs of
+    /// 3 + 1 + 1 = 5 nines. Pass B (fix 0): 64 × symbol 19 → runs of 4 nines,
+    /// then symbol 18 × 3 with bits(6) = 63 → 82 zeros each, then symbol 17
+    /// with bits(4) = 7 → 10 zeros.
+    fn nine_bit_table_from_runs(w: &mut BitWriter) {
+        let pretree = |w: &mut BitWriter| {
+            for s in 0..20 {
+                w.put(if [8, 17, 18, 19].contains(&s) { 2 } else { 0 }, 4);
+            }
+        };
+        pretree(w);
+        w.code(0b00, 2);
+        for _ in 0..51 {
+            w.code(0b11, 2);
+            w.put(1, 1);
+            w.code(0b00, 2);
+        }
+        pretree(w);
+        for _ in 0..64 {
+            w.code(0b11, 2);
+            w.put(1, 1);
+            w.code(0b00, 2);
+        }
+        for _ in 0..3 {
+            w.code(0b10, 2);
+            w.put(63, 6);
+        }
+        w.code(0b01, 2);
+        w.put(7, 4);
+    }
+
+    /// Runs carry `fix` in their length (1 in pass A, 0 in pass B): read with
+    /// the wrong one, the table's positions shift and the text does not decode.
+    #[test]
+    fn a_literal_table_built_from_length_runs_decodes() {
+        let expected = b"0123456789ABCDEFGHIJKLMN2345678";
+        let mut w = BitWriter::new();
+        w.put(2, 3);
+        put_len(&mut w, expected.len() as u32);
+        nine_bit_table_from_runs(&mut w);
+        for &b in &expected[..24] {
+            w.code(u32::from(b), 9);
+        }
+        w.code(256 + 8, 9);
+        w.put(6, 3);
+        w.code(256 + 32, 9);
+        let (_guard, dir) = scratch("lzx-runs");
+        let path = dir.join("runs.lzx");
+        one_member(&path, expected, &w.finish());
+        assert_eq!(
+            LzxBackend::open(&path).unwrap().read(0, 1 << 20).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn an_aligned_offset_block_decodes() {
+        let expected = b"0123456789ABCDEFGHIJKLMN234";
+        let mut w = BitWriter::new();
+        w.put(3, 3);
+        for _ in 0..8 {
+            w.put(3, 3); // eight 3-bit aligned codes: code = symbol
+        }
+        put_len(&mut w, expected.len() as u32);
+        nine_bit_table(&mut w);
+        for &b in &expected[..24] {
+            w.code(u32::from(b), 9);
+        }
+        w.code(256 + 8, 9); // slot 8 (footer 3): 16 + (bits(0) << 3) + aligned
+        w.code(6, 3); // aligned symbol 6 (code 110, not a palindrome) → offset 22 → "234"
+        let (_guard, dir) = scratch("lzx-aligned");
+        let path = dir.join("a.lzx");
+        one_member(&path, expected, &w.finish());
+        assert_eq!(
+            LzxBackend::open(&path).unwrap().read(0, 1 << 20).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_first_block_that_reuses_a_table_is_refused() {
+        let mut w = BitWriter::new();
+        w.put(1, 3);
+        put_len(&mut w, 1);
+        w.put(0, 16);
+        let (_guard, dir) = scratch("lzx-reuse");
+        let path = dir.join("r.lzx");
+        one_member(&path, b"x", &w.finish());
+        let err = LzxBackend::open(&path).unwrap().read(0, 16).unwrap_err();
+        assert!(err.to_string().contains("no earlier block built"), "{err}");
+    }
+
+    #[test]
+    fn a_match_before_the_first_byte_is_refused() {
+        let mut w = BitWriter::new();
+        w.put(2, 3);
+        put_len(&mut w, 3);
+        nine_bit_table(&mut w);
+        w.code(u32::from(b'a'), 9);
+        w.code(256 + 4, 9); // slot 4: offset 4 + bits(1)
+        w.put(0, 1); // offset 4, with one byte written
+        let (_guard, dir) = scratch("lzx-before");
+        let path = dir.join("m.lzx");
+        one_member(&path, b"aaa", &w.finish());
+        let err = LzxBackend::open(&path).unwrap().read(0, 16).unwrap_err();
+        assert!(err.to_string().contains("before the start"), "{err}");
+    }
+
+    #[test]
+    fn a_stream_that_ends_early_is_refused() {
+        let mut w = BitWriter::new();
+        w.put(2, 3);
+        put_len(&mut w, 10);
+        nine_bit_table(&mut w);
+        w.code(u32::from(b'a'), 9);
+        let (_guard, dir) = scratch("lzx-short");
+        let path = dir.join("s.lzx");
+        one_member(&path, b"aaaaaaaaaa", &w.finish());
+        let err = LzxBackend::open(&path).unwrap().read(0, 16).unwrap_err();
+        assert!(
+            err.to_string().contains("ends before its data does"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_incomplete_pretree_is_refused() {
+        let mut w = BitWriter::new();
+        w.put(2, 3);
+        put_len(&mut w, 1);
+        for s in 0..20 {
+            w.put(if s == 0 { 1 } else { 0 }, 4); // one 1-bit code: Kraft ½
+        }
+        w.put(0, 16);
+        let (_guard, dir) = scratch("lzx-incomplete");
+        let path = dir.join("i.lzx");
+        one_member(&path, b"x", &w.finish());
+        let err = LzxBackend::open(&path).unwrap().read(0, 16).unwrap_err();
+        assert!(err.to_string().contains("incomplete"), "{err}");
     }
 }
