@@ -92,7 +92,7 @@ pub struct Detection {
     /// Coarse category — drives workflow routing.
     pub category: FormatCategory,
     /// Best-effort concrete format id: `"adf"`, `"adz"`, `"dms"`, `"hdf"`,
-    /// `"hdz"`, `"lha"`, `"rom"`, `"directory"`, or `"unknown"`.
+    /// `"hdz"`, `"lha"`, `"lzx"`, `"rom"`, `"directory"`, or `"unknown"`.
     pub format_hint: String,
     /// 0.0–1.0. How confident detection is. Conservative: signature-backed
     /// detection may report high confidence; extension-only detection stays
@@ -327,9 +327,20 @@ pub fn detect(path: &Path) -> CoreResult<Detection> {
         }
     }
 
-    // Archives, all three by signature. A longer head than the four bytes
+    // Archives, all four by signature. A longer head than the four bytes
     // above, because LHA's evidence starts two bytes in and 7z's runs to six.
     if let Ok(head) = read_head(path, 8) {
+        // LZX first: its "LZX" is at offset 0, where nothing else ART reads
+        // puts those bytes.
+        if head.len() >= 3 && &head[..3] == b"LZX" {
+            return Ok(Detection {
+                category: FormatCategory::Archive,
+                format_hint: "lzx".to_string(),
+                confidence: 0.9,
+                size,
+                is_dir: false,
+            });
+        }
         if is_lha_header(&head) {
             return Ok(Detection {
                 category: FormatCategory::Archive,

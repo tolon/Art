@@ -25,6 +25,7 @@
 pub mod compress;
 pub mod extract;
 pub mod lha;
+pub mod lzx;
 pub mod sevenz;
 pub mod tree;
 pub mod zip;
@@ -95,7 +96,7 @@ pub enum EntryDate {
 /// result, so the bound has to be *inside* the decompression loop. Returning
 /// more than `limit` is a backend defect; every backend is tested for it.
 pub trait ArchiveBackend {
-    /// `"lha"`, `"zip"`, `"7z"` — used in error messages and the operation log.
+    /// `"lha"`, `"zip"`, `"7z"`, `"lzx"` — used in error messages and the operation log.
     fn format(&self) -> &'static str;
 
     /// Every entry, in the order the archive stores them. The gate reads by
@@ -150,12 +151,12 @@ pub fn open(path: &Path) -> CoreResult<Box<dyn ArchiveBackend>> {
 
 /// [`open`], with a key for an archive whose entries are encrypted.
 ///
-/// **ZIP only, and refused rather than ignored for the other two.** The one
+/// **ZIP only, and refused rather than ignored for the others.** The one
 /// shape that needs this is an update package's own ZipCrypto payload (see
 /// `zip::ZipBackend`'s module doc comment). A password silently dropped for an
-/// LHA or a 7z would be ART accepting a recipe it cannot honour and then
+/// LHA, a 7z or an LZX would be ART accepting a recipe it cannot honour and then
 /// failing later for a reason nobody could connect to it — the "confident,
-/// wrong" shape. Neither format is one any shipped recipe names a password
+/// wrong" shape. None of those formats is one any shipped recipe names a password
 /// for, so this refusal is unreachable today and is what keeps it so.
 pub fn open_with_password(
     path: &Path,
@@ -169,7 +170,8 @@ pub fn open_with_password(
             path, password,
         )?)),
         ("7z", None) => Ok(Box::new(sevenz::SevenZBackend::open(path)?)),
-        (format @ ("lha" | "7z"), Some(_)) => Err(CoreError::UnsupportedFormat(format!(
+        ("lzx", None) => Ok(Box::new(lzx::LzxBackend::open(path)?)),
+        (format @ ("lha" | "7z" | "lzx"), Some(_)) => Err(CoreError::UnsupportedFormat(format!(
             "'{}' is a {format} archive and ART can only use a payload password with a ZIP",
             path.display()
         ))),
@@ -229,6 +231,11 @@ mod tests {
                 "7z",
                 "hostile.7z",
                 sevenz::tests::make_7z_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
+            ),
+            (
+                "lzx",
+                "hostile.lzx",
+                lzx::tests::make_lzx_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
             ),
         ]
     }
