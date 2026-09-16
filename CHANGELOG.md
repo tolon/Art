@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The first-boot report says when a step asked for a restart, and whether the Amiga restarted, had no command for it,
   or has not come back yet. A rehearsal that runs out of time while the Amiga waits in a preferences window names that
   window.
+- **The sentence for a restart this Amiga could not carry out names the effect rather than completion.** It can print
+  directly beneath *Every first-boot step has run* — the real AmigaOS 3.9 run did exactly that — where telling you to
+  restart "to finish" would be advice about something that had already finished. It now says that a step asked for a
+  restart, that this Amiga has no restart command, and that what that step set up may not take effect until you
+  restart the machine yourself.
+- Applying a screen depth twice no longer keeps a backup copy of ART's own four-byte marker file. The preferences file
+  beside it is still backed up, so the Appearance panel reports one backup for one depth change rather than two.
 
 ## [0.9.4] - 2026-09-15
 
