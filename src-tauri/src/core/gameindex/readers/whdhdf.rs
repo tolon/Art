@@ -33,6 +33,7 @@ use crate::core::adf::fs::{list_directory_on, read_header_on};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::gameindex::readers::slave::{read_slave, SlaveFacts};
 use crate::core::volume::mount::{mount, scan_image};
+use crate::core::volume::VolumeGeometry;
 use crate::core::whdload::has_extension;
 
 /// How deep below the volume root a slave may sit.
@@ -152,6 +153,16 @@ fn malformed(detail: impl std::fmt::Display) -> CoreError {
     }
 }
 
+/// Which of the two AmigaDOS data-block layouts a mounted volume uses — FFS
+/// or OFS, from its DOS type. One rule for every reader of a hardfile's files.
+pub(crate) fn fs_type_of(geometry: &VolumeGeometry) -> FileSystemType {
+    if geometry.dos_type.is_ffs() {
+        FileSystemType::Ffs
+    } else {
+        FileSystemType::Ofs
+    }
+}
+
 /// Read the game inside a bootable WHDLoad hardfile.
 pub fn read_whdload_hardfile(path: &Path) -> CoreResult<HardfileGame> {
     let scanned = scan_image(path)?;
@@ -176,11 +187,7 @@ pub fn read_whdload_hardfile(path: &Path) -> CoreResult<HardfileGame> {
     };
 
     let (device, geometry) = mount(path, entry)?;
-    let fs_type = if geometry.dos_type.is_ffs() {
-        FileSystemType::Ffs
-    } else {
-        FileSystemType::Ofs
-    };
+    let fs_type = fs_type_of(&geometry);
 
     let mut queue = vec![Pending {
         block: geometry.root_block,

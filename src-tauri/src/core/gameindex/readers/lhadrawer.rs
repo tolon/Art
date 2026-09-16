@@ -157,6 +157,36 @@ fn settle_by_icon<'e>(
         .copied())
 }
 
+/// Every slave candidate in `entries`: `(index, drawer, slave name)` for each
+/// `.slave`/`.Slave` member whose drawer carries no `data`/`Data` component.
+/// The one rule [`read_archive_drawers`] and [`slave_drawers`] both apply.
+fn slave_candidates(
+    entries: &[archive::ArchiveEntry],
+) -> impl Iterator<Item = (usize, &str, &str)> {
+    entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| !entry.is_dir && has_slave_extension(&entry.name))
+        .map(|(index, entry)| {
+            let (inner, slave_name) = split_inner(&entry.name);
+            (index, inner, slave_name)
+        })
+        .filter(|(_, inner, _)| !has_payload_component(inner))
+}
+
+/// Every drawer in `entries` holding at least one slave candidate, sorted and
+/// deduplicated — `""` for a slave at the archive root. `core::card::content`
+/// asks this to decide whether an archive is one pack or a collection, so the
+/// card and the game index cannot disagree about what a title's drawer is.
+pub(crate) fn slave_drawers(entries: &[archive::ArchiveEntry]) -> Vec<String> {
+    let mut drawers: Vec<String> = slave_candidates(entries)
+        .map(|(_, inner, _)| inner.to_string())
+        .collect();
+    drawers.sort();
+    drawers.dedup();
+    drawers
+}
+
 /// Catalogue every WHDLoad drawer inside the archive at `path`, without
 /// unpacking anything.
 ///
@@ -192,14 +222,7 @@ pub fn read_archive_drawers(
     // discovering its sibling would mean decompressing a member this reader
     // is about to throw away.
     let mut by_inner: HashMap<&str, Vec<(usize, &str)>> = HashMap::new();
-    for (index, entry) in entries.iter().enumerate() {
-        if entry.is_dir || !has_slave_extension(&entry.name) {
-            continue;
-        }
-        let (inner, slave_name) = split_inner(&entry.name);
-        if has_payload_component(inner) {
-            continue;
-        }
+    for (index, inner, slave_name) in slave_candidates(&entries) {
         by_inner.entry(inner).or_default().push((index, slave_name));
     }
 

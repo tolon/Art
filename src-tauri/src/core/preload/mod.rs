@@ -750,6 +750,49 @@ pub(crate) fn step_label(step: &PreloadStep) -> String {
     }
 }
 
+/// A name as AmigaDOS compares it on an international volume: ASCII letters
+/// and Latin-1 `à..=þ` (except `÷`, which is not a letter) folded to upper
+/// case, everything else unchanged. Two names with the same fold are the same
+/// name on the Amiga, whatever Windows thinks of them.
+pub(crate) fn amiga_fold(name: &str) -> String {
+    name.chars()
+        .map(|c| match c {
+            'a'..='z' => c.to_ascii_uppercase(),
+            'à'..='þ' if c != '÷' => char::from_u32(c as u32 - 0x20).unwrap_or(c),
+            _ => c,
+        })
+        .collect()
+}
+
+/// A name and whoever put it there, for [`first_collision`].
+pub(crate) type NameOf<'a, O> = (&'a str, O);
+
+/// The first two items whose names are one name to AmigaDOS
+/// ([`amiga_fold`]), in iteration order — `(earlier, later)` — or `None`.
+///
+/// One rule for every place that asks "would these land on top of each
+/// other": the card's partition check (`core::card::content`) and the copy
+/// itself, so what was measured and what is copied cannot disagree (card
+/// round 2, R5). `owner` travels with each name so a caller can say *whose*
+/// names collide; it is never compared.
+pub(crate) fn first_collision<'a, O: Clone>(
+    names: impl IntoIterator<Item = NameOf<'a, O>>,
+) -> Option<(NameOf<'a, O>, NameOf<'a, O>)> {
+    let mut seen: std::collections::HashMap<String, (&'a str, O)> =
+        std::collections::HashMap::new();
+    for (name, owner) in names {
+        match seen.entry(amiga_fold(name)) {
+            std::collections::hash_map::Entry::Occupied(earlier) => {
+                return Some((earlier.get().clone(), (name, owner)));
+            }
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert((name, owner));
+            }
+        }
+    }
+    None
+}
+
 /// DosTypes Kickstart mounts itself, which need nothing in the RDB.
 fn kickstart_carries(dostype: u32) -> bool {
     dostype & 0xFFFF_FF00 == 0x444F_5300 && (dostype & 0xFF) <= 7

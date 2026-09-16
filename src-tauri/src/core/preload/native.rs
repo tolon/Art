@@ -146,7 +146,7 @@ impl NativeFormatter {
 
 /// An [`AmigaDate`] as libpfs3's (days, minutes, ticks). PFS3 stores days as
 /// a `u16`, which lasts until 2157, so a later day clamps rather than wraps.
-fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
+pub(crate) fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
     (
         u16::try_from(date.days).unwrap_or(u16::MAX),
         date.mins as u16,
@@ -697,12 +697,12 @@ fn put_i32(buf: &mut [u8], offset: usize, value: i32) {
 
 /// One thing to create on the volume. `relative` uses `/` throughout, the way
 /// both `libpfs3`'s path API and AmigaDOS itself do — never a host separator.
-struct CopyEntry {
-    relative: String,
-    host_path: PathBuf,
-    is_dir: bool,
+pub(crate) struct CopyEntry {
+    pub(crate) relative: String,
+    pub(crate) host_path: PathBuf,
+    pub(crate) is_dir: bool,
     /// File size in bytes. `0`, and unused, for a directory.
-    size: u64,
+    pub(crate) size: u64,
 }
 
 fn parent_key(relative: &str) -> &str {
@@ -717,7 +717,7 @@ fn leaf_name(relative: &str) -> &str {
 /// before folding the rest into a count — enough to be useful on a real
 /// install (ART-113 found 24 non-ASCII directories on one real tree), never
 /// enough to make the refusal itself as large as the tree it is refusing.
-const MAX_NAMED_NON_ASCII: usize = 20;
+pub(crate) const MAX_NAMED_NON_ASCII: usize = 20;
 
 /// Every entry in `entries` — file or directory — whose own name (the final
 /// path segment, exactly what `create_dir_in`/`write_file_in` are handed) is
@@ -730,9 +730,16 @@ const MAX_NAMED_NON_ASCII: usize = 20;
 fn non_ascii_entries(entries: &[CopyEntry]) -> Vec<&str> {
     entries
         .iter()
-        .filter(|entry| !leaf_name(&entry.relative).is_ascii())
+        .filter(|entry| needs_latin1(leaf_name(&entry.relative)))
         .map(|entry| entry.relative.as_str())
         .collect()
+}
+
+/// Whether `name` holds a character this version of `libpfs3` cannot write
+/// (ART-113): anything outside ASCII. One rule for the copy's refusal and the
+/// card's measure (`core::card::content`), so the two cannot disagree.
+pub(crate) fn needs_latin1(name: &str) -> bool {
+    !name.is_ascii()
 }
 
 /// The ART-113 refusal itself, or `None` when there is nothing to refuse.
@@ -763,7 +770,7 @@ fn non_ascii_refusal(entries: &[CopyEntry]) -> Option<CoreError> {
 /// find again — M6 (final review): the one rule lives in
 /// `libpfs3::format::pfs3_name_limit`, which the vendored writer's own
 /// `check_name_len` calls too, so there is one rule instead of two copies.
-fn pfs3_name_limit(fnsize: u16) -> usize {
+pub(crate) fn pfs3_name_limit(fnsize: u16) -> usize {
     libpfs3::format::pfs3_name_limit(fnsize)
 }
 
@@ -850,7 +857,7 @@ fn too_large_refusal(
 /// as `_AUX` — and [`AmigaNames`] reads the tree's own `distribution.json` to
 /// put those back (ART-160). A folder with no manifest renames nothing, so
 /// this costs one failed `read_to_string` per copy and changes nothing else.
-fn collect_entries(source: &Path) -> CoreResult<Vec<CopyEntry>> {
+pub(crate) fn collect_entries(source: &Path) -> CoreResult<Vec<CopyEntry>> {
     let mut out = Vec::new();
     let names = AmigaNames::read(source);
     collect_into(source, "", "", &names, &mut out)?;
@@ -1283,6 +1290,23 @@ fn copy_in_ffs(
 
 // ---------------------------------------------------------------------------
 
+/// The PFS3 image fixtures, for tests outside this module that need a
+/// formatted card rather than a copy of how to build one (card round 2, R3).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+
+    /// An 8 MB RDB card with one PFS3 (`PDS`) partition, formatted `Work`.
+    pub(crate) fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
+        super::tests::formatted_pds3_image()
+    }
+
+    /// The byte offset of the card's first partition inside `image`.
+    pub(crate) fn partition_offset(image: &Path) -> u64 {
+        super::tests::partition_offset(image)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1455,13 +1479,13 @@ mod tests {
         card_with_partition("dos3", AmigaHardDiskFs::FfsDirCache, 8)
     }
 
-    fn partition_offset(image: &Path) -> u64 {
+    pub(super) fn partition_offset(image: &Path) -> u64 {
         let card = read_card(image).unwrap();
         let part = &card.areas[0].rdb.partitions[0];
         card.areas[0].offset_bytes + part.byte_offset().unwrap()
     }
 
-    fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
+    pub(super) fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
         NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
