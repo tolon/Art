@@ -41,15 +41,104 @@
 //! folder the user assembled — and a manifest that cannot be parsed is not a
 //! reason to refuse a copy that would otherwise work. Both yield an empty
 //! map, and an empty map changes nothing about what gets copied.
+//!
+//! ## A second input: ART's own record
+//!
+//! `distribution.json` is not the only place a name can be escaped. Content
+//! staged onto a card by `core/volume/write/copy.rs` (an extracted archive or
+//! HDF drawer, ART-160's other half) can escape a name too, and that staging
+//! folder carries no `distribution.json` at all — it is not a distribution
+//! tree, and this module must not invent one for it to import. It carries
+//! [`AMIGA_NAMES_RECORD`] instead: an ART-private file, next to the content,
+//! naming exactly the nodes that folder itself had to rename on the way in.
+//!
+//! It is deliberately not `distribution.json` under a different name —
+//! writing that filename here would let a hostile archive entry impersonate
+//! the manifest this module already trusts (see `SourceKind`/`place_archive`
+//! in `core/card/content.rs`, which never stages an entry called either name
+//! at a source's root). And it is written **only when there is something to
+//! record**: an empty map is refused rather than written, so a folder that
+//! needed no escaping never carries the file at all, and
+//! `tools/hst_imager.rs`'s refusal — which fires on any non-empty
+//! [`AmigaNames`] before the external tool is ever launched — keeps meaning
+//! exactly what it says.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::core::error::{CoreError, CoreResult};
+use crate::core::safety::atomic::atomic_write;
 
 /// The manifest's file name at a distribution tree's root. Deliberately a
 /// literal rather than an import — see the module doc comment.
 const MANIFEST_FILE_NAME: &str = "distribution.json";
+
+/// ART's own record of escaped names in a staging folder — never Amiga
+/// content. See the module doc comment's "A second input" section.
+pub const AMIGA_NAMES_RECORD: &str = ".art-amiga-names.json";
+
+/// The on-disk shape of [`AMIGA_NAMES_RECORD`]. Named `NamesRecord`, not
+/// `Record`, because [`Record`] already names the (unrelated)
+/// `distribution.json` row shape in this same module.
+#[derive(Serialize, Deserialize)]
+struct NamesRecord {
+    version: u32,
+    names: Vec<NodeName>,
+}
+
+/// One escaped node: its host path (`/`-separated, relative to the staging
+/// folder) and the AmigaDOS name it must be copied under.
+#[derive(Serialize, Deserialize)]
+struct NodeName {
+    host: String,
+    amiga: String,
+}
+
+/// The record's schema version. There is only ever one today; a reader that
+/// meets a higher one has nothing to gain from guessing, but nothing here
+/// depends on that yet — this module ignores the field entirely on read,
+/// the same way it ignores every unrecognised field of `distribution.json`.
+const NAMES_RECORD_VERSION: u32 = 1;
+
+/// Write [`AMIGA_NAMES_RECORD`] into `source`, naming exactly the pairs a
+/// copy had to escape.
+///
+/// `SAFE_CREATE`: an existing record is never replaced, the same rule
+/// `core/adf/create.rs` and `core/hdf.rs` apply to a disk image. Refuses an
+/// empty map too — see the module doc comment's last paragraph — so this
+/// function is the single place that decides whether the file is written at
+/// all, and a caller never has to check `names.is_empty()` itself first.
+pub fn write_record(source: &Path, names: &BTreeMap<String, String>) -> CoreResult<()> {
+    if names.is_empty() {
+        return Err(CoreError::InvalidInput(
+            "no escaped names to record".to_string(),
+        ));
+    }
+    let path = source.join(AMIGA_NAMES_RECORD);
+    if path.exists() {
+        return Err(CoreError::SafetyRefused(format!(
+            "'{}' already exists; ART's own names record is never replaced",
+            path.display()
+        )));
+    }
+    let record = NamesRecord {
+        version: NAMES_RECORD_VERSION,
+        names: names
+            .iter()
+            .map(|(host, amiga)| NodeName {
+                host: host.clone(),
+                amiga: amiga.clone(),
+            })
+            .collect(),
+    };
+    let bytes = serde_json::to_vec_pretty(&record).map_err(|err| CoreError::Malformed {
+        format: "ART names record".into(),
+        detail: err.to_string(),
+    })?;
+    atomic_write(&path, &bytes)
+}
 
 /// Only what this module reads out of `distribution.json`; serde ignores the
 /// rest.
@@ -78,9 +167,25 @@ struct Record {
 pub struct AmigaNames(BTreeMap<String, String>);
 
 impl AmigaNames {
-    /// Read the tree's manifest, if it has one. Never an error — see the
-    /// module doc comment's last section.
+    /// Read both inputs a source folder can carry: the distribution
+    /// manifest, and ART's own private record (see the module doc comment).
+    /// Never an error — an absent or unparsable input is "no renames",
+    /// exactly as `distribution.json` alone already was.
+    ///
+    /// The record wins on a key both name: it is the newer, narrower input,
+    /// written by the copy that just ran rather than inherited from a
+    /// distribution build, so it is read second and its pairs overwrite the
+    /// manifest's.
     pub fn read(source: &Path) -> Self {
+        let mut names = Self::from_manifest(source);
+        for (host, amiga) in Self::record_pairs(source) {
+            names.0.insert(host, amiga);
+        }
+        names
+    }
+
+    /// The `distribution.json` half of [`Self::read`].
+    fn from_manifest(source: &Path) -> Self {
         let Ok(text) = std::fs::read_to_string(source.join(MANIFEST_FILE_NAME)) else {
             return Self::default();
         };
@@ -92,6 +197,23 @@ impl AmigaNames {
                 .as_deref()
                 .map(|host| (host, file.path.as_str()))
         }))
+    }
+
+    /// The [`AMIGA_NAMES_RECORD`] half of [`Self::read`], as owned pairs —
+    /// unlike the manifest, the record is already keyed per node rather than
+    /// per file, so there is no depth-walking to do, only reading it back.
+    fn record_pairs(source: &Path) -> Vec<(String, String)> {
+        let Ok(text) = std::fs::read_to_string(source.join(AMIGA_NAMES_RECORD)) else {
+            return Vec::new();
+        };
+        let Ok(record) = serde_json::from_str::<NamesRecord>(&text) else {
+            return Vec::new();
+        };
+        record
+            .names
+            .into_iter()
+            .map(|node| (node.host, node.amiga))
+            .collect()
     }
 
     /// Build the per-node map from `(host path, amiga path)` pairs.
@@ -203,5 +325,38 @@ mod tests {
     fn a_pair_whose_halves_disagree_on_depth_is_dropped() {
         let names = AmigaNames::from_records([("A/B", "A/B/C")].into_iter());
         assert!(names.is_empty());
+    }
+
+    /// **ART-160's other half.** A staging folder with no `distribution.json`
+    /// still gets its escaped names back, node by node, from ART's own
+    /// private record — and the record is `SAFE_CREATE`: written once, never
+    /// replaced.
+    #[test]
+    fn a_staged_record_puts_the_amiga_names_back_node_by_node() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-amiga-names", "record");
+        let names = BTreeMap::from([
+            ("_AUX".to_string(), "AUX".to_string()),
+            ("_AUX/a_b".to_string(), "a?b".to_string()),
+        ]);
+        write_record(&dir, &names).unwrap();
+
+        let read = AmigaNames::read(&dir);
+        assert_eq!(read.name_for("_AUX"), Some("AUX"));
+        assert_eq!(read.name_for("_AUX/a_b"), Some("a?b"));
+
+        assert!(
+            write_record(&dir, &names).is_err(),
+            "SAFE_CREATE: an existing record is not replaced"
+        );
+    }
+
+    /// The module doc comment's rule: a folder that needed no escaping never
+    /// carries the file at all, so `tools/hst_imager.rs`'s refusal keeps
+    /// meaning exactly what it says.
+    #[test]
+    fn an_empty_record_is_never_written() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-amiga-names", "empty");
+        assert!(write_record(&dir, &BTreeMap::new()).is_err());
+        assert!(!dir.join(AMIGA_NAMES_RECORD).exists());
     }
 }

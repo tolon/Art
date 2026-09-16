@@ -171,6 +171,12 @@ pub fn copy_args(image: &Path, slot: Option<usize>, drive: &str, source: &Path) 
         partition_target(image, slot, drive),
         "--recursive".into(),
         "--makedir".into(),
+        // R3 § 7, measured: without `--uaemetadata UaeMetafile` hst-imager
+        // ignores every `.uaem` sidecar beside a source file — the
+        // protection bits, the date and the comment `core/volume/write`
+        // wrote into it are silently lost on this, the fallback, copy path.
+        "--uaemetadata".into(),
+        "UaeMetafile".into(),
     ]
 }
 
@@ -344,6 +350,30 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **R2 § 7, item 3.** The record written by content staging
+    /// (`core::preload::amiga_names::write_record`) feeds the very same
+    /// refusal `distribution.json`-escaped names already do: an ART-private
+    /// staging folder that had to rename a node is no more copyable by an
+    /// external tool than a distribution tree is, and for the same reason.
+    #[test]
+    fn a_staged_names_record_is_refused_before_the_tool_runs() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-hst-escaped", "record");
+        let names = std::collections::BTreeMap::from([("_AUX".to_string(), "AUX".to_string())]);
+        crate::core::preload::amiga_names::write_record(&dir, &names).unwrap();
+
+        let tool = HstImager::at(dir.join("nothing-here.exe"));
+        let err = tool
+            .copy_in(&img(), None, "DH0", &dir, &crate::core::jobs::NoProgress)
+            .unwrap_err();
+
+        assert_eq!(err.code(), "ART-ESCAPED-NAME-NEEDS-NATIVE");
+        let msg = format!("{err}");
+        assert!(msg.contains("_AUX"), "{msg}");
+        assert!(msg.contains("AUX"), "{msg}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// The arguments SD-0 ran, in the order it ran them. Pinned because a
     /// flag ART invented is the mistake ART-091 and ART-103 both were.
     #[test]
@@ -387,6 +417,18 @@ mod tests {
         assert_eq!(args[2], source.display().to_string(), "source comes first");
         assert!(args[3].ends_with("rdb\\dh0"), "{}", args[3]);
         assert!(args.contains(&"--recursive".to_string()));
+    }
+
+    /// R3 § 7, measured: without `--uaemetadata UaeMetafile` hst-imager
+    /// ignores every `.uaem` — bits, dates and comments silently lost.
+    #[test]
+    fn a_copy_asks_hst_imager_to_read_uaem_sidecars() {
+        let args = copy_args(Path::new(r"E:\x.img"), None, "DH0", Path::new(r"E:\tree"));
+        let at = args
+            .iter()
+            .position(|a| a == "--uaemetadata")
+            .expect("the option is passed");
+        assert_eq!(args.get(at + 1).map(String::as_str), Some("UaeMetafile"));
     }
 
     /// The line a **listing** prints, measured against 1.6.616 on a real card

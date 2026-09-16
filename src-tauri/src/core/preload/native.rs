@@ -107,7 +107,7 @@ use crate::core::card::{read_card, AmigaArea, CardImage};
 use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
-use crate::core::preload::amiga_names::AmigaNames;
+use crate::core::preload::amiga_names::{AmigaNames, AMIGA_NAMES_RECORD};
 use crate::core::preload::pfs3dev::ArtBlockDevice;
 use crate::core::preload::{CopySummary, ToolVersion, VolumeFormatter};
 use crate::core::rdb::ParsedPartition;
@@ -893,6 +893,15 @@ fn collect_into(
         if host_name == BACKUP_DIR {
             continue;
         }
+        // ART-160's other half: `AMIGA_NAMES_RECORD` is ART's own record of
+        // the escaped names a copy into *this* folder had to make, not Amiga
+        // content — like `.art-backup` above, it must never reach the card.
+        // Root-only, the way the record itself is only ever written at a
+        // staging folder's root: a real file happening to share the name one
+        // level down is an ordinary file, not this module's business.
+        if host_prefix.is_empty() && host_name == AMIGA_NAMES_RECORD {
+            continue;
+        }
         let host_relative = if host_prefix.is_empty() {
             host_name.clone()
         } else {
@@ -1388,6 +1397,28 @@ mod tests {
         assert!(
             relatives.contains(&"Prefs.info"),
             "the real file beside it is still copied: {relatives:?}"
+        );
+    }
+
+    /// The record is ART's, like `.art-backup`: it never reaches the card,
+    /// and the names it carries are the ones the copy actually uses.
+    #[test]
+    fn the_names_record_is_not_copied_and_its_names_are_used() {
+        let (_guard, dir) = scratch("names-record");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("_AUX"), b"driver").unwrap();
+        let names = std::collections::BTreeMap::from([("_AUX".to_string(), "AUX".to_string())]);
+        crate::core::preload::amiga_names::write_record(&tree, &names).unwrap();
+
+        let entries = collect_entries(&tree).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| e.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["AUX"],
+            "the record's file is not itself an entry, and its name wins"
         );
     }
 
