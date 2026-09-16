@@ -783,6 +783,15 @@ pub fn protection_of<D: BlockDevice + ?Sized>(
 // Amiga → Windows
 // ---------------------------------------------------------------------------
 
+/// One node written under a host name that differs from its AmigaDOS name.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct EscapedName {
+    /// Where it landed on the host — the full path `host_target` made.
+    pub host_path: PathBuf,
+    /// That one node's own AmigaDOS name.
+    pub amiga_name: String,
+}
+
 /// What extracting a tree out of a volume did.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ExtractReport {
@@ -792,6 +801,9 @@ pub struct ExtractReport {
     pub sidecars_written: usize,
     /// Entries written under a different name, as `amiga name → windows name`.
     pub renamed: Vec<String>,
+    /// Every node written under a different name, where it landed —
+    /// `renamed` says the same for a person to read.
+    pub escaped: Vec<EscapedName>,
     pub skipped: Vec<String>,
     pub cancelled: bool,
 }
@@ -839,6 +851,10 @@ pub fn host_target(
     let safe = windows_safe_name(name);
     if safe != name {
         report.renamed.push(format!("{name} → {safe}"));
+        report.escaped.push(EscapedName {
+            host_path: dest.join(&safe),
+            amiga_name: name.to_string(),
+        });
     }
 
     // Through `safe_join` even though the name has just been escaped: the
@@ -950,6 +966,15 @@ fn extract_dir<D: BlockDevice + ?Sized>(
         let target = match host_target(dest, &entry.name, entry.is_dir, policy, report)? {
             HostTarget::Skip => continue,
             HostTarget::Descend(target) => {
+                if write_sidecars {
+                    if let Some(sidecar) = header_sidecar(device, &set, entry.block)? {
+                        crate::core::safety::atomic::atomic_write(
+                            &uaem::sidecar_path(&target),
+                            uaem::render(&sidecar).as_bytes(),
+                        )?;
+                        report.sidecars_written += 1;
+                    }
+                }
                 extract_dir(
                     device,
                     geometry,
@@ -979,6 +1004,30 @@ fn extract_dir<D: BlockDevice + ?Sized>(
     }
 
     Ok(())
+}
+
+/// Read one header block's protection bits, date and comment into the
+/// sidecar they need — or `None` when there is nothing worth writing.
+///
+/// Shared by [`write_one_file`] and the drawer sidecar the `Descend`
+/// branches write on the way in: a directory header carries its protection,
+/// date and comment at the same offsets a file header does (`layout.rs`
+/// names them once for both).
+pub(crate) fn header_sidecar<D: BlockDevice + ?Sized>(
+    device: &D,
+    set: &BlockSet,
+    block: u32,
+) -> CoreResult<Option<Sidecar>> {
+    let header = set.view(device, block)?;
+    let protection = super::layout::get_u32(&header, PROTECT_OFFSET)?;
+    let date = crate::core::adf::bcpl::AmigaDate {
+        days: super::layout::get_u32(&header, super::layout::DAYS_OFFSET)?,
+        mins: super::layout::get_u32(&header, super::layout::MINS_OFFSET)?,
+        ticks: super::layout::get_u32(&header, super::layout::TICKS_OFFSET)?,
+    };
+    let comment = crate::core::adf::bcpl::read_bcpl_string(&header, super::layout::COMMENT_OFFSET)
+        .unwrap_or_default();
+    Ok(sidecar_for(protection, date, &comment))
 }
 
 /// Write one file out of a volume to `target`, sidecar and all.
@@ -1013,18 +1062,7 @@ fn write_one_file<D: BlockDevice + ?Sized>(
     report.bytes_written += data.len() as u64;
 
     if write_sidecars {
-        let header = set.view(device, block)?;
-        let protection = super::layout::get_u32(&header, PROTECT_OFFSET)?;
-        let date = crate::core::adf::bcpl::AmigaDate {
-            days: super::layout::get_u32(&header, super::layout::DAYS_OFFSET)?,
-            mins: super::layout::get_u32(&header, super::layout::MINS_OFFSET)?,
-            ticks: super::layout::get_u32(&header, super::layout::TICKS_OFFSET)?,
-        };
-        let comment =
-            crate::core::adf::bcpl::read_bcpl_string(&header, super::layout::COMMENT_OFFSET)
-                .unwrap_or_default();
-
-        if let Some(sidecar) = sidecar_for(protection, date, &comment) {
+        if let Some(sidecar) = header_sidecar(device, set, block)? {
             crate::core::safety::atomic::atomic_write(
                 &uaem::sidecar_path(target),
                 uaem::render(&sidecar).as_bytes(),
@@ -1080,7 +1118,13 @@ pub fn extract_selection_from_volume<D: BlockDevice + ?Sized>(
     policy: OverwritePolicy,
     sink: &dyn ProgressSink,
 ) -> CoreResult<ExtractReport> {
-    check_escaped_name_collisions(entries)?;
+    if let Some((name, other)) = escaped_name_collision(entries) {
+        return Err(CoreError::InvalidInput(format!(
+            "'{name}' and '{other}' would both be written as '{}' on this disk. \
+             Copy them one at a time, or rename one first.",
+            windows_safe_name(&name)
+        )));
+    }
 
     let mut report = ExtractReport::default();
     std::fs::create_dir_all(dest)?;
@@ -1104,17 +1148,28 @@ pub fn extract_selection_from_volume<D: BlockDevice + ?Sized>(
         // travel with the error.
         let step = match host_target(dest, &entry.name, entry.is_dir, policy, &mut report) {
             Ok(HostTarget::Skip) => continue,
-            Ok(HostTarget::Descend(target)) => extract_dir(
-                device,
-                geometry,
-                block,
-                &target,
-                0,
-                write_sidecars,
-                policy,
-                sink,
-                &mut report,
-            ),
+            Ok(HostTarget::Descend(target)) => (|| -> CoreResult<()> {
+                if write_sidecars {
+                    if let Some(sidecar) = header_sidecar(device, &set, block)? {
+                        crate::core::safety::atomic::atomic_write(
+                            &uaem::sidecar_path(&target),
+                            uaem::render(&sidecar).as_bytes(),
+                        )?;
+                        report.sidecars_written += 1;
+                    }
+                }
+                extract_dir(
+                    device,
+                    geometry,
+                    block,
+                    &target,
+                    0,
+                    write_sidecars,
+                    policy,
+                    sink,
+                    &mut report,
+                )
+            })(),
             Ok(HostTarget::Write(target)) => write_one_file(
                 device,
                 geometry,
@@ -1163,7 +1218,7 @@ fn resolve_block(geometry: &VolumeGeometry, block: u32) -> u32 {
     }
 }
 
-/// Refuse a selection whose entries would land under the same host name.
+/// Find two entries in a selection that would land under the same host name.
 ///
 /// AmigaDOS will not let two entries in one directory share a name, so this
 /// cannot fire on the names as the volume holds them. It fires on the names
@@ -1172,19 +1227,19 @@ fn resolve_block(geometry: &VolumeGeometry, block: u32) -> u32 {
 /// the other. Compared without case for the same reason
 /// [`HostSelection::check_for_name_collisions`] is (ART-072) — NTFS is
 /// case-insensitive too.
-fn check_escaped_name_collisions(entries: &[SelectedEntry]) -> CoreResult<()> {
+///
+/// Returns the colliding pair — `(the second name found, the first one it
+/// collides with)` — rather than an error, so each caller words its own
+/// (`content.rs`'s staging check reuses this and needs a different sentence).
+pub(crate) fn escaped_name_collision(entries: &[SelectedEntry]) -> Option<(String, String)> {
     let mut seen: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for entry in entries {
         let safe = windows_safe_name(&entry.name);
         if let Some(other) = seen.insert(safe.to_lowercase(), entry.name.clone()) {
-            return Err(CoreError::InvalidInput(format!(
-                "'{}' and '{other}' would both be written as '{safe}' on this disk. \
-                 Copy them one at a time, or rename one first.",
-                entry.name
-            )));
+            return Some((entry.name.clone(), other));
         }
     }
-    Ok(())
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2132,6 +2187,167 @@ mod tests {
             b"already here",
             "the user's file stands"
         );
+    }
+
+    // ---- Amiga → Windows, directory sidecars and escaped-name pairs ----
+
+    /// R2 B1/B3 item 1: `renamed` is a display string of the leaf only; the
+    /// pair says where the node landed, so a caller can put the AmigaDOS name
+    /// back. Built directly through `VolumeWriter` rather than a host round
+    /// trip: `AUX` cannot be created as a real Windows directory name, which
+    /// is exactly the case being tested.
+    #[test]
+    fn an_escaped_drawer_and_the_file_in_it_are_recorded_with_their_host_paths() {
+        use crate::core::adf::bcpl::AmigaDate;
+
+        let fixture = Fixture::new("escaped-pairs");
+        {
+            let mut device = fixture.device();
+            let mut writer =
+                VolumeWriter::open(&mut device, fixture.geometry, &fixture.image, 0).unwrap();
+            let aux = writer.make_dir(0, "AUX").unwrap().block.unwrap();
+            // `:` and `/` are not legal AmigaDOS name characters
+            // (`dir::check_name`); `?` is legal there and NTFS refuses it.
+            writer
+                .add_file(
+                    aux,
+                    "a?b",
+                    b"x",
+                    FileMeta {
+                        protection: None,
+                        date: Some(AmigaDate::default()),
+                    },
+                )
+                .unwrap();
+        }
+
+        let out = fixture.dir.join("out");
+        let device = fixture.device();
+        let report = extract_from_volume(
+            &device,
+            &fixture.geometry,
+            0,
+            &out,
+            false,
+            OverwritePolicy::Overwrite,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(
+            report.escaped,
+            vec![
+                EscapedName {
+                    host_path: out.join("_AUX"),
+                    amiga_name: "AUX".to_string(),
+                },
+                EscapedName {
+                    host_path: out.join("_AUX").join("a_b"),
+                    amiga_name: "a?b".to_string(),
+                },
+            ]
+        );
+    }
+
+    /// R2 item 11 / R3 § 5: a drawer's own bits, date and comment survive.
+    #[test]
+    fn a_drawer_s_protection_date_and_comment_go_into_its_own_sidecar() {
+        use crate::core::adf::bcpl::AmigaDate;
+
+        let fixture = Fixture::new("drawer-sidecar");
+        {
+            let mut device = fixture.device();
+            let mut writer =
+                VolumeWriter::open(&mut device, fixture.geometry, &fixture.image, 0).unwrap();
+            let game = writer.make_dir(0, "Game").unwrap().block.unwrap();
+            writer
+                .set_attributes(
+                    game,
+                    Some(0x40),
+                    Some("note"),
+                    Some(AmigaDate {
+                        days: 15_000,
+                        mins: 600,
+                        ticks: 50,
+                    }),
+                )
+                .unwrap();
+            // A plain node beside it (R2): an explicit epoch date so this
+            // file gets no sidecar of its own, keeping `sidecars_written`
+            // meaningful as a count of exactly the drawer's sidecar.
+            writer
+                .add_file(
+                    game,
+                    "File",
+                    b"x",
+                    FileMeta {
+                        protection: None,
+                        date: Some(AmigaDate::default()),
+                    },
+                )
+                .unwrap();
+        }
+
+        let out = fixture.dir.join("out");
+        let device = fixture.device();
+        let report = extract_from_volume(
+            &device,
+            &fixture.geometry,
+            0,
+            &out,
+            true,
+            OverwritePolicy::Overwrite,
+            &NoProgress,
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(out.join("Game.uaem")).unwrap();
+        let parsed = uaem::parse(&text).unwrap();
+        assert_eq!(parsed.protection, 0x40);
+        assert_eq!(parsed.comment, "note");
+        assert_eq!(
+            parsed.date,
+            AmigaDate {
+                days: 15_000,
+                mins: 600,
+                ticks: 50
+            }
+        );
+        assert_eq!(report.sidecars_written, 1, "only the drawer carries one");
+    }
+
+    /// The negative control: a drawer with default bits, no comment and the
+    /// epoch date gets no sidecar (`sidecar_for`'s rule, as for files).
+    #[test]
+    fn a_plain_drawer_gets_no_sidecar() {
+        use crate::core::adf::bcpl::AmigaDate;
+
+        let fixture = Fixture::new("plain-drawer");
+        {
+            let mut device = fixture.device();
+            let mut writer =
+                VolumeWriter::open(&mut device, fixture.geometry, &fixture.image, 0).unwrap();
+            let plain = writer.make_dir(0, "Plain").unwrap().block.unwrap();
+            writer
+                .set_attributes(plain, Some(0), None, Some(AmigaDate::default()))
+                .unwrap();
+        }
+
+        let out = fixture.dir.join("out");
+        let device = fixture.device();
+        let report = extract_from_volume(
+            &device,
+            &fixture.geometry,
+            0,
+            &out,
+            true,
+            OverwritePolicy::Overwrite,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert!(!out.join("Plain.uaem").exists());
+        assert_eq!(report.sidecars_written, 0);
     }
 
     // ---- Amiga → Amiga ----
