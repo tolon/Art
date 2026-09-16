@@ -273,13 +273,14 @@ leave the previous one below it; on 2026-09-04 four such blocks were collapsed
 into this one, because the oldest still contradicted the newest. **Update this
 block — do not stack another on top of it.**
 
-### Start here (2026-09-15)
+### Start here (2026-09-16)
 
 *Trimmed 2026-09-15 by the third debt round's final review fix wave to the live state. The per-round narrative
 that used to stack here is in the [session log](session-log.md), per-defect detail in [ISSUES.md](ISSUES.md), and
 the old block in git history.*
 
-**First boot phase 3 is on `art-firstboot-phase-3` (not merged, base `4a9722b`), ten tasks: the wizard's
+**First boot phase 3 is merged to `main` `--no-ff` as `4b72d7b` and pushed, both on the owner's word
+(2026-09-16; branch `art-firstboot-phase-3` deleted, base `4a9722b`; CI run 35064080515 success), ten tasks: the wizard's
 `90-prefs` (Locale and Input in the foreground, ScreenMode through `Run`, each skipped when ART already set it),
 the step wrapper's own reboot (`C:Wait 3` + `C:Reboot` when the tree has `C/Reboot`, else logging `reboot
 unavailable` and carrying on), and the OS Builder's second tick for it.** Measured under WinUAE on the owner's own
@@ -296,10 +297,14 @@ sentence now names the effect rather than completion, the `ART_Set_Input` write 
 `askPrefs`'s "absent means ticked" is one exported helper, and the wizard's rows resolve case-insensitively like
 the rest of the tree code — report `fix-wave-report.md` in the same folder. **Owed:** the owner's own closing measurement,
 writing first boot on 3.2 and 3.9 and answering the Locale/Input/ScreenMode windows by hand (spec §8.3, Task 12),
-which alone can move the FEATURES row off 🟡; and the owner's ruling, **needs the owner's ruling**, on a finding not
-filed as an ART id: amitools `xdftool`-formatted FFS images fail the Kickstart validator after an unclean reboot 8
-of 8 times, where AmigaOS's own `Format` did not, 0 of 6 (ART's own `core/volume` formatter was not tried; spec
-§9).
+which alone can move the FEATURES row off 🟡. **Settled 2026-09-16, no ART id on the owner's word:** amitools
+`xdftool`-formatted FFS images fail the Kickstart validator after an unclean reboot ("Block 1146049281 out of
+range", `0x444F5301` read as a block number), and ART's own formatter was then measured beside it — one variable
+(the formatter), 3.2 ROM, 20160 × 512 blocks, 3 runs per arm: ART's `NativeFormatter` 3/3 clean, ART formatted and
+filled 3/3 clean (the guest read ART's files on both boots), AmigaOS `Format` 3/3 clean, `xdftool` 0/3; without the
+reboot all three clean. Not measured: 3.1/3.9 ROMs, other sizes, `DOS\3`, a real card. Report
+`.superpowers/sdd/2026-09-16-art-ffs-validator/experiment.md`; the fixture rule is in
+[testing.md](testing.md#real-material-and-the-ignored-hooks).
 
 **The third debt round, `art-debt-3-0915`, is merged to `main` `--no-ff` as `e060e76` and pushed, both on the
 owner's word (2026-09-15); 0.9.4 carries it.** Its items: ART-321 (the MBR slot carried

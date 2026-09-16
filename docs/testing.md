@@ -335,6 +335,17 @@ assertions cannot:
 Being gated is the point: they need licensed material, so they cannot run in CI
 and must never be made to pass by shipping a fixture of somebody's ROM.
 
+**An FFS image a Kickstart will mount is formatted by ART's own formatter or by
+AmigaOS `Format`, never by amitools `xdftool`.** An `xdftool`-formatted FFS
+volume mounts and writes cleanly, but after an unclean reboot the validator
+fails it — "Block 1146049281 out of range", a boot block's `DOS\1` read as a
+block number — and that reads exactly like a product defect. Measured
+2026-09-16 with the formatter the only variable (3.2 ROM, 20160 blocks, 3 runs
+each): `xdftool` 0/3, ART 3/3, `Format` 3/3
+(`.superpowers/sdd/2026-09-16-art-ffs-validator/experiment.md`). `xdftool`
+stays right as a *reader* — `oracle-check.py` formats with it only to have ART
+read the result, and no ROM ever mounts that image.
+
 ## CI
 
 GitHub Actions runs on every push (Windows x64):
