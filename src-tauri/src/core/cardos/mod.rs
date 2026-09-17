@@ -11,5 +11,6 @@
 
 pub mod content;
 pub mod driver;
+pub mod kickstarts;
 pub mod partial;
 pub mod whdload;

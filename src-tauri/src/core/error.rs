@@ -650,6 +650,22 @@ pub enum CoreError {
         titles: usize,
         searched: Vec<String>,
     },
+
+    /// `core::cardos::kickstarts::place_agreed` was asked to place a name
+    /// `KickstartProposal` does not offer: absent from `items` entirely,
+    /// present but not `Offer::Supplied`, or `Supplied` with a `Missing`
+    /// `.RTB`. Refused before a single byte is written, for every agreed
+    /// name in the batch, before any of them is placed.
+    ///
+    /// **This is what keeps the owner's 2026-08-21 rule true by
+    /// construction rather than by discipline**: ART offers, and places
+    /// only what the user agreed to *from that offer* — a caller cannot pass
+    /// a name that never appeared on the screen and have it land anyway.
+    #[error(
+        "'{name}' cannot be placed: {why}. Prepare the card again and agree only to what the \
+         proposal offers."
+    )]
+    KickstartNotProposed { name: String, why: String },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -805,6 +821,7 @@ impl CoreError {
             Self::PartialImageExists { .. } => "ART-CARD-PARTIAL-EXISTS",
             Self::Pfs3DriverNotFound { .. } => "ART-PFS3-DRIVER-NOT-FOUND",
             Self::WhdloadNotFound { .. } => "ART-WHDLOAD-NOT-FOUND",
+            Self::KickstartNotProposed { .. } => "ART-KICKSTART-NOT-PROPOSED",
         }
     }
 
@@ -1023,6 +1040,10 @@ mod tests {
             CoreError::WhdloadNotFound {
                 titles: 1,
                 searched: vec!["x".into()],
+            },
+            CoreError::KickstartNotProposed {
+                name: "x".into(),
+                why: "x".into(),
             },
         ];
 
