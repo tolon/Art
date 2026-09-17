@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
 import tr from "@/i18n/tr.json";
+import { DEFAULT_CARD_TARGET } from "./cardTarget";
 import {
   DEFAULT_COMPONENTS,
   DEFAULT_CARD,
@@ -32,6 +33,8 @@ function sessionWith(over: Partial<BuildSession> = {}): BuildSession {
     packages: DEFAULT_PACKAGES,
     card: DEFAULT_CARD,
     firstboot: DEFAULT_FIRSTBOOT,
+    destinationKind: "folder",
+    cardTarget: DEFAULT_CARD_TARGET,
     ...over,
   };
 }

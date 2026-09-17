@@ -20,6 +20,14 @@
 import { useCallback, useMemo } from "react";
 
 import {
+  CARD_TARGET_KEY,
+  DEFAULT_CARD_TARGET,
+  DESTINATION_KIND_KEY,
+  isCardTarget,
+  type CardTarget,
+  type DestinationKind,
+} from "@/lib/cardTarget";
+import {
   CARD_SPEC,
   COMPONENT_SPEC,
   DEFAULT_FIRSTBOOT,
@@ -55,7 +63,7 @@ import {
   type TreeChoice,
 } from "@/lib/buildSession";
 import { isInstallRelease, type InstallRelease } from "@/lib/osinstall";
-import { forget, isFlag, recall, recallInto } from "@/lib/remembered";
+import { forget, isFlag, isOneOf, recall, recallInto } from "@/lib/remembered";
 import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import { useSettingsStore } from "@/stores/settingsStore";
 
@@ -101,6 +109,12 @@ export interface BuildSessionApi {
    *  resets this to `false` on its own whenever `root` changes — see
    *  `FirstBootChoice`'s own comment. */
   setFirstBoot: (change: Partial<FirstBootChoice>) => void;
+  /** The Machine tab's destination choice — Folder or Card image, per
+   *  release (Q2). See `BuildSession.destinationKind`. */
+  setDestinationKind: (next: DestinationKind) => void;
+  /** The card this build writes when the destination is *Card image*, per
+   *  release (Q2). See `BuildSession.cardTarget`. */
+  setCardTarget: (next: CardTarget) => void;
 }
 
 export function useBuildSession(): BuildSessionApi {
@@ -198,6 +212,28 @@ export function useBuildSession(): BuildSessionApi {
     SESSION_KEYS.firstboot,
     FIRSTBOOT_SPEC,
     DEFAULT_FIRSTBOOT
+  );
+
+  // The Machine tab's destination choice (card round 4, design § 3): no
+  // legacy key either — the choice is new to this round — and per release
+  // like `material` and `components` (Q2). Folder is the default because it
+  // is what every build has done until now (R2): nothing about a session's
+  // destination changes just because this round exists.
+  const [destinationKind, setDestinationKind] = useRemembered<DestinationKind>(
+    DESTINATION_KIND_KEY(release),
+    isOneOf("folder", "card-image"),
+    "folder"
+  );
+
+  // The card this build writes when the destination is *Card image* — also
+  // new to this round, also per release (Q2). `isCardTarget` is a
+  // whole-object guard: a stored target missing `partitions`, or holding one
+  // with a broken `sources`, is rejected entire rather than repaired field
+  // by field (`@/lib/cardTarget`'s own comment).
+  const [cardTarget, setCardTarget] = useRemembered<CardTarget>(
+    CARD_TARGET_KEY(release),
+    isCardTarget,
+    DEFAULT_CARD_TARGET
   );
 
   /**
@@ -361,8 +397,34 @@ export function useBuildSession(): BuildSessionApi {
   );
 
   const session = useMemo<BuildSession>(
-    () => ({ kind, material, media, rom, release, tree, components, packages, card, firstboot }),
-    [kind, material, media, rom, release, tree, components, packages, card, firstboot]
+    () => ({
+      kind,
+      material,
+      media,
+      rom,
+      release,
+      tree,
+      components,
+      packages,
+      card,
+      firstboot,
+      destinationKind,
+      cardTarget,
+    }),
+    [
+      kind,
+      material,
+      media,
+      rom,
+      release,
+      tree,
+      components,
+      packages,
+      card,
+      firstboot,
+      destinationKind,
+      cardTarget,
+    ]
   );
 
   return {
@@ -378,5 +440,7 @@ export function useBuildSession(): BuildSessionApi {
     setPackages,
     setCard,
     setFirstBoot,
+    setDestinationKind,
+    setCardTarget,
   };
 }
