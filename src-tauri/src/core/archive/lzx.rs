@@ -361,8 +361,8 @@ fn read_literal_lengths<R: Read>(
 ///           (s >> 5) & 15 the length (TWO + 3 + extra bits)
 /// ```
 ///
-/// State resets per group: lengths zero, last offset 1, no table. A match
-/// reaching before the group's first byte is refused.
+/// State resets per group: lengths zero, last offset 1, no table, and a
+/// window of zeros that a match may reach back into.
 fn decode_lzx<R: Read>(packed: R, stop_at: u64) -> CoreResult<Vec<u8>> {
     let mut bits = Bits::new(packed);
     let mut out: Vec<u8> = Vec::new();
@@ -430,18 +430,19 @@ fn decode_lzx<R: Read>(packed: R, stop_at: u64) -> CoreResult<Vec<u8>> {
         last_offset = offset;
         let len_slot = (symbol >> 5) & 15;
         let length = TWO[len_slot] as usize + 3 + bits.bits(ONE[len_slot])? as usize;
-        let start = out.len().checked_sub(offset).ok_or_else(|| {
-            malformed(format!(
-                "a match reaches {offset} bytes back, before the start of the data"
-            ))
-        })?;
-        for k in 0..length {
+        for _ in 0..length {
             if out.len() as u64 >= stop_at {
                 break;
             }
-            let byte = *out
-                .get(start + k)
-                .ok_or_else(|| malformed("a match reads past what was decoded"))?;
+            // The window starts as 64 KiB of zeros, and the archiver's matches
+            // reach into it; an offset is at most 65 535 (`TWO` + `ONE`), so
+            // it never reaches past that window.
+            let byte = match out.len().checked_sub(offset) {
+                None => 0,
+                Some(at) => *out
+                    .get(at)
+                    .ok_or_else(|| malformed("a match reads past what was decoded"))?,
+            };
             out.push(byte);
         }
         block_left = block_left.saturating_sub(length as u64);
@@ -1261,20 +1262,43 @@ pub(crate) mod tests {
         assert!(err.to_string().contains("no earlier block built"), "{err}");
     }
 
+    /// The Amiga archiver starts every group with a 64 KiB window of zeros,
+    /// and matches reach into it: `boingbag1.lzx` opens one group with a
+    /// repeat of the initial last offset (1) at byte 0, and another with a
+    /// match reaching one byte before the start (found by
+    /// `read_the_owners_lzx_archives_when_asked`, 150 members refused). XADMaster
+    /// zero-fills its window the same way (`LZSS.c`, `RestartLZSS`).
     #[test]
-    fn a_match_before_the_first_byte_is_refused() {
+    fn a_match_before_the_first_byte_reads_the_zeroed_window() {
+        // Byte 0: a repeat of the initial last offset, three bytes long.
         let mut w = BitWriter::new();
         w.put(2, 3);
-        put_len(&mut w, 3);
+        put_len(&mut w, 4);
         nine_bit_table(&mut w);
-        w.code(u32::from(b'a'), 9);
-        w.code(256 + 4, 9); // slot 4: offset 4 + bits(1)
-        w.put(0, 1); // offset 4, with one byte written
+        w.code(256, 9); // slot 0, length slot 0: last offset (1), length 3
+        w.code(u32::from(b'x'), 9);
         let (_guard, dir) = scratch("lzx-before");
         let path = dir.join("m.lzx");
-        one_member(&path, b"aaa", &w.finish());
-        let err = LzxBackend::open(&path).unwrap().read(0, 16).unwrap_err();
-        assert!(err.to_string().contains("before the start"), "{err}");
+        one_member(&path, b"\0\0\0x", &w.finish());
+        assert_eq!(
+            LzxBackend::open(&path).unwrap().read(0, 16).unwrap(),
+            b"\0\0\0x"
+        );
+
+        // A match starting one byte before the data and running into it.
+        let mut w = BitWriter::new();
+        w.put(2, 3);
+        put_len(&mut w, 6);
+        nine_bit_table(&mut w);
+        w.code(u32::from(b'a'), 9);
+        w.code(u32::from(b'b'), 9);
+        w.code(256 + 3 + (1 << 5), 9); // slot 3: offset 3; length slot 1: length 4
+        let path = dir.join("n.lzx");
+        one_member(&path, b"ab\0ab\0", &w.finish());
+        assert_eq!(
+            LzxBackend::open(&path).unwrap().read(0, 16).unwrap(),
+            b"ab\0ab\0"
+        );
     }
 
     #[test]
@@ -1308,5 +1332,128 @@ pub(crate) mod tests {
         one_member(&path, b"x", &w.finish());
         let err = LzxBackend::open(&path).unwrap().read(0, 16).unwrap_err();
         assert!(err.to_string().contains("incomplete"), "{err}");
+    }
+
+    /// Real LZX archives, read and unpacked through the product's own gate.
+    /// `#[ignore]`d and env-gated: ART ships no copyrighted content.
+    ///
+    /// ```text
+    /// cd src-tauri && ART_LZX_DIR="E:\amiga\Amigatolon\paketler" \
+    ///   ART_LZX_OUT="E:\amiga\ProjeART\build\tmp\card-r2\lzx-oracle\art" \
+    ///   cargo test --lib read_the_owners_lzx_archives_when_asked -- --ignored --nocapture
+    /// ```
+    ///
+    /// Every `*.lzx` directly in `ART_LZX_DIR` is unpacked into
+    /// `ART_LZX_OUT/<stem>` (a scratch folder when `ART_LZX_OUT` is unset),
+    /// which must not already hold anything: a file skipped because it exists
+    /// would read as a member not written. The bytes are compared with an
+    /// independent decoder by `scripts/lzx-oracle-check.py`; this hook proves
+    /// only that every member decodes, passes the CRC the archiver stored,
+    /// and is written.
+    #[test]
+    #[ignore]
+    fn read_the_owners_lzx_archives_when_asked() {
+        let Ok(dir) = std::env::var("ART_LZX_DIR") else {
+            eprintln!("ART_LZX_DIR unset — skipping");
+            return;
+        };
+        let (_guard, scratch_out) = scratch("owners-lzx");
+        let out_root = std::env::var("ART_LZX_OUT")
+            .map(PathBuf::from)
+            .unwrap_or(scratch_out);
+
+        let mut archives: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| {
+                p.is_file()
+                    && p.extension()
+                        .is_some_and(|x| x.to_string_lossy().eq_ignore_ascii_case("lzx"))
+            })
+            .collect();
+        archives.sort();
+        assert!(!archives.is_empty(), "no .lzx directly in {dir}");
+
+        for path in &archives {
+            let file = path.file_name().unwrap().to_string_lossy().into_owned();
+            let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let dest = out_root.join(&stem);
+            if let Ok(mut existing) = std::fs::read_dir(&dest) {
+                assert!(
+                    existing.next().is_none(),
+                    "{} already holds files; give ART_LZX_OUT an empty folder",
+                    dest.display()
+                );
+            }
+
+            let mut backend = LzxBackend::open(path).unwrap();
+            let entries = backend.entries().unwrap();
+            let groups = backend.groups.len();
+            let non_ascii = entries.iter().filter(|e| !e.name.is_ascii()).count();
+            let comments = entries.iter().filter(|e| e.amiga.comment.is_some()).count();
+            let odd_streams = backend.groups.iter().filter(|g| g.packed % 2 == 1).count();
+
+            // The largest group, decoded alone and timed: the reader takes a
+            // bit at a time, and this is where that would show.
+            let largest = backend
+                .groups
+                .iter()
+                .max_by_key(|g| {
+                    g.members
+                        .clone()
+                        .map(|i| backend.records[i].entry.declared_bytes)
+                        .sum::<u64>()
+                })
+                .cloned()
+                .unwrap();
+            let largest_bytes: u64 = largest
+                .members
+                .clone()
+                .map(|i| entries[i].declared_bytes)
+                .sum();
+            let mut wanted = vec![false; entries.len()];
+            for i in largest.members.clone() {
+                wanted[i] = true;
+            }
+            let mut largest_ok = 0usize;
+            let started = std::time::Instant::now();
+            backend
+                .read_selected(&wanted, MAX_ENTRY_OUTPUT, &mut |i, data| {
+                    match data {
+                        Ok(_) => largest_ok += 1,
+                        Err(e) => eprintln!("  largest group: {}: {e}", entries[i].name),
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            let largest_time = started.elapsed();
+
+            let started = std::time::Instant::now();
+            let outcome =
+                extract_with_backend(&mut backend, &dest, OverwritePolicy::Skip, &NoProgress)
+                    .unwrap();
+            let whole_time = started.elapsed();
+            for error in outcome.errors.iter() {
+                eprintln!("  error: {error}");
+            }
+            let errors = outcome.errors.len() + usize::from(outcome.aborted);
+            let written = outcome.total_files;
+            println!(
+                "{file}: entries {} groups {groups} non-ascii {non_ascii} comments {comments} \
+                 written {written} errors {errors}",
+                entries.len()
+            );
+            println!(
+                "  largest group: {} members, {largest_bytes} bytes, method {}, decoded {largest_ok} \
+                 in {:.2} s; whole archive written in {:.2} s; odd-length streams {odd_streams}",
+                largest.members.len(),
+                largest.method,
+                largest_time.as_secs_f64(),
+                whole_time.as_secs_f64(),
+            );
+            assert_eq!(errors, 0, "{file}: {:?}", outcome.abort_reason);
+            assert_eq!(written, entries.len(), "{file}");
+            assert_eq!(largest_ok, largest.members.len(), "{file}");
+        }
     }
 }

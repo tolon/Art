@@ -2179,4 +2179,152 @@ mod tests {
         assert!(err.to_string().contains("Huge.adf"), "{err}");
         assert!(listed(&staging2).is_empty());
     }
+
+    /// Every path under `root`, `/`-separated and relative to it.
+    fn walked(root: &Path) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                let relative = path.strip_prefix(root).unwrap();
+                found.push(relative.to_string_lossy().replace('\\', "/"));
+                if path.is_dir() {
+                    stack.push(path);
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// The owner's own card material through classify, measure and prepare.
+    /// `#[ignore]`d and env-gated: ART ships no copyrighted content. Any
+    /// variable left unset skips its part.
+    ///
+    /// ```text
+    /// cd src-tauri && \
+    ///   ART_CARD_HDF_A="E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[A]\A Prehistoric Tale v1.1.hdf" \
+    ///   ART_CARD_HDF_B="E:\amiga\Amigatolon\WHDload\HDF_Games_WHDLoad_by_Enzo_[B]\B-17 Flying Fortress v1.0.hdf" \
+    ///   ART_CARD_COLLECTION="E:\amiga\Amigatolon\paketler\WHDLoadDemos100.lha" \
+    ///   ART_CARD_LHA="E:\amiga\Amigatolon\paketler\BoingBag39-1.lha" \
+    ///   cargo test --lib prepare_the_owners_card_material_when_asked -- --ignored --nocapture
+    /// ```
+    ///
+    /// The hardfiles are copied into scratch first and prepared from the copy.
+    /// B-17's scaffold carries a Kickstart ROM: the staging must hold neither
+    /// its `Devs` nor any `kick*` file (R1 § 6). The collection is measured
+    /// and never prepared — unpacked it is 917 MB (R1-10).
+    #[test]
+    #[ignore]
+    fn prepare_the_owners_card_material_when_asked() {
+        let var = |name: &str| std::env::var(name).ok().map(PathBuf::from);
+        let (hdf_a, hdf_b, collection, lha) = (
+            var("ART_CARD_HDF_A"),
+            var("ART_CARD_HDF_B"),
+            var("ART_CARD_COLLECTION"),
+            var("ART_CARD_LHA"),
+        );
+        if hdf_a.is_none() && hdf_b.is_none() && collection.is_none() && lha.is_none() {
+            eprintln!(
+                "ART_CARD_HDF_A, ART_CARD_HDF_B, ART_CARD_COLLECTION and ART_CARD_LHA unset — skipping"
+            );
+            return;
+        }
+
+        for (label, source) in [("HDF_A", &hdf_a), ("HDF_B", &hdf_b)] {
+            let Some(source) = source else {
+                eprintln!("ART_CARD_{label} unset — skipping it");
+                continue;
+            };
+            let (_guard, dir) = scratch(&format!("owners-{label}"));
+            let copy = dir.join(source.file_name().unwrap());
+            std::fs::copy(source, &copy).unwrap();
+            let kind = match classify(&copy, &UtcClock) {
+                Classified::Usable { kind } => kind,
+                other => panic!("{}: {other:?}", source.display()),
+            };
+            assert_eq!(kind, SourceKind::WhdloadHardfile, "{}", source.display());
+            let measured = measure(&copy, &kind, &UtcClock, &NoProgress).unwrap();
+            let staging = staging_in(&dir);
+            let prepared = prepare(&copy, &kind, &staging, &UtcClock, &NoProgress).unwrap();
+            let tree = walked(&staging);
+            println!(
+                "{label} {}: top_level {:?} left_behind {:?} sidecars_written {} escaped {} staged {}",
+                source.file_name().unwrap().to_string_lossy(),
+                measured.top_level,
+                prepared.left_behind,
+                prepared.sidecars_written,
+                prepared.escaped,
+                tree.len()
+            );
+            assert_eq!(measured.left_behind, prepared.left_behind);
+            assert_eq!(
+                listed(&staging)
+                    .iter()
+                    .filter(|n| !n.ends_with(".uaem"))
+                    .count(),
+                measured.top_level.len()
+            );
+            if label == "HDF_B" {
+                let leaf = |p: &String| p.rsplit('/').next().unwrap().to_ascii_lowercase();
+                assert!(
+                    !tree.iter().any(|p| leaf(p) == "devs"),
+                    "B-17's staging holds a Devs: {tree:?}"
+                );
+                assert!(
+                    !tree.iter().any(|p| leaf(p).starts_with("kick")),
+                    "B-17's staging holds a kick* file: {tree:?}"
+                );
+                assert!(
+                    prepared.left_behind.iter().any(|n| n == "Devs"),
+                    "B-17's Devs should be named as left behind: {:?}",
+                    prepared.left_behind
+                );
+            }
+        }
+
+        if let Some(collection) = &collection {
+            let kind = match classify(collection, &UtcClock) {
+                Classified::Usable { kind } => kind,
+                other => panic!("{}: {other:?}", collection.display()),
+            };
+            let entries = crate::core::archive::open(collection)
+                .unwrap()
+                .entries()
+                .unwrap();
+            let placement = place_archive(&entries).unwrap();
+            let ArchiveShape::Collection { drawers } = placement.shape else {
+                panic!("{}: placed as {:?}", collection.display(), placement.shape);
+            };
+            let measured = measure(collection, &kind, &UtcClock, &NoProgress).unwrap();
+            println!(
+                "COLLECTION {}: entries {} drawers {drawers} top_level {:?} left_behind {:?}",
+                collection.file_name().unwrap().to_string_lossy(),
+                entries.len(),
+                measured.top_level,
+                measured.left_behind
+            );
+            assert!(drawers > 1, "a collection holds more than one drawer");
+        }
+
+        if let Some(lha) = &lha {
+            let kind = match classify(lha, &UtcClock) {
+                Classified::Usable { kind } => kind,
+                other => panic!("{}: {other:?}", lha.display()),
+            };
+            let entries = crate::core::archive::open(lha).unwrap().entries().unwrap();
+            let with_comment = entries.iter().filter(|e| e.amiga.comment.is_some()).count();
+            let measured = measure(lha, &kind, &UtcClock, &NoProgress).unwrap();
+            println!(
+                "LHA {}: entries {} top_level {:?} comment-carrying entries {with_comment} \
+                 left_behind {:?}",
+                lha.file_name().unwrap().to_string_lossy(),
+                entries.len(),
+                measured.top_level,
+                measured.left_behind
+            );
+            assert!(!measured.top_level.is_empty(), "{}", lha.display());
+        }
+    }
 }
