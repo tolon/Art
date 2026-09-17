@@ -2120,6 +2120,101 @@
       }
     }
   },
+  "cardSection": {
+    "heading": "Partitions",
+    "headingCost": "The image file will be {{size}} on disk.",
+    "headingCostPending": "The image's own size is measured once this build has a system tree.",
+    "free": "{{free}} free of {{total}}",
+    "needTree": "Sizes appear once this build has a system tree to measure.",
+    "measuring": "measuring…",
+    "notMeasured": "not measured yet",
+    "column": {
+      "name": "Partition",
+      "holds": "What it holds",
+      "size": "Size"
+    },
+    "system": {
+      "role": "the operating system"
+    },
+    "work": {
+      "role": "the rest of the card"
+    },
+    "content": {
+      "none": "nothing on it yet",
+      "summary": "Sources: {{sources}} · Files: {{count}}"
+    },
+    "source": {
+      "pending": "ART has not looked at this one yet."
+    },
+    "sourceKind": {
+      "folder": "folder",
+      "archive": "{{format}} archive",
+      "whdloadHardfile": "WHDLoad hard file",
+      "adf": "disk image"
+    },
+    "unusable": {
+      "missing": "not there any more — it was moved or deleted after it was added.",
+      "unreadable": "cannot be read: {{detail}}",
+      "archiveUnreadable": "this archive cannot be read: {{detail}}",
+      "hardfileNotWhdload": "a hard file, but not a WHDLoad one: {{detail}}",
+      "notAnAmigaSource": "not something a card partition can take ({{format}}). A folder, an archive, a WHDLoad hard file or an ADF is.",
+      "notAFolder": "not a folder."
+    },
+    "size": {
+      "gb": "{{value}} GB",
+      "mb": "{{value}} MB",
+      "kb": "{{value}} kB",
+      "bytes": "{{value}} bytes"
+    },
+    "total": {
+      "line": "{{used}} GB / {{total}} GB — {{percent}} % of the card image"
+    },
+    "overflow": {
+      "status": "This card does not fit what it has been asked for.",
+      "doesNotFit": "{{over}} GB too much: {{needed}} GB is asked for and the card image holds {{available}} GB. {{partition}} is the largest partition asked for — take something out of it, or choose a larger card.",
+      "doesNotFitNoPartition": "{{over}} GB too much: {{needed}} GB is asked for and the card image holds {{available}} GB. Take something out, or choose a larger card.",
+      "partitionTooLarge": "{{partition}} would be {{gb}} GB — larger than PFS3 can build. Lower its smallest size, or split it in two.",
+      "cardTooSmall": "A {{cardGb}} GB card is too small for a card image. Choose a larger card.",
+      "partitionContent": "{{partition}} holds {{needed}} GB and the card gives it {{available}} GB. Take something out of it, or choose a larger card.",
+      "systemAdditions": "System's tree fits, but what the card adds to it does not: {{needed}} GB needed against {{available}} GB, the tree itself {{tree}} GB. The Kickstarts are {{kickstarts}} — take the ROM files this card does not need out of the folders ART scans.",
+      "other": "{{sentence}}"
+    },
+    "nameProblem": {
+      "empty": "A partition needs a name.",
+      "tooLong": "That name is too long: AmigaDOS allows {{max}} characters.",
+      "reservedCharacter": "That name holds a character AmigaDOS does not allow in a volume name.",
+      "duplicate": "This card already has a partition called {{name}}."
+    },
+    "newName": {
+      "label": "Name for the new partition",
+      "placeholder": "Demos",
+      "add": "Add"
+    },
+    "addPartition": "+ Add partition",
+    "addSource": "Add…",
+    "rowMenu": "What can I do with {{name}}?",
+    "removePartition": "Remove {{name}}",
+    "removeSource": "Remove {{name}}",
+    "menu": {
+      "addFolder": "Add folder…",
+      "addFiles": "Add files…",
+      "removePartition": "Remove this partition"
+    },
+    "chooseFolderTitle": "Choose a folder for this partition",
+    "chooseFilesTitle": "Choose archives, hard files or disk images for this partition",
+    "tag": {
+      "measured": "measured",
+      "notMeasured": "not measured",
+      "overflow": "does not fit"
+    },
+    "floor": {
+      "label": "Smallest size",
+      "hint": "MB — a floor, never a way past the card's own total."
+    },
+    "driver": {
+      "found": "PFS3 driver {{version}} — from {{from}}"
+    }
+  },
   "preload": {
     "heading": "Prepare the card's Amiga volumes",
     "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",

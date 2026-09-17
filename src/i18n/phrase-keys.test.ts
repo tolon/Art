@@ -166,6 +166,16 @@ import {
   type ReportSource,
   type StepOutcome,
 } from "@/lib/firstboot";
+import {
+  overflowPhrase,
+  partitionContentPhrase,
+  sizePhrase,
+  sourceKindPhrase,
+  totalPhrase,
+  unusableSourcePhrase,
+  volumeNameProblemPhrase,
+} from "@/lib/cardOsMeasure";
+import type { MeasuredPartition, SourceKind, UnusableSource } from "@/lib/cardOs";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -213,7 +223,92 @@ const EVERY_NOT_YET_RUNNABLE = everyValueOf<NotYetRunnable>({
   "installer-not-measured": true,
 });
 
+/** Every `SourceKind` the card path recognises (card round 4, task 8). */
+const EVERY_SOURCE_KIND: SourceKind[] = [
+  { kind: "folder" },
+  { kind: "archive", format: "lha" },
+  { kind: "whdload-hardfile" },
+  { kind: "adf" },
+];
+
+/** Every reason a source cannot be used — each its own sentence, because
+ *  "unusable" without a reason is the one thing a user cannot act on. */
+const EVERY_UNUSABLE: UnusableSource[] = [
+  { reason: "missing" },
+  { reason: "unreadable", detail: "access denied" },
+  { reason: "archive-unreadable", detail: "truncated" },
+  { reason: "hardfile-not-whdload", detail: "no slave" },
+  { reason: "not-an-amiga-source", formatHint: "exe" },
+  { reason: "not-a-folder" },
+];
+
 describe("Phrase keys returned by the discriminated-union mappers", () => {
+  it("cardOsMeasure: every source kind, refusal, size and overflow resolves", () => {
+    for (const kind of EVERY_SOURCE_KIND) {
+      expect(resolvesAtRuntime(sourceKindPhrase(kind).key), kind.kind).toBe(true);
+    }
+    for (const why of EVERY_UNUSABLE) {
+      expect(resolvesAtRuntime(unusableSourcePhrase(why).key), why.reason).toBe(true);
+    }
+    for (const bytes of [0, 4_096, 1_200_000, 4_900_000_000]) {
+      expect(resolvesAtRuntime(sizePhrase(bytes).key), String(bytes)).toBe(true);
+    }
+
+    const plan = {
+      image_bytes: 60_800_000_000,
+      area_bytes: 59_600_000_000,
+      partitions: [],
+    };
+    expect(resolvesAtRuntime(totalPhrase(plan).key)).toBe(true);
+
+    const measured: MeasuredPartition = {
+      volumeName: "Games",
+      driveName: "SDH1",
+      sources: [{ path: "E:\\a", kind: { kind: "folder" }, files: 3, bytes: 10 }],
+      writer: { writer: "native" },
+    };
+    expect(resolvesAtRuntime(partitionContentPhrase(measured).key)).toBe(true);
+    expect(resolvesAtRuntime(partitionContentPhrase(undefined).key)).toBe(true);
+
+    // Every `SizingRefusal` shape `core::error` can serialise, by its own
+    // `kind` tag — plus one the screen has not met, which must still say
+    // Rust's sentence rather than nothing.
+    const sizing: Record<string, string>[] = [
+      { kind: "does-not-fit", needed: "1", available: "0", largest: "Games" },
+      { kind: "does-not-fit", needed: "1", available: "0" },
+      { kind: "partition-too-large", volumeName: "Games", bytes: "1" },
+      { kind: "card-too-small", cardGb: "16" },
+      {
+        kind: "partition-content-does-not-fit",
+        volumeName: "System",
+        neededBlocks: "2",
+        availableBlocks: "1",
+      },
+      {
+        kind: "system-additions-do-not-fit",
+        neededBlocks: "2",
+        availableBlocks: "1",
+        treeBlocks: "1",
+        kickstarts: "kick34005.A500",
+      },
+      { kind: "a-shape-this-screen-has-not-met" },
+    ];
+    for (const params of sizing) {
+      const phrase = overflowPhrase({
+        code: "ART-CARD-DOES-NOT-FIT",
+        message: "the card does not fit",
+        params,
+      });
+      expect(phrase, params.kind).not.toBeNull();
+      expect(resolvesAtRuntime(phrase!.key), params.kind).toBe(true);
+    }
+
+    for (const why of ["empty", "too-long", "reserved-character"] as const) {
+      const phrase = volumeNameProblemPhrase({ ok: false, why, maxBytes: 30 });
+      expect(resolvesAtRuntime(phrase!.key), why).toBe(true);
+    }
+  });
+
   it("amigainstall: every ending, every settlement, every blocker resolves", () => {
     // The four endings are four sentences and four next steps (§89, and the
     // three defects this round produced); a key nobody added would render as

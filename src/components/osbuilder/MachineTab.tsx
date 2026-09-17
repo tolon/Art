@@ -23,6 +23,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 
+import { CardSection } from "@/components/osbuilder/CardSection";
 import { Field } from "@/components/osbuilder/Field";
 import { hostAmigaForeverFolders } from "@/lib/api";
 import { cardImageBytes } from "@/lib/cardBuild";
@@ -394,9 +395,11 @@ export function MachineTab() {
               })}
             </p>
           )}
-          {/* Task 8 replaces this with the card's own partitions and their
-              drop rows (`CardSection.tsx`). */}
-          <div data-testid="card-section-placeholder" style={{ marginTop: 12 }} />
+          {/* The card's own partitions, their sources, their live sizes and
+              the one line that says whether it all fits (task 8). It reads
+              the same session this tab does, so the size chosen above and
+              the partitions below are one card. */}
+          <CardSection />
         </div>
       )}
 

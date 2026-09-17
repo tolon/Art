@@ -2120,6 +2120,101 @@
       }
     }
   },
+  "cardSection": {
+    "heading": "Kartın bölümleri",
+    "headingCost": "Kart imajı dosyası diskte {{size}} yer kaplayacak.",
+    "headingCostPending": "İmajın kendi boyutu, bu yapının ölçülebilecek bir sistem ağacı olduğunda hesaplanır.",
+    "free": "{{total}} içinden {{free}} boş",
+    "needTree": "Boyutlar, bu yapının ölçülebilecek bir sistem ağacı olduğunda görünür.",
+    "measuring": "ölçülüyor…",
+    "notMeasured": "henüz ölçülmedi",
+    "column": {
+      "name": "Bölüm adı",
+      "holds": "İçinde ne var",
+      "size": "Boyutu"
+    },
+    "system": {
+      "role": "işletim sisteminin kendisi"
+    },
+    "work": {
+      "role": "karttan geriye kalan her şey"
+    },
+    "content": {
+      "none": "üzerine henüz bir şey bırakılmadı",
+      "summary": "Kaynak sayısı: {{sources}} · Dosya sayısı: {{count}}"
+    },
+    "source": {
+      "pending": "ART bu kaynağa henüz bakmadı."
+    },
+    "sourceKind": {
+      "folder": "klasör",
+      "archive": "{{format}} arşivi",
+      "whdloadHardfile": "WHDLoad sabit disk dosyası",
+      "adf": "disket imajı"
+    },
+    "unusable": {
+      "missing": "artık yerinde değil — listeye eklendikten sonra taşınmış ya da silinmiş olmalı.",
+      "unreadable": "okunamıyor: {{detail}}",
+      "archiveUnreadable": "bu arşiv okunamıyor: {{detail}}",
+      "hardfileNotWhdload": "bir sabit disk dosyası ama WHDLoad'ın kullandığı türden değil: {{detail}}",
+      "notAnAmigaSource": "bir kart bölümünün alabileceği türden değil ({{format}}). Bir klasör, bir arşiv, bir WHDLoad sabit disk dosyası ya da bir ADF bu türdendir.",
+      "notAFolder": "bir klasör değil."
+    },
+    "size": {
+      "gb": "{{value}} GB",
+      "mb": "{{value}} MB",
+      "kb": "{{value}} kB",
+      "bytes": "{{value}} bayt"
+    },
+    "total": {
+      "line": "{{total}} GB'lık kart imajının {{used}} GB'ı kullanılıyor — yüzde {{percent}}"
+    },
+    "overflow": {
+      "status": "Bu kart, kendisinden istenenleri almıyor.",
+      "doesNotFit": "{{over}} GB fazla: istenen {{needed}} GB, kart imajının aldığı ise {{available}} GB. İstenenler içinde en büyük bölüm {{partition}} — onun içinden bir şeyler çıkarın ya da daha büyük bir kart seçin.",
+      "doesNotFitNoPartition": "{{over}} GB fazla: istenen {{needed}} GB, kart imajının aldığı ise {{available}} GB. Bölümlerden bir şeyler çıkarın ya da daha büyük bir kart seçin.",
+      "partitionTooLarge": "{{partition}} bölümü {{gb}} GB olurdu — bu, PFS3'ün oluşturabileceğinden büyük. En küçük boyutunu düşürün ya da bölümü ikiye ayırın.",
+      "cardTooSmall": "{{cardGb}} GB'lık bir kart, bir kart imajı için fazla küçük. Daha büyük bir kart seçin.",
+      "partitionContent": "{{partition}} bölümünün içeriği {{needed}} GB, kartın ona verdiği yer ise {{available}} GB. İçinden bir şeyler çıkarın ya da daha büyük bir kart seçin.",
+      "systemAdditions": "System'in ağacı sığıyor ama kartın ona eklediklerine yer kalmıyor: gereken {{needed}} GB, bulunan {{available}} GB, ağacın kendisi {{tree}} GB. Eklenen Kickstart'lar: {{kickstarts}} — bu kartın ihtiyaç duymadığı ROM dosyalarını ART'ın taradığı klasörlerden çıkarın.",
+      "other": "{{sentence}}"
+    },
+    "nameProblem": {
+      "empty": "Bir bölümün adı olmak zorunda.",
+      "tooLong": "Bu ad fazla uzun: AmigaDOS en çok {{max}} karaktere izin veriyor.",
+      "reservedCharacter": "Bu ad, AmigaDOS'un bir birim adında kabul etmediği bir karakter taşıyor.",
+      "duplicate": "Bu kartta {{name}} adında bir bölüm zaten var."
+    },
+    "newName": {
+      "label": "Yeni bölümün adı",
+      "placeholder": "Demos",
+      "add": "Ekle"
+    },
+    "addPartition": "+ Yeni bölüm ekle",
+    "addSource": "Ekle…",
+    "rowMenu": "{{name}} bölümüyle neler yapabilirim?",
+    "removePartition": "{{name}} bölümünü kaldır",
+    "removeSource": "{{name}} kaynağını çıkar",
+    "menu": {
+      "addFolder": "Klasör ekle…",
+      "addFiles": "Dosya ekle…",
+      "removePartition": "Bu bölümü kaldır"
+    },
+    "chooseFolderTitle": "Bu bölüme kopyalanacak klasörü seçin",
+    "chooseFilesTitle": "Bu bölüme kopyalanacak arşivleri, sabit disk dosyalarını ya da disket imajlarını seçin",
+    "tag": {
+      "measured": "ölçüldü",
+      "notMeasured": "ölçülmedi",
+      "overflow": "sığmıyor"
+    },
+    "floor": {
+      "label": "En küçük boyutu",
+      "hint": "MB — bu bir alt sınırdır, kartın kendi toplamını aşmanın yolu değil."
+    },
+    "driver": {
+      "found": "PFS3 sürücüsü {{version}} — kaynağı: {{from}}"
+    }
+  },
   "preload": {
     "heading": "Kartın Amiga birimlerini hazırla",
     "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",

@@ -734,6 +734,22 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `FirstBootReportPanel.tsx` renders `rebootReportPhrase`, the same helper,
     // and each read detail line (`t(d.phrase.key, { window })`).
     // `phrase-keys.test.ts` resolves every key those mappers return.
-    expect(dynamicCalls).toBe(196);
+    // 196 → 206 (card round 4, task 8): ten, all in the card section, and all
+    // of them a `Phrase` from `@/lib/cardOsMeasure` — the module exists so
+    // that `src/lib` never renders a string. `CardPartitionRow.tsx` renders
+    // three (the size cell's `sizePhrase`, what a partition holds through
+    // `partitionContentPhrase`, and each listed source's own
+    // `sourcePhrase` — a kind, or the refusal that says why it cannot be
+    // used); `CardSection.tsx` renders seven (a typed volume name's problem
+    // from `volumeNameProblemPhrase`, the footer's `totalPhrase`, three
+    // `sizePhrase` renders for the heading's cost and the free-of-total
+    // line, the `overflowPhrase` that names the partition, and `errorPhrase`
+    // for a refusal that is not about size). `cardOsMeasure.test.ts`
+    // enumerates every variant each can return and `phrase-keys.test.ts`
+    // resolves each one in the catalogue, which is the check this scan
+    // cannot make. The row's own System/Work caption is deliberately *two*
+    // literal calls rather than one over a ternary, so it stays inside
+    // the static check.
+    expect(dynamicCalls).toBe(206);
   });
 });

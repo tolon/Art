@@ -582,8 +582,10 @@ describe("choosing the keyboard the system boots with", () => {
 // section only proves the choice and its plumbing: it hides the folder row,
 // leaves the remembered destination exactly as it was, restores it on the
 // way back, and shows the card's own size row (Q1) instead. The partitions
-// and sources under it are Task 8's `CardSection.tsx` — the placeholder
-// tested below is what that task replaces.
+// and sources under it are Task 8's `CardSection.tsx`, which task 8 dropped
+// in where this task's placeholder stood — its own rows are proved in
+// `CardSection.test.tsx`, and what is asserted here is only that it is the
+// thing the card mode shows.
 
 describe("Folder or Card image (round 4 task 7)", () => {
   it("defaults to Folder, exactly as the tab has always rendered", () => {
@@ -596,7 +598,7 @@ describe("Folder or Card image (round 4 task 7)", () => {
       (screen.getByTestId("osinstall-destinationKind-folder") as HTMLInputElement).checked
     ).toBe(true);
     expect(screen.getByTestId("osinstall-destination-field")).toBeTruthy();
-    expect(screen.queryByTestId("card-section-placeholder")).toBeNull();
+    expect(screen.queryByTestId("card-section")).toBeNull();
   });
 
   it("hides the folder row and shows the card section when Card image is chosen", async () => {
@@ -611,7 +613,7 @@ describe("Folder or Card image (round 4 task 7)", () => {
     expect(screen.queryByTestId("osinstall-destination-taken")).toBeNull();
     expect(screen.queryByTestId("osinstall-destination-tree")).toBeNull();
     expect(screen.queryByTestId("osinstall-destination-fresh")).toBeNull();
-    expect(await screen.findByTestId("card-section-placeholder")).toBeTruthy();
+    expect(await screen.findByTestId("card-section")).toBeTruthy();
   });
 
   it("writes nothing to the remembered destination on a card-mode switch (R2)", async () => {
@@ -621,7 +623,7 @@ describe("Folder or Card image (round 4 task 7)", () => {
     });
     render(<MachineTab />);
     await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
-    await screen.findByTestId("card-section-placeholder");
+    await screen.findByTestId("card-section");
 
     // Read back the very key the folder row writes — untouched by the switch.
     expect(rememberedBag()["osinstall.destination.AmigaOS 3.9"]).toBe("E:\\out\\dist");
@@ -634,7 +636,7 @@ describe("Folder or Card image (round 4 task 7)", () => {
     });
     render(<MachineTab />);
     await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
-    await screen.findByTestId("card-section-placeholder");
+    await screen.findByTestId("card-section");
 
     await userEvent.click(screen.getByTestId("osinstall-destinationKind-folder"));
     expect(screen.getByTestId("osinstall-destination-field").textContent).toContain(
