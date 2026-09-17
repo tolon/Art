@@ -7,6 +7,91 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+/// Why `core::card::sizing::plan_card_image` (or the card preparation's own
+/// System re-check) could not lay a card out. Declared here rather than in
+/// `core/card` (card round 3, M9): this module sits below every other `core/`
+/// module and names a refusal without importing the module that makes it.
+/// `core::card::sizing` re-exports it under its old path.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "refusal",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SizingRefusal {
+    DoesNotFit {
+        needed: u64,
+        available: u64,
+        /// The requested partition with the most measured content — `None`
+        /// when `content` is empty or none of it was measured.
+        largest: Option<String>,
+    },
+    PartitionTooLarge {
+        volume_name: String,
+        bytes: u64,
+    },
+    CardTooSmall {
+        card_gb: u32,
+    },
+    /// A partition's own measured content does not fit the size it is given
+    /// — today only System's tree, whose partition size is fixed.
+    PartitionContentDoesNotFit {
+        volume_name: String,
+        needed_blocks: u64,
+        available_blocks: u64,
+    },
+    /// System's tree fits, and what the card would still add to it — WHDLoad
+    /// and every Kickstart the collection can answer, each with its `.RTB` —
+    /// does not (card round 3, I5). Its own sentence, because the user agrees
+    /// to Kickstarts only at the build: "agree to fewer" names a step that
+    /// does not exist yet, and what does work is taking the ROM files that
+    /// answer them out of the folders ART scans. The partition is always
+    /// System, so it is not a field — which also keeps `CoreError` inside
+    /// clippy's `result_large_err` budget.
+    SystemAdditionsDoNotFit {
+        needed_blocks: u64,
+        available_blocks: u64,
+        /// The tree's own blocks, before anything was added.
+        tree_blocks: u64,
+        /// The WHDLoad that would be added, as it states itself.
+        whdload: Option<String>,
+        /// Every Kickstart name that would be added.
+        kickstarts: Vec<String>,
+    },
+}
+
+/// Which of a card build's places a free-space refusal is about — each has
+/// its own next step: the image's folder is chosen on the card screen, the
+/// scratch folder in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpacePlace {
+    Image,
+    Scratch,
+    /// The image and the scratch folder are on one volume, summed.
+    ImageAndScratch,
+}
+
+/// The most items a card refusal lists by name before it says "and N more".
+pub const MAX_NAMED_IN_REFUSAL: usize = 20;
+
+/// `items` joined, at most [`MAX_NAMED_IN_REFUSAL`] of them, then "and N more".
+fn listed_capped(items: &[String]) -> String {
+    let mut text = items
+        .iter()
+        .take(MAX_NAMED_IN_REFUSAL)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > MAX_NAMED_IN_REFUSAL {
+        text.push_str(&format!(
+            ", and {} more",
+            items.len() - MAX_NAMED_IN_REFUSAL
+        ));
+    }
+    text
+}
+
 /// Why ART will not edit an RDB in place (ART-117). Every one is decided
 /// before the first byte is written, and each has its own stable code, so a
 /// user can act on it and a maintainer can find it (§68).
@@ -693,17 +778,16 @@ pub enum CoreError {
 
     /// The card cannot be laid out: the sizing refusal, said per variant.
     #[error("{}", card_does_not_fit_message(.0))]
-    CardDoesNotFit(crate::core::card::sizing::SizingRefusal),
+    CardDoesNotFit(SizingRefusal),
 
     /// A place the card build writes to has less free space than it needs.
-    #[error(
-        "'{place}' has {available} bytes free and this card needs {needed} there. Free some \
-         space on that drive, or choose another folder, and prepare again."
-    )]
+    #[error("{}", not_enough_space_message(place, *needed, *available, *what))]
     NotEnoughSpace {
         place: String,
         needed: u64,
         available: u64,
+        /// Which place it is — each has its own next step (card round 3, M7).
+        what: SpacePlace,
     },
 
     /// The one-button card's last gate (`commands/cardos.rs`): the image ART
@@ -715,6 +799,47 @@ pub enum CoreError {
          Build it again; if it fails the same way, keep the operation log for a report."
     )]
     CardCheckFailed { failures: usize, checks: String },
+
+    /// hst-imager cannot be used — none was given, the file is missing, or it
+    /// does not run — and `partitions` hold names only it can write
+    /// (ART-113). Said by name before anything is written (card round 3, I1).
+    /// `path` is empty when no hst-imager was given at all.
+    #[error("{}", hst_imager_unusable_message(partitions, path, why))]
+    HstImagerUnusable {
+        partitions: Vec<String>,
+        path: String,
+        why: String,
+    },
+}
+
+/// The sentence for [`CoreError::HstImagerUnusable`].
+fn hst_imager_unusable_message(partitions: &[String], path: &str, why: &str) -> String {
+    let tool = if path.is_empty() {
+        "no hst.imager.exe was given to this build".to_string()
+    } else {
+        format!("'{path}' cannot be used as hst-imager ({why})")
+    };
+    format!(
+        "{} hold names only hst-imager can write (ART-113), and {tool}. Point ART at a working \
+         hst.imager.exe in Settings, or rename those names to ASCII, and prepare the card again.",
+        listed_capped(partitions)
+    )
+}
+
+/// The sentence for [`CoreError::NotEnoughSpace`], with the next step for
+/// the place it is about.
+fn not_enough_space_message(place: &str, needed: u64, available: u64, what: SpacePlace) -> String {
+    let choose = match what {
+        SpacePlace::Image => "choose another folder for the card image",
+        SpacePlace::Scratch => "choose another scratch folder in Settings",
+        SpacePlace::ImageAndScratch => {
+            "choose another folder for the card image, or another scratch folder in Settings"
+        }
+    };
+    format!(
+        "'{place}' has {available} bytes free and this card needs {needed} there. Free some \
+         space on that drive, or {choose}, and prepare again."
+    )
 }
 
 /// The sentence for [`CoreError::CardNamesNeedHstImager`].
@@ -730,8 +855,7 @@ fn card_names_need_hst_message(partition: &str, paths: &[String], more: usize) -
 }
 
 /// The sentence for [`CoreError::CardDoesNotFit`], one per refusal.
-fn card_does_not_fit_message(refusal: &crate::core::card::sizing::SizingRefusal) -> String {
-    use crate::core::card::sizing::SizingRefusal;
+fn card_does_not_fit_message(refusal: &SizingRefusal) -> String {
     match refusal {
         SizingRefusal::DoesNotFit {
             needed,
@@ -762,10 +886,40 @@ fn card_does_not_fit_message(refusal: &crate::core::card::sizing::SizingRefusal)
             needed_blocks,
             available_blocks,
         } => format!(
-            "{volume_name} needs {needed_blocks} blocks of data and has room for \
-             {available_blocks}. Take something out of {volume_name} (or agree to fewer \
-             Kickstarts) and prepare again."
+            "{volume_name}'s tree needs {needed_blocks} blocks of data and {volume_name} has room \
+             for {available_blocks}. Take something out of the tree and prepare again."
         ),
+        SizingRefusal::SystemAdditionsDoNotFit {
+            needed_blocks,
+            available_blocks,
+            tree_blocks,
+            whdload,
+            kickstarts,
+        } => {
+            let mut added = Vec::new();
+            if let Some(whdload) = whdload {
+                added.push(whdload.clone());
+            }
+            if !kickstarts.is_empty() {
+                added.push(format!(
+                    "the Kickstarts {} with their .RTB files",
+                    listed_capped(kickstarts)
+                ));
+            }
+            let advice = if kickstarts.is_empty() {
+                "Take something out of the tree and prepare again."
+            } else {
+                "ART counts every Kickstart your ROM files can answer, because you choose which \
+                 to place only when you build. Take the ROM files that answer some of them out of \
+                 your material and Kickstart folders, take out the titles that need them, or take \
+                 something out of the tree, and prepare again."
+            };
+            format!(
+                "System needs {needed_blocks} blocks of data with {} added, and has room for \
+                 {available_blocks}; its tree alone needs {tree_blocks}. {advice}",
+                added.join(" and ")
+            )
+        }
     }
 }
 
@@ -834,10 +988,13 @@ fn pfs3_driver_not_found_message(searched: &[String], unreadable: &[String]) -> 
         "No PFS3 driver was found. ART looked for 'pfs3aio' or 'pfs3aio.lha' in: {}. Put \
          pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the \
          driver file yourself.",
-        searched.join(", ")
+        listed_capped(searched)
     );
     if !unreadable.is_empty() {
-        msg.push_str(&format!(" ART could not read: {}.", unreadable.join(", ")));
+        msg.push_str(&format!(
+            " ART could not read: {}.",
+            listed_capped(unreadable)
+        ));
     }
     msg
 }
@@ -848,7 +1005,7 @@ fn whdload_not_found_message(titles: usize, searched: &[String]) -> String {
         "{titles} WHDLoad title(s) are on this card and no WHDLoad was found, so they would not \
          start. ART looked in: {}. Put WHDLoad_usr.lha (from whdload.de) in one of your material \
          folders and prepare again.",
-        searched.join(", ")
+        listed_capped(searched)
     )
 }
 
@@ -928,6 +1085,7 @@ impl CoreError {
             Self::CardDoesNotFit(_) => "ART-CARD-DOES-NOT-FIT",
             Self::NotEnoughSpace { .. } => "ART-NOT-ENOUGH-SPACE",
             Self::CardCheckFailed { .. } => "ART-CARD-CHECK-FAILED",
+            Self::HstImagerUnusable { .. } => "ART-HST-IMAGER-UNUSABLE",
         }
     }
 
@@ -1161,17 +1319,21 @@ mod tests {
                 paths: vec!["x".into()],
                 more: 0,
             },
-            CoreError::CardDoesNotFit(crate::core::card::sizing::SizingRefusal::CardTooSmall {
-                card_gb: 1,
-            }),
+            CoreError::CardDoesNotFit(SizingRefusal::CardTooSmall { card_gb: 1 }),
             CoreError::NotEnoughSpace {
                 place: "x".into(),
                 needed: 2,
                 available: 1,
+                what: SpacePlace::Image,
             },
             CoreError::CardCheckFailed {
                 failures: 1,
                 checks: "x".into(),
+            },
+            CoreError::HstImagerUnusable {
+                partitions: vec!["x".into()],
+                path: "x".into(),
+                why: "x".into(),
             },
         ];
 
@@ -1211,6 +1373,80 @@ mod tests {
         );
         assert!(msg.contains("22 more"), "{msg}");
         assert!(msg.contains("FFS"), "the actionable advice: {msg}");
+    }
+
+    /// Card round 3, M8: a refusal lists at most 20 places and counts the
+    /// rest, whatever the search covered.
+    #[test]
+    fn a_card_refusal_lists_at_most_twenty_places_and_counts_the_rest() {
+        let searched: Vec<String> = (1..=25).map(|n| format!("E:\\games\\t{n}.hdf")).collect();
+        let whd = CoreError::WhdloadNotFound {
+            titles: 25,
+            searched: searched.clone(),
+        }
+        .to_string();
+        assert!(whd.contains("t20.hdf") && !whd.contains("t21.hdf"), "{whd}");
+        assert!(whd.contains("and 5 more"), "{whd}");
+
+        let drv = CoreError::Pfs3DriverNotFound {
+            searched: searched.clone(),
+            unreadable: searched,
+        }
+        .to_string();
+        assert!(drv.contains("t20.hdf") && !drv.contains("t21.hdf"), "{drv}");
+        assert_eq!(drv.matches("and 5 more").count(), 2, "{drv}");
+    }
+
+    /// Card round 3, I5: the tree alone and the tree with what the card adds
+    /// are two sentences, and only the second sends the user to the ROM files.
+    #[test]
+    fn system_s_two_refusals_give_their_own_next_step() {
+        let tree = CoreError::CardDoesNotFit(SizingRefusal::PartitionContentDoesNotFit {
+            volume_name: "System".into(),
+            needed_blocks: 900,
+            available_blocks: 800,
+        })
+        .to_string();
+        assert!(tree.contains("tree"), "{tree}");
+        assert!(!tree.contains("Kickstart"), "{tree}");
+
+        let added = CoreError::CardDoesNotFit(SizingRefusal::SystemAdditionsDoNotFit {
+            needed_blocks: 900,
+            available_blocks: 800,
+            tree_blocks: 700,
+            whdload: Some("WHDLoad 20.0".into()),
+            kickstarts: vec!["kick34005.A500".into()],
+        })
+        .to_string();
+        assert!(added.starts_with("System needs 900"), "{added}");
+        assert!(
+            added.contains("WHDLoad 20.0") && added.contains("kick34005.A500"),
+            "{added}"
+        );
+        assert!(added.contains("ROM files"), "{added}");
+        assert!(!added.contains("agree to fewer"), "{added}");
+    }
+
+    /// Card round 3, M7: the scratch folder is a Settings choice, and a
+    /// free-space refusal about it says so.
+    #[test]
+    fn a_free_space_refusal_names_where_its_place_is_chosen() {
+        let msg = |what| {
+            CoreError::NotEnoughSpace {
+                place: "E:\\scratch".into(),
+                needed: 2,
+                available: 1,
+                what,
+            }
+            .to_string()
+        };
+        assert!(
+            msg(SpacePlace::Scratch).contains("scratch folder in Settings"),
+            "{}",
+            msg(SpacePlace::Scratch)
+        );
+        assert!(!msg(SpacePlace::Image).contains("Settings"));
+        assert!(msg(SpacePlace::Image).contains("folder for the card image"));
     }
 
     /// The other half: no `more` at all must not claim there is any.

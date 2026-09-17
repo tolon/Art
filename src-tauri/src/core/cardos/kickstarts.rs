@@ -226,10 +226,34 @@ pub enum RtbSource {
     /// A member of an archive whose name starts `skick` (Aminet's own
     /// `skick346.lha`), found by name rather than a fixed member list.
     InArchive { archive: PathBuf, member: String },
-    /// Not found anywhere ART looked. `KickstartProposal::rtb_missing`
-    /// carries this forward so the screen can name Aminet `util/boot/skick346`
-    /// (owner decision 2) without walking every item again.
-    Missing,
+    /// Not found anywhere ART looked. `get_from` names the package that
+    /// carries this `.RTB` (owner decision 2), and
+    /// `KickstartProposal::rtb_missing` says that some item is missing one.
+    Missing { get_from: RtbPackage },
+}
+
+/// Where a missing `.RTB` can be had — not every one is in `skick346`
+/// (card round 3, M16; research-whdload.md § 1.3: `skick346.lha` carries no
+/// `kick31034.A1000.RTB`, which ships in whdload.de's `7CitiesOfGold.lha`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RtbPackage {
+    /// Aminet `util/boot/skick346`.
+    AminetSkick346,
+    /// whdload.de's WHDLoad install `7CitiesOfGold.lha`.
+    WhdloadSevenCitiesOfGold,
+}
+
+/// The package that carries `name`'s `.RTB`: the A1000's 1.1 image from
+/// whdload.de, every other from `skick346` — whose listing (7-Zip, round 3's
+/// research) holds the 1.2, 1.3, 3.1 A600/A1200/A4000 `.RTB` files and 14
+/// more for beta, 2.x and 3.0 Kickstarts.
+pub fn rtb_package_for(name: &str) -> RtbPackage {
+    if name.eq_ignore_ascii_case("kick31034.A1000") {
+        RtbPackage::WhdloadSevenCitiesOfGold
+    } else {
+        RtbPackage::AminetSkick346
+    }
 }
 
 /// One Kickstart name at least one title asks for, and what ART can say
@@ -305,7 +329,7 @@ pub fn propose_kickstarts(
             .next()
             .expect("one wanted image always produces exactly one offer");
         let rtb = find_rtb(&name, material);
-        if matches!(rtb, RtbSource::Missing) {
+        if matches!(rtb, RtbSource::Missing { .. }) {
             rtb_missing = true;
         }
         let mut titles = titles_by_name.remove(&name).unwrap_or_default();
@@ -380,7 +404,9 @@ fn find_rtb(name: &str, material: &[PathBuf]) -> RtbSource {
         }
     }
 
-    RtbSource::Missing
+    RtbSource::Missing {
+        get_from: rtb_package_for(name),
+    }
 }
 
 /// What [`place_agreed`] did with one agreed Kickstart.
@@ -407,30 +433,7 @@ pub fn place_agreed(
     agreed: &[String],
     tree: &Path,
 ) -> CoreResult<Vec<PlacedKickstart>> {
-    let mut validated = Vec::with_capacity(agreed.len());
-    for name in agreed {
-        let item = proposal
-            .items
-            .iter()
-            .find(|item| &item.name == name)
-            .ok_or_else(|| CoreError::KickstartNotProposed {
-                name: name.clone(),
-                why: "ART's proposal does not name it".into(),
-            })?;
-        let Offer::Supplied { by, .. } = &item.offer else {
-            return Err(CoreError::KickstartNotProposed {
-                name: name.clone(),
-                why: "ART did not offer it — nothing in the collection matches it".into(),
-            });
-        };
-        if matches!(item.rtb, RtbSource::Missing) {
-            return Err(CoreError::KickstartNotProposed {
-                name: name.clone(),
-                why: "its .RTB was not found in any material folder".into(),
-            });
-        }
-        validated.push((item, by));
-    }
+    let validated = check_agreed(proposal, agreed)?;
 
     let mut placed = Vec::with_capacity(validated.len());
     for (item, by) in validated {
@@ -448,6 +451,52 @@ pub fn place_agreed(
         });
     }
     Ok(placed)
+}
+
+/// [`place_agreed`]'s refusal, on its own and writing nothing: every agreed
+/// name must be one the proposal supplies with its `.RTB`. The card build
+/// asks this before anything of the build is written, so a refusal is a
+/// refusal and not a failure halfway (card round 3, I3).
+pub fn check_agreed<'a>(
+    proposal: &'a KickstartProposal,
+    agreed: &[String],
+) -> CoreResult<
+    Vec<(
+        &'a ProposedKickstart,
+        &'a crate::core::rom::offer::SuppliedBy,
+    )>,
+> {
+    let mut validated = Vec::with_capacity(agreed.len());
+    for name in agreed {
+        let item = proposal
+            .items
+            .iter()
+            .find(|item| &item.name == name)
+            .ok_or_else(|| CoreError::KickstartNotProposed {
+                name: name.clone(),
+                why: "ART's proposal does not name it".into(),
+            })?;
+        let Offer::Supplied { by, .. } = &item.offer else {
+            return Err(CoreError::KickstartNotProposed {
+                name: name.clone(),
+                why: "ART did not offer it — nothing in the collection matches it".into(),
+            });
+        };
+        if let RtbSource::Missing { get_from } = item.rtb {
+            let package = match get_from {
+                RtbPackage::AminetSkick346 => "Aminet util/boot/skick346",
+                RtbPackage::WhdloadSevenCitiesOfGold => "whdload.de's 7CitiesOfGold.lha",
+            };
+            return Err(CoreError::KickstartNotProposed {
+                name: name.clone(),
+                why: format!(
+                    "its .RTB was not found in any material folder — put {package} in one"
+                ),
+            });
+        }
+        validated.push((item, by));
+    }
+    Ok(validated)
 }
 
 /// The `.RTB` bytes a validated [`RtbSource`] names. Called only after
@@ -470,7 +519,7 @@ fn read_rtb_bytes(source: &RtbSource) -> CoreResult<Vec<u8>> {
                 })?;
             backend.read(index, RTB_MAX_BYTES)
         }
-        RtbSource::Missing => {
+        RtbSource::Missing { .. } => {
             unreachable!("place_agreed refuses a Missing .RTB before this is ever called")
         }
     }
@@ -493,8 +542,11 @@ fn place_rtb(tree: &Path, name: &str, bytes: &[u8]) -> CoreResult<PlaceOutcome> 
     })?;
 
     if to.exists() {
-        let existing = std::fs::read(&to)?;
-        if existing == bytes {
+        // By length first, and read only when the lengths agree — a bounded
+        // read of a file already in the tree (card round 3, M13).
+        let same = std::fs::metadata(&to)?.len() == bytes.len() as u64
+            && read_bounded(&to, bytes.len() as u64, "Kickstart .RTB")? == bytes;
+        if same {
             return Ok(PlaceOutcome::AlreadyThere {
                 to: to.display().to_string(),
             });
@@ -744,8 +796,32 @@ mod tests {
         let proposal = propose_kickstarts(&needs, &[], std::slice::from_ref(&dir)).unwrap();
 
         assert!(matches!(proposal.items[0].offer, Offer::NotHere { .. }));
-        assert!(matches!(proposal.items[0].rtb, RtbSource::Missing));
+        assert_eq!(
+            proposal.items[0].rtb,
+            RtbSource::Missing {
+                get_from: RtbPackage::AminetSkick346
+            }
+        );
         assert!(proposal.rtb_missing);
+    }
+
+    /// M16: the A1000's `.RTB` is not in `skick346`, and the proposal does
+    /// not send the user there for it.
+    #[test]
+    fn a_missing_rtb_names_the_package_that_carries_it() {
+        assert_eq!(
+            rtb_package_for("kick31034.A1000"),
+            RtbPackage::WhdloadSevenCitiesOfGold
+        );
+        for name in [
+            "kick33180.A500",
+            "kick34005.A500",
+            "kick40063.A600",
+            "kick40068.A1200",
+            "kick40068.A4000",
+        ] {
+            assert_eq!(rtb_package_for(name), RtbPackage::AminetSkick346, "{name}");
+        }
     }
 
     // -- place_agreed --------------------------------------------------------
@@ -777,7 +853,9 @@ mod tests {
                 titles: vec!["Games/A/A.slave".into()],
                 titles_more: 0,
                 offer: supplied("kick34005.A500", &rom, 1),
-                rtb: RtbSource::Missing,
+                rtb: RtbSource::Missing {
+                    get_from: RtbPackage::AminetSkick346,
+                },
             }],
             unreadable_slaves: vec![],
             rtb_missing: true,

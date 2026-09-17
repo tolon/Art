@@ -106,6 +106,12 @@ pub struct SourceFacts {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PartitionContent {
+    /// Which Amiga area of the card the partition is in, counted from 0 in
+    /// the order the card's table lists them — a drive name is unique only
+    /// within its own RDB (card round 3, M12). A manifest written before the
+    /// field existed was a one-area card: 0.
+    #[serde(default)]
+    pub area: usize,
     pub drive_name: String,
     pub volume_name: String,
     /// Each source's file name (`WHDLoadDemos100.lha`, `Games`) — `system
@@ -113,7 +119,7 @@ pub struct PartitionContent {
     pub sources: Vec<String>,
     pub files: u64,
     pub bytes: u64,
-    /// `"native"` or the fallback tool's probed version.
+    /// `"native"`, or `hst-imager <its probed version>`.
     pub writer: String,
 }
 

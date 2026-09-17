@@ -12,6 +12,22 @@ use std::path::Path;
 /// space under per-user disk quotas). `path` does not have to exist yet —
 /// the nearest existing ancestor is asked instead, since a build checks free
 /// space before it creates the file it is about to write.
+///
+/// Windows only: `windows-sys` is a `cfg(windows)` dependency, so the module
+/// says so itself rather than failing to build elsewhere (card round 3, M14).
+#[cfg(not(windows))]
+pub fn available_bytes(path: &Path) -> std::io::Result<u64> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "ART asks for free space only on Windows, not for '{}'",
+            path.display()
+        ),
+    ))
+}
+
+/// See the `cfg(not(windows))` twin above.
+#[cfg(windows)]
 pub fn available_bytes(path: &Path) -> std::io::Result<u64> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
@@ -52,6 +68,7 @@ pub fn available_bytes(path: &Path) -> std::io::Result<u64> {
 }
 
 #[cfg(test)]
+#[cfg(windows)]
 mod tests {
     use super::*;
 

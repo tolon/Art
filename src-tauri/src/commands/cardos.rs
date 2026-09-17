@@ -19,8 +19,11 @@
 //! build removes it, `card_os_close` removes it, and what could not be
 //! removed is named rather than claimed gone.
 //!
-//! **Endings stay distinct.** A build succeeds, fails in a named phase, or is
-//! stopped in a named phase — [`CardOsEnding`]. A stop is never reported as a
+//! **Endings stay distinct.** A build succeeds, is refused, fails, or is
+//! stopped, each in a named phase — [`CardOsEnding`]. Everything a build can
+//! refuse is asked before it writes anything (the preflight), so a refusal's
+//! next step — choose another name, put a file in place — is never mistaken
+//! for a failure's (keep the log, build again). A stop is never reported as a
 //! failure, and every ending says what became of `<image>.partial`
 //! ([`PartialRemoval`]): ART removes only the file this run created (P3).
 
@@ -32,20 +35,24 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::card::{write_card_image, CardBuildRequest};
+use crate::commands::card::{card_image_inputs, CardBuildRequest, CardImageInputs};
 use crate::commands::hdf::FileSystemInput;
 use crate::commands::preload::{run_with_fallback, StepReport};
+use crate::core::card::build::{build_card_reporting, ImageLeft};
 use crate::core::card::health::{check_image, HealthReport};
 use crate::core::card::manifest::{
     describe_card, manifest_path_for, render_manifest, PartitionContent,
 };
-use crate::core::cardos::kickstarts::{place_agreed, PlacedKickstart};
+use crate::core::card::read_card;
+use crate::core::cardos::kickstarts::{check_agreed, place_agreed, PlacedKickstart};
 use crate::core::cardos::partial::{
     finish_partial, partial_path_for, refuse_partial_destination, remove_partial, PartialRemoval,
 };
 use crate::core::cardos::prepare::{
-    check_free_space, measure_card, space_needs, stage_card, PartitionInput, PreparedCard,
+    check_free_space, measure_card, space_needs, stage_card, HstImagerState, PartitionInput,
+    PartitionWriter, PreparedCard,
 };
+use crate::core::cardos::readback::{count_pfs3_partition, PartitionCount};
 use crate::core::cardos::whdload::{install_whdload, WhdloadInstalled};
 use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
@@ -57,7 +64,8 @@ use crate::core::pistorm::hardware::{Emu68Line, PiModel, PistormHardware};
 use crate::core::pistorm::options::Emu68Options;
 use crate::core::preload::native::NativeFormatter;
 use crate::core::preload::{plan, PreloadPartition, PreloadRequest, PreloadStep, VolumeFormatter};
-use crate::core::safety::atomic::atomic_write;
+use crate::core::rom::place::PlaceOutcome;
+use crate::core::safety::{atomic_create_new, Created};
 use crate::core::scratch_guard::{LeftBehind, OwnedScratch};
 use crate::error::AppResult;
 use crate::tools::hst_imager::HstImager;
@@ -85,7 +93,17 @@ pub struct CardOsSession {
     /// The image the preparation was asked for — its free space was checked
     /// for this path, so the build writes exactly here.
     image: Option<PathBuf>,
+    /// The hst-imager the preparation asked, when one was given — the build
+    /// uses this one, never a second path of its own (card round 3, I1).
+    hst_imager: Option<PathBuf>,
     busy: bool,
+}
+
+/// What a finished preparation leaves in its session.
+pub(crate) struct PreparedSession {
+    pub prepared: PreparedCard,
+    pub image: PathBuf,
+    pub hst_imager: Option<PathBuf>,
 }
 
 /// Every open session, by id.
@@ -100,6 +118,7 @@ pub(crate) struct BuildTicket {
     pub prepared: PreparedCard,
     pub image: PathBuf,
     pub tree: PathBuf,
+    pub hst_imager: Option<PathBuf>,
 }
 
 fn no_session(id: u64) -> CoreError {
@@ -137,6 +156,7 @@ impl CardOsSessions {
                 scratch,
                 prepared: None,
                 image: None,
+                hst_imager: None,
                 busy: false,
             },
         );
@@ -157,18 +177,20 @@ impl CardOsSessions {
     /// A preparation ended. Its staging folder was emptied when it began, so
     /// a failed one leaves nothing an earlier preparation could still use:
     /// `None` clears what was there.
-    pub(crate) fn end_prepare(&self, id: u64, result: Option<(PreparedCard, PathBuf)>) {
+    pub(crate) fn end_prepare(&self, id: u64, result: Option<PreparedSession>) {
         let mut sessions = self.lock();
         if let Some(session) = sessions.get_mut(&id) {
             session.busy = false;
             match result {
-                Some((prepared, image)) => {
-                    session.prepared = Some(prepared);
-                    session.image = Some(image);
+                Some(done) => {
+                    session.prepared = Some(done.prepared);
+                    session.image = Some(done.image);
+                    session.hst_imager = done.hst_imager;
                 }
                 None => {
                     session.prepared = None;
                     session.image = None;
+                    session.hst_imager = None;
                 }
             }
         }
@@ -192,6 +214,7 @@ impl CardOsSessions {
             prepared,
             image,
             tree: session.scratch.path().join(TREE),
+            hst_imager: session.hst_imager.take(),
         })
     }
 
@@ -288,14 +311,28 @@ fn given_path(given: Option<&str>) -> Option<PathBuf> {
 }
 
 /// The preparation, without Tauri: measure, check free space, stage.
+/// `hst_probe` asks the hst-imager the request names whether it runs (I1):
+/// a partition is given to hst-imager only when it answered.
+#[allow(clippy::too_many_arguments)]
 fn prepare_card(
     request: &CardOsPrepareRequest,
     image: &Path,
     session_root: &Path,
     clock: &dyn AmigaClock,
     available: impl Fn(&Path) -> std::io::Result<u64>,
+    hst_probe: impl Fn(&Path) -> Result<(), String>,
     progress: &dyn ProgressSink,
 ) -> CoreResult<PreparedCard> {
+    let hst_imager = match given_path(Some(&request.hst_imager_path)) {
+        None => HstImagerState::NotConfigured,
+        Some(tool) => match hst_probe(&tool) {
+            Ok(()) => HstImagerState::Usable,
+            Err(why) => HstImagerState::Unusable {
+                path: tool.display().to_string(),
+                why,
+            },
+        },
+    };
     let tree = session_root.join(TREE);
     let staging = session_root.join(STAGING);
     let driver_stage = session_root.join(DRIVER);
@@ -318,7 +355,7 @@ fn prepare_card(
         &material,
         explicit_driver.as_deref(),
         &driver_stage,
-        !request.hst_imager_path.trim().is_empty(),
+        &hst_imager,
         clock,
         progress,
     )?;
@@ -384,7 +421,7 @@ pub fn card_os_prepare(
     sessions: State<'_, Arc<CardOsSessions>>,
     oplog: State<'_, JsonlOperationLog>,
 ) -> AppResult<JobId> {
-    let image = PathBuf::from(request.image.trim());
+    let image = image_path_from(&request.image)?;
     refuse_partial_destination(&image)?;
     let session_root = sessions.begin_prepare(request.session)?;
 
@@ -402,13 +439,31 @@ pub fn card_os_prepare(
             &session_root,
             &crate::tools::local_time::LOCAL_TIME,
             crate::tools::free_space::available_bytes,
+            |tool: &Path| {
+                HstImager::at(tool)
+                    .probe()
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            },
             progress,
         );
         write_to_path(&log_path, &prepare_record(&request, &image, &outcome));
 
         match outcome {
             Ok(prepared) => {
-                sessions.end_prepare(request.session, Some((prepared.clone(), image)));
+                // I1: the build gets this hst-imager — the one that answered
+                // here — exactly when a partition was given to it.
+                let hst_imager = (!volumes_needing_hst_imager(&prepared).is_empty())
+                    .then(|| given_path(Some(&request.hst_imager_path)))
+                    .flatten();
+                sessions.end_prepare(
+                    request.session,
+                    Some(PreparedSession {
+                        prepared: prepared.clone(),
+                        image,
+                        hst_imager,
+                    }),
+                );
                 let _ = emit_app.emit(
                     CARD_OS_PREPARE_EVENT,
                     CardOsPrepareResult {
@@ -452,14 +507,14 @@ pub struct CardOsBuildRequest {
     pub options: Emu68Options,
     #[serde(default)]
     pub built_at: Option<String>,
-    #[serde(default)]
-    pub hst_imager_path: String,
+    // No hst-imager path: the build uses the one its preparation asked
+    // (card round 3, I1), so the two can never disagree.
 }
 
 /// The event a build's every ending arrives on.
 pub const CARD_OS_BUILD_EVENT: &str = "card-os-build-result";
 
-/// How a build ended. Three sentences, never collapsed into "not succeeded".
+/// How a build ended. Four sentences, never collapsed into "not succeeded".
 #[derive(Debug, Clone, Serialize)]
 #[serde(
     tag = "ending",
@@ -468,6 +523,13 @@ pub const CARD_OS_BUILD_EVENT: &str = "card-os-build-result";
 )]
 pub enum CardOsEnding {
     Succeeded,
+    /// Refused before anything of the image was written: its next step is
+    /// the user's (a name, a file, a setting), not "build again" (I3).
+    Refused {
+        phase: BuildPhase,
+        code: String,
+        message: String,
+    },
     Failed {
         phase: BuildPhase,
         code: String,
@@ -533,10 +595,13 @@ pub(crate) struct BuiltCardOs {
 
 /// How far the build got in writing the image — which decides what a
 /// non-success ending removes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Written {
     /// Nothing of this run's is on disk (P3: a `.partial` found there is not ours).
     Nothing,
+    /// The card writer created `<image>.partial`, failed, and said what it
+    /// did with the file — the ending reports exactly that (I2).
+    Reported(PartialRemoval),
     /// `<image>.partial` exists and is this run's.
     Partial,
     /// Renamed to `<image>`, and the build still did not succeed.
@@ -558,7 +623,7 @@ fn gate(phase: BuildPhase, progress: &dyn ProgressSink) -> PhaseResult<()> {
     }
 }
 
-/// The request `write_card_image` takes, from the prepared card (R1).
+/// The request `card_image_inputs` takes, from the prepared card (R1).
 fn card_request_for(
     prepared: &PreparedCard,
     request: &CardOsBuildRequest,
@@ -617,10 +682,22 @@ fn preload_request_for(prepared: &PreparedCard, tree: &Path, partial: &Path) -> 
     }
 }
 
-/// The tree's own release, from `distribution.json`. Absent or unreadable is
-/// empty — never guessed.
+/// The most of the tree's `distribution.json` ART reads to name the release.
+/// It lists every file of the tree, so it is far larger than a config file —
+/// but it is bounded (card round 3, M13).
+const DISTRIBUTION_MANIFEST_MAX_BYTES: u64 = 64 * 1024 * 1024;
+
+/// The tree's own release, from `distribution.json`. Absent, unreadable or
+/// larger than [`DISTRIBUTION_MANIFEST_MAX_BYTES`] is empty — never guessed.
 fn os_of(tree: &Path) -> Vec<String> {
-    std::fs::File::open(tree.join(MANIFEST_FILE_NAME))
+    let path = tree.join(MANIFEST_FILE_NAME);
+    let small_enough = std::fs::metadata(&path)
+        .map(|m| m.len() <= DISTRIBUTION_MANIFEST_MAX_BYTES)
+        .unwrap_or(false);
+    if !small_enough {
+        return Vec::new();
+    }
+    std::fs::File::open(&path)
         .ok()
         .and_then(|file| {
             serde_json::from_reader::<_, DistributionManifest>(std::io::BufReader::new(file)).ok()
@@ -635,9 +712,15 @@ fn file_name_of(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// What went into each partition, for the manifest: names from the measures,
-/// the writer from the step that filled it (or formatted it, for Work).
-fn partition_contents(prepared: &PreparedCard, steps: &[StepReport]) -> Vec<PartitionContent> {
+/// What is in each partition, for the manifest: the sources' names from the
+/// preparation, the writer from the step that filled it (or formatted it, for
+/// Work), and the files and bytes **counted off the finished card** (I4) —
+/// `counts` is one per planned partition, in order.
+fn partition_contents(
+    prepared: &PreparedCard,
+    steps: &[StepReport],
+    counts: &[PartitionCount],
+) -> Vec<PartitionContent> {
     let tool_for = |drive: &str| -> String {
         let copy = steps.iter().find(|report| {
             matches!(&report.step, PreloadStep::CopyIn { drive_name, .. } if drive_name == drive)
@@ -651,7 +734,7 @@ fn partition_contents(prepared: &PreparedCard, steps: &[StepReport]) -> Vec<Part
             })
         };
         copy.or_else(format)
-            .map(|report| report.tool.clone())
+            .map(|report| writer_name(&report.tool))
             .unwrap_or_default()
     };
     let measured = &prepared.measured;
@@ -661,35 +744,110 @@ fn partition_contents(prepared: &PreparedCard, steps: &[StepReport]) -> Vec<Part
         .iter()
         .enumerate()
         .map(|(i, planned)| {
-            let (sources, files, bytes) = if i == 0 {
-                (
-                    vec![SYSTEM_TREE_SOURCE.to_string()],
-                    measured.system.sources.iter().map(|s| s.files).sum(),
-                    measured.system.sources.iter().map(|s| s.bytes).sum(),
-                )
+            let sources = if i == 0 {
+                vec![SYSTEM_TREE_SOURCE.to_string()]
             } else if let Some(partition) = measured.partitions.get(i - 1) {
-                (
-                    partition
-                        .sources
-                        .iter()
-                        .map(|s| file_name_of(&s.path))
-                        .collect(),
-                    partition.sources.iter().map(|s| s.files).sum(),
-                    partition.sources.iter().map(|s| s.bytes).sum(),
-                )
+                partition
+                    .sources
+                    .iter()
+                    .map(|s| file_name_of(&s.path))
+                    .collect()
             } else {
-                (Vec::new(), 0, 0)
+                Vec::new()
             };
+            let count = counts
+                .get(i)
+                .copied()
+                .unwrap_or(PartitionCount { files: 0, bytes: 0 });
             PartitionContent {
+                area: 0,
                 drive_name: planned.drive_name.clone(),
                 volume_name: planned.volume_name.clone(),
                 sources,
-                files,
-                bytes,
+                files: count.files,
+                bytes: count.bytes,
                 writer: tool_for(&planned.drive_name),
             }
         })
         .collect()
+}
+
+/// The writer the manifest records for a step's tool: `native`, or the
+/// fallback's probed version **named as hst-imager's** — a bare
+/// `1.6.616+a91fa4ca` does not say which tool wrote the partition (the
+/// ledger's T13). The fallback of a card build is only ever hst-imager.
+fn writer_name(tool: &str) -> String {
+    if tool == "native" || tool.starts_with("hst-imager") {
+        tool.to_string()
+    } else {
+        format!("hst-imager {tool}")
+    }
+}
+
+/// A card image path from the screen: refused when blank, or when relative —
+/// a relative path would be read against wherever the process happens to be
+/// running (card round 3, M7).
+fn image_path_from(given: &str) -> CoreResult<PathBuf> {
+    let path = PathBuf::from(given.trim());
+    if path.as_os_str().is_empty() || !path.is_absolute() {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' is not where a card image can go — choose a full path for it, such as \
+             E:\\cards\\amiga.img",
+            given.trim()
+        )));
+    }
+    Ok(path)
+}
+
+/// What became of `<image>.partial` when writing the card failed — the card
+/// writer's own account of the file it created (I2), never a guess.
+fn partial_after_card_failure(image: &Path, left: &ImageLeft) -> PartialRemoval {
+    let path = partial_path_for(image).display().to_string();
+    match left {
+        ImageLeft::NotCreated => PartialRemoval::NotCreated,
+        ImageLeft::Removed => PartialRemoval::Removed { path },
+        ImageLeft::NotRemoved { why } => PartialRemoval::NotRemoved {
+            path,
+            why: why.clone(),
+        },
+    }
+}
+
+/// The volumes the preparation gave to hst-imager.
+fn volumes_needing_hst_imager(prepared: &PreparedCard) -> Vec<String> {
+    std::iter::once(&prepared.measured.system)
+        .chain(prepared.measured.partitions.iter())
+        .filter(|partition| partition.writer == PartitionWriter::HstImager)
+        .map(|partition| partition.volume_name.clone())
+        .collect()
+}
+
+/// I1: a card prepared with partitions for hst-imager is built only with an
+/// hst-imager that answers — asked here, before the image exists, rather
+/// than discovered at that partition's format with the card half written.
+fn refuse_without_hst_imager(
+    prepared: &PreparedCard,
+    fallback: Option<&dyn VolumeFormatter>,
+) -> CoreResult<()> {
+    let partitions = volumes_needing_hst_imager(prepared);
+    if partitions.is_empty() {
+        return Ok(());
+    }
+    match fallback {
+        None => Err(CoreError::HstImagerUnusable {
+            partitions,
+            path: String::new(),
+            why: String::new(),
+        }),
+        Some(tool) => tool
+            .probe()
+            .map(|_| ())
+            .map_err(|err| CoreError::HstImagerUnusable {
+                partitions,
+                path: String::new(),
+                why: err.to_string(),
+            }),
+    }
 }
 
 /// The Pi as the screen names it (`pi3-a-plus`), for the health report.
@@ -700,6 +858,39 @@ fn pi_name(pi: PiModel) -> String {
         .unwrap_or_default()
 }
 
+/// Everything the build can refuse, asked before it writes anything — the
+/// tree included (I3, M1). Every error here is a refusal: nothing of this
+/// run's exists yet. Returns what the card image is built from.
+fn preflight(
+    prepared: &PreparedCard,
+    image: &Path,
+    request: &CardOsBuildRequest,
+    fallback: Option<&dyn VolumeFormatter>,
+    progress: &dyn ProgressSink,
+) -> PhaseResult<CardImageInputs> {
+    use BuildPhase::*;
+
+    // Whdload: every agreed name is one the proposal supplies.
+    gate(Whdload, progress)?;
+    check_agreed(&prepared.kickstarts, &request.agreed_kickstarts).map_err(at(Whdload))?;
+
+    // Card: the names are free, and the archive, the Kickstart and the driver
+    // are read and checked.
+    gate(Card, progress)?;
+    refuse_partial_destination(image).map_err(at(Card))?;
+    let inputs = card_image_inputs(&card_request_for(
+        prepared,
+        request,
+        &partial_path_for(image),
+    ))
+    .map_err(at(Card))?;
+
+    // Partitions: the tool the preparation chose is here and answers.
+    gate(Partitions, progress)?;
+    refuse_without_hst_imager(prepared, fallback).map_err(at(Partitions))?;
+    Ok(inputs)
+}
+
 /// The phases, each error tagged with the phase it ended.
 #[allow(clippy::too_many_arguments)]
 fn run_phases(
@@ -707,6 +898,7 @@ fn run_phases(
     tree: &Path,
     image: &Path,
     request: &CardOsBuildRequest,
+    inputs: CardImageInputs,
     native: &dyn VolumeFormatter,
     fallback: Option<&dyn VolumeFormatter>,
     progress: &dyn ProgressSink,
@@ -715,9 +907,7 @@ fn run_phases(
 ) -> PhaseResult<()> {
     use BuildPhase::*;
 
-    // 1. WHDLoad and the agreed Kickstarts, into the tree. The agreement is
-    //    checked first: `place_agreed` refuses the whole batch before it
-    //    writes, so a refusal leaves the tree as it was.
+    // 1. WHDLoad and the agreed Kickstarts, into the tree.
     gate(Whdload, progress)?;
     built.kickstarts = place_agreed(&prepared.kickstarts, &request.agreed_kickstarts, tree)
         .map_err(at(Whdload))?;
@@ -725,17 +915,28 @@ fn run_phases(
         built.whdload = Some(install_whdload(choice, tree).map_err(at(Whdload))?);
     }
 
-    // 2. The card's shape, under `<image>.partial`.
+    // 2. The card's shape, under `<image>.partial`. The destination is asked
+    //    again: the Whdload phase took time, and a file that appeared meanwhile
+    //    is still a refusal, not a failure.
     gate(Card, progress)?;
     refuse_partial_destination(image).map_err(at(Card))?;
     let partial = partial_path_for(image);
-    let (_card, facts, boot_files) = write_card_image(
-        &card_request_for(prepared, request, &partial),
-        &partial,
-        progress,
-    )
-    .map_err(at(Card))?;
-    *written = Written::Partial;
+    let CardImageInputs {
+        spec,
+        facts,
+        boot_files,
+    } = inputs;
+    match build_card_reporting(&partial, &spec, progress) {
+        Ok(_card) => *written = Written::Partial,
+        Err(failure) => {
+            // I2: the card writer says whether it created the file and
+            // whether it removed it again — not `NotCreated` by default.
+            if failure.image != ImageLeft::NotCreated {
+                *written = Written::Reported(partial_after_card_failure(image, &failure.image));
+            }
+            return Err((Card, failure.error));
+        }
+    }
 
     // 3. Every partition formatted, and filled from its roots.
     gate(Partitions, progress)?;
@@ -749,15 +950,20 @@ fn run_phases(
         }
     }
 
-    // 4. Described, checked, named — and only then its manifest.
+    // 4. Counted, described, checked, named — and only then its manifest.
     gate(Check, progress)?;
+    let card = read_card(&partial).map_err(at(Check))?;
+    let counts = (0..prepared.measured.plan.partitions.len())
+        .map(|index| count_pfs3_partition(&partial, &card, 0, index))
+        .collect::<CoreResult<Vec<_>>>()
+        .map_err(at(Check))?;
     let manifest = describe_card(
         &partial,
         facts,
         boot_files,
         request.built_at.clone(),
         os_of(tree),
-        partition_contents(prepared, &built.steps),
+        partition_contents(prepared, &built.steps, &counts),
     )
     .map_err(at(Check))?;
     let health =
@@ -801,9 +1007,23 @@ fn run_phases(
     }
     *written = Written::Finished;
 
+    // M17: created, never replaced — a manifest that appeared since the
+    // preflight is someone's, and the image goes with the refusal.
     let manifest_path = manifest_path_for(image);
     let text = render_manifest(&manifest).map_err(at(Check))?;
-    atomic_write(&manifest_path, text.as_bytes()).map_err(at(Check))?;
+    match atomic_create_new(&manifest_path, text.as_bytes()).map_err(at(Check))? {
+        Created::Yes => {}
+        Created::AlreadyThere => {
+            return Err((
+                Check,
+                CoreError::SafetyRefused(format!(
+                    "'{}' appeared while ART was building the card — ART left it as it is and \
+                     did not finish the card",
+                    manifest_path.display()
+                )),
+            ))
+        }
+    }
     built.manifest_path = Some(manifest_path.display().to_string());
     Ok(())
 }
@@ -815,9 +1035,30 @@ fn remove_finished(image: &Path) -> PartialRemoval {
         Ok(()) => PartialRemoval::Removed {
             path: image.display().to_string(),
         },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => PartialRemoval::AlreadyGone {
+            path: image.display().to_string(),
+        },
         Err(err) => PartialRemoval::NotRemoved {
             path: image.display().to_string(),
             why: err.to_string(),
+        },
+    }
+}
+
+/// A build's ending for an error: stopped for a stop, refused when the error
+/// is a refusal and nothing of the image was written, failed otherwise.
+fn ending_for(phase: BuildPhase, error: &CoreError, refused: bool) -> CardOsEnding {
+    match error {
+        CoreError::Cancelled => CardOsEnding::Stopped { phase },
+        other if refused => CardOsEnding::Refused {
+            phase,
+            code: other.code().to_string(),
+            message: other.to_string(),
+        },
+        other => CardOsEnding::Failed {
+            phase,
+            code: other.code().to_string(),
+            message: other.to_string(),
         },
     }
 }
@@ -843,12 +1084,23 @@ pub(crate) fn build_card_os(
         partial: PartialRemoval::NotCreated,
         error: None,
     };
+
+    let inputs = match preflight(prepared, image, request, fallback, progress) {
+        Ok(inputs) => inputs,
+        Err((phase, error)) => {
+            built.ending = ending_for(phase, &error, true);
+            built.error = Some(error);
+            return built;
+        }
+    };
+
     let mut written = Written::Nothing;
     let outcome = run_phases(
         prepared,
         tree,
         image,
         request,
+        inputs,
         native,
         fallback,
         progress,
@@ -856,22 +1108,57 @@ pub(crate) fn build_card_os(
         &mut written,
     );
     if let Err((phase, error)) = outcome {
-        built.ending = match &error {
-            CoreError::Cancelled => CardOsEnding::Stopped { phase },
-            other => CardOsEnding::Failed {
-                phase,
-                code: other.code().to_string(),
-                message: other.to_string(),
-            },
-        };
+        // After the preflight, only a name taken meanwhile is a refusal — and
+        // only while nothing of the image exists.
+        let refused = written == Written::Nothing
+            && matches!(
+                error,
+                CoreError::SafetyRefused(_) | CoreError::PartialImageExists { .. }
+            );
+        built.ending = ending_for(phase, &error, refused);
         built.partial = match written {
             Written::Nothing => remove_partial(image, false),
+            Written::Reported(partial) => partial,
             Written::Partial => remove_partial(image, true),
             Written::Finished => remove_finished(image),
         };
         built.error = Some(error);
     }
     built
+}
+
+/// The operation log's line for the Kickstarts: each with what happened to
+/// its image and its `.RTB`, and — on any ending but success — that they went
+/// only into the session tree, which the ending removes (M1).
+fn kickstarts_detail(built: &BuiltCardOs) -> String {
+    if built.kickstarts.is_empty() {
+        return "none".to_string();
+    }
+    let outcome = |placed: &PlaceOutcome| match placed {
+        PlaceOutcome::Placed { .. } => "placed",
+        PlaceOutcome::AlreadyThere { .. } => "already there",
+        PlaceOutcome::Occupied { .. } => "a different file was already there and was kept",
+    };
+    let list = built
+        .kickstarts
+        .iter()
+        .map(|k| {
+            format!(
+                "{} (image: {}; .RTB: {})",
+                k.name,
+                outcome(&k.image),
+                outcome(&k.rtb)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    match built.ending {
+        CardOsEnding::Succeeded => list,
+        _ => format!(
+            "{list} — into the session tree only, which is removed with the session folder; \
+             none of them reached a card"
+        ),
+    }
 }
 
 /// The operation log's record for a build's every ending (§53).
@@ -883,12 +1170,14 @@ fn build_record(
 ) -> OperationRecord {
     let (ending, phase) = match &built.ending {
         CardOsEnding::Succeeded => ("succeeded", BuildPhase::Check),
+        CardOsEnding::Refused { phase, .. } => ("refused", *phase),
         CardOsEnding::Failed { phase, .. } => ("failed", *phase),
         CardOsEnding::Stopped { phase } => ("stopped", *phase),
     };
     let partial = match &built.partial {
         PartialRemoval::NotCreated => "not created".to_string(),
         PartialRemoval::Removed { path } => format!("removed: {path}"),
+        PartialRemoval::AlreadyGone { path } => format!("already gone: {path}"),
         PartialRemoval::NotRemoved { path, why } => format!("NOT removed: {path} ({why})"),
     };
     let record = user_operation("Build a card image with its partitions")
@@ -897,15 +1186,7 @@ fn build_record(
         .detail("Phase reached", phase.name())
         .detail("Ending", ending)
         .detail("Partial image", partial)
-        .detail(
-            "Kickstarts placed",
-            built
-                .kickstarts
-                .iter()
-                .map(|k| k.name.clone())
-                .collect::<Vec<_>>()
-                .join(", "),
-        )
+        .detail("Kickstarts", kickstarts_detail(built))
         .detail(
             "Session folder",
             match scratch_left {
@@ -921,8 +1202,8 @@ fn build_record(
 }
 
 /// Build the session's prepared card. Returns a job id; **every** ending
-/// arrives on [`CARD_OS_BUILD_EVENT`], and a failed or stopped build also
-/// ends its job with its error so the job bar does not say done.
+/// arrives on [`CARD_OS_BUILD_EVENT`], and a refused, failed or stopped build
+/// also ends its job with its error so the job bar does not say done.
 #[tauri::command]
 pub fn card_os_build(
     request: CardOsBuildRequest,
@@ -942,8 +1223,8 @@ pub fn card_os_build(
 
     let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let native = NativeFormatter::new(&crate::tools::local_time::LOCAL_TIME);
-        let tool_path = request.hst_imager_path.trim().to_string();
-        let hst = (!tool_path.is_empty()).then(|| HstImager::at(tool_path));
+        // I1: the hst-imager the preparation asked, never a second path.
+        let hst = ticket.hst_imager.as_ref().map(HstImager::at);
         let built = build_card_os(
             &ticket.prepared,
             &ticket.tree,
@@ -1203,7 +1484,7 @@ pub(crate) mod test_support {
             &material,
             None,
             &dir.join("driver"),
-            true,
+            &crate::core::cardos::prepare::HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -1330,7 +1611,6 @@ pub(crate) mod test_support {
             firmware: FirmwareConfig::default(),
             options: Emu68Options::default(),
             built_at: None,
-            hst_imager_path: String::new(),
         }
     }
 }
@@ -1539,12 +1819,13 @@ mod tests {
             &NoProgress,
         );
 
+        // I3: a refusal is its own ending, never a failure.
         match &built.ending {
-            CardOsEnding::Failed { phase, code, .. } => {
+            CardOsEnding::Refused { phase, code, .. } => {
                 assert_eq!(*phase, BuildPhase::Whdload);
                 assert_eq!(code, "ART-KICKSTART-NOT-PROPOSED");
             }
-            other => panic!("expected a Whdload failure, got {other:?}"),
+            other => panic!("expected a Whdload refusal, got {other:?}"),
         }
         assert_eq!(built.partial, PartialRemoval::NotCreated);
         assert!(!partial_path_for(&image).exists() && !image.exists());
@@ -1556,8 +1837,9 @@ mod tests {
         let (_guard, dir) = scratch("no-archive");
         let (prepared, tree) = small_prepared_card(&dir);
         let image = dir.join("card.img");
-        let mut request = request_for(&dir);
+        let mut request = request_agreeing(&dir, &["kick34005.A500"]);
         request.archive = dir.join("not-there.zip").display().to_string();
+        let before = listing(&tree);
 
         let built = build_card_os(
             &prepared,
@@ -1569,19 +1851,325 @@ mod tests {
             &NoProgress,
         );
 
-        assert!(
-            matches!(
-                built.ending,
-                CardOsEnding::Failed {
-                    phase: BuildPhase::Card,
-                    ..
-                }
-            ),
-            "{:?}",
-            built.ending
-        );
+        // M11: the archive's own refusal, not any Card-phase ending.
+        match &built.ending {
+            CardOsEnding::Refused {
+                phase: BuildPhase::Card,
+                code,
+                message,
+            } => {
+                assert_eq!(code, built.error.as_ref().unwrap().code());
+                assert!(message.contains("not-there.zip"), "{message}");
+            }
+            other => panic!("expected a Card refusal, got {other:?}"),
+        }
         assert_eq!(built.partial, PartialRemoval::NotCreated);
         assert!(!partial_path_for(&image).exists() && !image.exists());
+        // M1: refused before the Whdload phase wrote anything — no Kickstart
+        // is reported placed, and the tree is as it was.
+        assert!(built.kickstarts.is_empty(), "{:?}", built.kickstarts);
+        assert!(built.whdload.is_none());
+        assert_eq!(listing(&tree), before, "the tree is unchanged");
+    }
+
+    /// I1: a card whose Stuff was prepared for hst-imager is refused before
+    /// the image exists when the build has no hst-imager, or one that does
+    /// not run — never failed at Stuff's format with the card half written.
+    #[test]
+    fn a_card_prepared_for_hst_imager_is_refused_before_the_image_without_a_usable_one() {
+        /// A tool that does not run.
+        struct Broken;
+        impl VolumeFormatter for Broken {
+            fn probe(&self) -> CoreResult<ToolVersion> {
+                Err(CoreError::InvalidInput(
+                    "could not run 'E:\\tools\\hst.imager.exe': not found".into(),
+                ))
+            }
+            fn format_partition(
+                &self,
+                _: &Path,
+                _: Option<usize>,
+                _: usize,
+                _: &str,
+                _: &dyn ProgressSink,
+            ) -> CoreResult<()> {
+                panic!("a tool that does not run was asked to format")
+            }
+            fn can_copy_in(&self, _: &Path, _: Option<usize>, _: &str, _: &Path) -> CoreResult<()> {
+                Ok(())
+            }
+            fn copy_in(
+                &self,
+                _: &Path,
+                _: Option<usize>,
+                _: &str,
+                _: &Path,
+                _: &dyn ProgressSink,
+            ) -> CoreResult<CopySummary> {
+                panic!("a tool that does not run was asked to copy")
+            }
+        }
+
+        let (_guard, dir) = scratch("hst-gate");
+        let (prepared, tree) = small_prepared_card_with(&dir, "Café");
+        assert_eq!(
+            prepared.measured.partitions[1].writer,
+            crate::core::cardos::prepare::PartitionWriter::HstImager,
+            "the fixture must send Stuff to hst-imager, or this proves nothing"
+        );
+        let before = listing(&tree);
+
+        for (arm, fallback) in [
+            ("none", None),
+            ("broken", Some(&Broken as &dyn VolumeFormatter)),
+        ] {
+            let image = dir.join(format!("card-{arm}.img"));
+            let built = build_card_os(
+                &prepared,
+                &tree,
+                &image,
+                &request_agreeing(&dir, &["kick34005.A500"]),
+                &NativeFormatter::UTC,
+                fallback,
+                &NoProgress,
+            );
+            match &built.ending {
+                CardOsEnding::Refused {
+                    phase: BuildPhase::Partitions,
+                    code,
+                    message,
+                } => {
+                    assert_eq!(code, "ART-HST-IMAGER-UNUSABLE", "{arm}");
+                    assert!(message.contains("Stuff"), "{arm}: {message}");
+                }
+                other => panic!("{arm}: expected a Partitions refusal, got {other:?}"),
+            }
+            assert_eq!(built.partial, PartialRemoval::NotCreated, "{arm}");
+            assert!(
+                !partial_path_for(&image).exists() && !image.exists(),
+                "{arm}"
+            );
+            assert_eq!(listing(&tree), before, "{arm}: the tree is unchanged");
+        }
+    }
+
+    /// M17: a manifest already beside the image name is someone's record, and
+    /// the build is refused before the image rather than writing over it.
+    #[test]
+    fn a_manifest_already_beside_the_image_is_refused_before_the_image() {
+        let (_guard, dir) = scratch("manifest-there");
+        let (prepared, tree) = small_prepared_card(&dir);
+        let image = dir.join("card.img");
+        std::fs::write(manifest_path_for(&image), b"{\"theirs\":true}").unwrap();
+
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_for(&dir),
+            &NativeFormatter::UTC,
+            None,
+            &NoProgress,
+        );
+
+        match &built.ending {
+            CardOsEnding::Refused {
+                phase: BuildPhase::Card,
+                message,
+                ..
+            } => assert!(message.contains("card.img.manifest.json"), "{message}"),
+            other => panic!("expected a Card refusal, got {other:?}"),
+        }
+        assert!(!partial_path_for(&image).exists() && !image.exists());
+        assert_eq!(
+            std::fs::read(manifest_path_for(&image)).unwrap(),
+            b"{\"theirs\":true}"
+        );
+    }
+
+    /// I2: what the card writer did with the file it created is what the
+    /// ending says — never `NotCreated` for a file that was made.
+    #[test]
+    fn a_card_that_failed_after_creation_reports_its_partial_as_it_was_left() {
+        let image = Path::new(r"E:\cards\card.img");
+        let partial = partial_path_for(image).display().to_string();
+        assert_eq!(
+            partial_after_card_failure(image, &ImageLeft::NotCreated),
+            PartialRemoval::NotCreated
+        );
+        assert_eq!(
+            partial_after_card_failure(image, &ImageLeft::Removed),
+            PartialRemoval::Removed {
+                path: partial.clone()
+            }
+        );
+        assert_eq!(
+            partial_after_card_failure(
+                image,
+                &ImageLeft::NotRemoved {
+                    why: "in use".into()
+                }
+            ),
+            PartialRemoval::NotRemoved {
+                path: partial,
+                why: "in use".into()
+            }
+        );
+    }
+
+    /// T12 (the ledger's cheap test): the operation log's record for a build
+    /// says its ending, what became of the partial, and each Kickstart with
+    /// what happened to it — pure, so no Tauri harness is needed.
+    #[test]
+    fn the_build_record_says_the_ending_the_partial_and_each_kickstart_s_outcome() {
+        use crate::core::rom::place::PlaceOutcome;
+
+        let detail = |record: &OperationRecord, key: &str| {
+            record
+                .details
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(|| panic!("no '{key}' in {:?}", record.details))
+        };
+        let (_guard, dir) = scratch("record");
+        let request = request_for(&dir);
+        let built = |ending, partial| BuiltCardOs {
+            ending,
+            whdload: None,
+            kickstarts: vec![PlacedKickstart {
+                name: "kick34005.A500".into(),
+                image: PlaceOutcome::Occupied {
+                    to: "tree/Devs/Kickstarts/kick34005.A500".into(),
+                },
+                rtb: PlaceOutcome::Placed {
+                    to: "tree/Devs/Kickstarts/kick34005.A500.RTB".into(),
+                    bytes: 4000,
+                },
+            }],
+            steps: Vec::new(),
+            manifest_path: None,
+            health: None,
+            partial,
+            error: Some(CoreError::Cancelled),
+        };
+
+        let stopped = build_record(
+            &request,
+            "E:\\cards\\card.img",
+            &built(
+                CardOsEnding::Stopped {
+                    phase: BuildPhase::Partitions,
+                },
+                PartialRemoval::NotRemoved {
+                    path: "E:\\cards\\card.img.partial".into(),
+                    why: "in use".into(),
+                },
+            ),
+            None,
+        );
+        assert_eq!(detail(&stopped, "Ending"), "stopped");
+        assert_eq!(detail(&stopped, "Phase reached"), "partitions");
+        assert_eq!(
+            detail(&stopped, "Partial image"),
+            "NOT removed: E:\\cards\\card.img.partial (in use)"
+        );
+        let kickstarts = detail(&stopped, "Kickstarts");
+        assert!(
+            kickstarts.contains("kick34005.A500")
+                && kickstarts.contains("a different file was already there")
+                && kickstarts.contains("removed with the session folder"),
+            "{kickstarts}"
+        );
+
+        let refused = build_record(
+            &request,
+            "E:\\cards\\card.img",
+            &built(
+                CardOsEnding::Refused {
+                    phase: BuildPhase::Card,
+                    code: "ART-X".into(),
+                    message: "x".into(),
+                },
+                PartialRemoval::NotCreated,
+            ),
+            None,
+        );
+        assert_eq!(detail(&refused, "Ending"), "refused");
+        assert_eq!(detail(&refused, "Partial image"), "not created");
+    }
+
+    /// T13 (deferred minor): the manifest names the tool that wrote a
+    /// partition, not a bare version string.
+    #[test]
+    fn a_partition_s_writer_is_named_with_its_tool() {
+        assert_eq!(writer_name("native"), "native");
+        assert_eq!(
+            writer_name("1.6.616+a91fa4ca"),
+            "hst-imager 1.6.616+a91fa4ca"
+        );
+    }
+
+    /// M7: an image path the screen did not fill in, or one relative to
+    /// wherever the process happens to run, is refused with its next step.
+    #[test]
+    fn a_blank_or_relative_image_path_is_refused() {
+        for given in ["", "   ", "card.img", r"cards\card.img"] {
+            let err = image_path_from(given).unwrap_err();
+            assert_eq!(err.code(), "ART-INPUT-INVALID", "{given:?}");
+            assert!(err.to_string().contains("full path"), "{given:?}: {err}");
+        }
+        assert_eq!(
+            image_path_from(r"  E:\cards\card.img ").unwrap(),
+            PathBuf::from(r"E:\cards\card.img")
+        );
+    }
+
+    /// I1: the preparation asks the hst-imager it was given, and a tool that
+    /// does not run is refused by name for the partition that needs it.
+    #[test]
+    fn a_preparation_asks_the_hst_imager_it_was_given() {
+        let (_guard, dir) = scratch("prepare-probe");
+        small_tree(&dir);
+        let material = material_with_driver(&dir);
+        let stuff = folder_with(&dir, "Stuff", &[("Café/readme", b"x")]);
+        let tool = r"E:\tools\hst.imager.exe";
+        let request = CardOsPrepareRequest {
+            session: 1,
+            card_gb: 16,
+            image: dir.join("card.img").display().to_string(),
+            partitions: vec![PartitionInput {
+                volume_name: "Stuff".into(),
+                sources: vec![stuff],
+                floor_bytes: 0,
+            }],
+            material: vec![material.display().to_string()],
+            pfs3_driver: None,
+            kickstart: None,
+            hst_imager_path: tool.into(),
+        };
+        let asked = std::sync::Mutex::new(Vec::new());
+
+        let err = prepare_card(
+            &request,
+            &dir.join("card.img"),
+            &dir,
+            &crate::core::clock::UtcClock,
+            |_| Ok(u64::MAX),
+            |path: &Path| {
+                asked.lock().unwrap().push(path.to_path_buf());
+                Err("the system cannot find the file specified".to_string())
+            },
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "ART-HST-IMAGER-UNUSABLE", "{err}");
+        assert!(
+            err.to_string().contains("Stuff") && err.to_string().contains(tool),
+            "{err}"
+        );
+        assert_eq!(*asked.lock().unwrap(), vec![PathBuf::from(tool)]);
     }
 
     #[test]
@@ -1611,10 +2199,20 @@ mod tests {
         let sessions = CardOsSessions::default();
         let (id, _) = sessions.open_in(&dir).unwrap();
         sessions.begin_prepare(id).unwrap();
-        sessions.end_prepare(id, Some((prepared, dir.join("card.img"))));
+        let tool = PathBuf::from(r"E:\tools\hst.imager.exe");
+        sessions.end_prepare(
+            id,
+            Some(PreparedSession {
+                prepared,
+                image: dir.join("card.img"),
+                hst_imager: Some(tool.clone()),
+            }),
+        );
 
         let ticket = sessions.take_for_build(id).unwrap();
         assert_eq!(ticket.image, dir.join("card.img"));
+        // I1: the build uses the hst-imager the preparation asked.
+        assert_eq!(ticket.hst_imager, Some(tool));
         let err = match sessions.take_for_build(id) {
             Ok(_) => panic!("a second build of one session was allowed"),
             Err(err) => err,
@@ -1713,6 +2311,32 @@ mod tests {
             .map(|p| p.volume_name.as_str())
             .collect();
         assert_eq!(volumes, ["System", "Games", "Stuff", "Work"], "R3");
+        // I4: the manifest records what is on the card — System's files
+        // include WHDLoad, its prefs, the Kickstart and its .RTB, which the
+        // build wrote after the tree was measured — counted and summed from
+        // the card, for every partition.
+        for (index, recorded) in manifest.partitions.iter().enumerate() {
+            let on_card = read_pfs3_files(&image, &card, index);
+            let files: Vec<&Vec<u8>> = on_card
+                .iter()
+                .filter(|(path, _)| !path.ends_with('/'))
+                .map(|(_, bytes)| bytes)
+                .collect();
+            assert_eq!(
+                (recorded.files, recorded.bytes),
+                (
+                    files.len() as u64,
+                    files.iter().map(|b| b.len() as u64).sum::<u64>()
+                ),
+                "{}",
+                recorded.volume_name
+            );
+            assert_eq!(recorded.writer, "native", "{}", recorded.volume_name);
+        }
+        assert_eq!(
+            manifest.partitions[0].files, 7,
+            "System, as hst-imager counted it"
+        );
         let health = built.health.expect("a health report");
         assert!(
             !health

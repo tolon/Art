@@ -25,9 +25,12 @@ use crate::core::cardos::content::{
 };
 use crate::core::cardos::driver::{find_pfs3_driver, FoundDriver};
 use crate::core::cardos::kickstarts::{find_title_needs, propose_kickstarts, KickstartProposal};
-use crate::core::cardos::whdload::{find_whdload, tree_has_whdload, WhdloadChoice};
+use crate::core::cardos::searched_folder;
+use crate::core::cardos::whdload::{
+    find_whdload, read_tree_whdload, tree_has_whdload, WhdloadChoice,
+};
 use crate::core::clock::AmigaClock;
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::error::{CoreError, CoreResult, SpacePlace};
 use crate::core::jobs::{cancelled_error, ProgressSink};
 use crate::core::preload::native::MAX_NAMED_NON_ASCII;
 use crate::core::rom::offer::Offer;
@@ -43,6 +46,19 @@ pub struct PartitionInput {
     pub sources: Vec<PathBuf>,
     #[serde(default)]
     pub floor_bytes: u64,
+}
+
+/// Whether hst-imager can fill a partition ART's own writer cannot (ART-113).
+/// The command layer asks the tool itself (`probe`) — `core/` never runs a
+/// program — and prepare and build use the same answer (card round 3, I1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HstImagerState {
+    /// No hst-imager path was given.
+    NotConfigured,
+    /// A path was given and the tool answered.
+    Usable,
+    /// A path was given and the tool is missing or did not run.
+    Unusable { path: String, why: String },
 }
 
 /// Which writer fills a partition.
@@ -133,11 +149,12 @@ fn measure_source(
 
 /// Check a partition's sources together and choose its writer: ART's own
 /// PFS3 writer, unless a name is not ASCII (ART-113) — then hst-imager when
-/// it is there, and a refusal naming the partition when it is not.
+/// it answered, and a refusal naming the partition (and the tool, when one
+/// was given and did not run) when it did not.
 fn check_and_choose_writer(
     partition: &str,
     sources: &[MeasuredSource],
-    hst_imager_available: bool,
+    hst_imager: &HstImagerState,
 ) -> CoreResult<PartitionWriter> {
     let pairs: Vec<(PathBuf, SourceMeasure)> = sources
         .iter()
@@ -158,15 +175,20 @@ fn check_and_choose_writer(
         more += source.measure.non_ascii_more;
     }
     if paths.is_empty() && more == 0 {
-        Ok(PartitionWriter::Native)
-    } else if hst_imager_available {
-        Ok(PartitionWriter::HstImager)
-    } else {
-        Err(CoreError::CardNamesNeedHstImager {
+        return Ok(PartitionWriter::Native);
+    }
+    match hst_imager {
+        HstImagerState::Usable => Ok(PartitionWriter::HstImager),
+        HstImagerState::NotConfigured => Err(CoreError::CardNamesNeedHstImager {
             partition: partition.to_string(),
             paths,
             more,
-        })
+        }),
+        HstImagerState::Unusable { path, why } => Err(CoreError::HstImagerUnusable {
+            partitions: vec![partition.to_string()],
+            path: path.clone(),
+            why: why.clone(),
+        }),
     }
 }
 
@@ -181,7 +203,7 @@ pub fn measure_card(
     material: &[PathBuf],
     explicit_driver: Option<&Path>,
     driver_stage: &Path,
-    hst_imager_available: bool,
+    hst_imager: &HstImagerState,
     clock: &dyn AmigaClock,
     progress: &dyn ProgressSink,
 ) -> CoreResult<MeasuredCard> {
@@ -197,7 +219,7 @@ pub fn measure_card(
         });
     }
     let system_sources = vec![measure_source(tree, SourceKind::Folder, clock, progress)?];
-    let system_writer = check_and_choose_writer(SYSTEM, &system_sources, hst_imager_available)?;
+    let system_writer = check_and_choose_writer(SYSTEM, &system_sources, hst_imager)?;
 
     let total_sources: usize = partitions.iter().map(|p| p.sources.len()).sum();
     let mut done = 0u64;
@@ -217,7 +239,7 @@ pub fn measure_card(
             sources.push(measure_source(path, kind, clock, progress)?);
             done += 1;
         }
-        let writer = check_and_choose_writer(&input.volume_name, &sources, hst_imager_available)?;
+        let writer = check_and_choose_writer(&input.volume_name, &sources, hst_imager)?;
         measured.push((input, sources, writer));
     }
 
@@ -289,6 +311,8 @@ pub fn measure_card(
 pub struct SpaceNeed {
     pub place: PathBuf,
     pub bytes: u64,
+    /// Which place this is, so a refusal names where it is chosen.
+    pub what: SpacePlace,
 }
 
 /// The image (`plan.image_bytes`) on the image's folder; staging on the
@@ -302,22 +326,26 @@ pub fn space_needs(card: &MeasuredCard, image: &Path, scratch: &Path) -> Vec<Spa
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(image);
     let wanted = [
-        (image_folder, card.plan.image_bytes),
-        (scratch, card.staging_bytes),
+        (image_folder, card.plan.image_bytes, SpacePlace::Image),
+        (scratch, card.staging_bytes, SpacePlace::Scratch),
     ];
     let mut needs: Vec<(Option<Component<'_>>, SpaceNeed)> = Vec::new();
-    for (place, bytes) in wanted {
+    for (place, bytes, what) in wanted {
         if bytes == 0 {
             continue;
         }
         let volume = place.components().next();
         match needs.iter_mut().find(|(key, _)| *key == volume) {
-            Some((_, need)) => need.bytes += bytes,
+            Some((_, need)) => {
+                need.bytes += bytes;
+                need.what = SpacePlace::ImageAndScratch;
+            }
             None => needs.push((
                 volume,
                 SpaceNeed {
                     place: place.to_path_buf(),
                     bytes,
+                    what,
                 },
             )),
         }
@@ -332,12 +360,21 @@ pub fn check_free_space(
     available: impl Fn(&Path) -> std::io::Result<u64>,
 ) -> CoreResult<()> {
     for need in needs {
-        let free = available(&need.place)?;
+        let free = available(&need.place).map_err(|err| {
+            CoreError::Io(std::io::Error::new(
+                err.kind(),
+                format!(
+                    "ART could not ask how much space is free at '{}': {err}",
+                    need.place.display()
+                ),
+            ))
+        })?;
         if free < need.bytes {
             return Err(CoreError::NotEnoughSpace {
                 place: need.place.display().to_string(),
                 needed: need.bytes,
                 available: free,
+                what: need.what,
             });
         }
     }
@@ -353,7 +390,26 @@ pub struct PreparedCard {
     pub roots: Vec<Vec<PathBuf>>,
     pub left_behind: Vec<String>,
     pub whdload: Option<WhdloadChoice>,
+    /// The tree's own `C/WHDLoad`, when titles need one and the tree already
+    /// has it — the tree's copy is kept, and this says which version that is
+    /// beside the best one found elsewhere (card round 3, M2).
+    pub tree_whdload: Option<TreeWhdload>,
     pub kickstarts: KickstartProposal,
+}
+
+/// The tree's own `C/WHDLoad`, which the build keeps, and what else there was.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeWhdload {
+    pub path: PathBuf,
+    /// As it states itself (`WHDLoad 18.9`); `None` when it states nothing.
+    pub name: Option<String>,
+    /// The best WHDLoad in the material folders and hardfiles, as it states
+    /// itself; `None` when there is none.
+    pub best_elsewhere: Option<String>,
+    /// True when `best_elsewhere` states a higher version than the tree's
+    /// own (or the tree's states none).
+    pub newer_elsewhere: bool,
 }
 
 /// The largest Kickstart image there is; the upper bound for one whose file
@@ -420,8 +476,8 @@ pub fn stage_card(
             None => {
                 let searched = material
                     .iter()
-                    .chain(hardfiles.iter())
-                    .map(|p| p.display().to_string())
+                    .map(|folder| searched_folder(folder))
+                    .chain(hardfiles.iter().map(|p| p.display().to_string()))
                     .collect();
                 return Err(CoreError::WhdloadNotFound {
                     titles: needs.slaves,
@@ -433,10 +489,36 @@ pub fn stage_card(
         None
     };
 
+    // M2: a tree that already has WHDLoad keeps it, and the proposal says
+    // which version that is beside the best one found elsewhere.
+    let tree_whdload = if needs.slaves > 0 {
+        match read_tree_whdload(tree)? {
+            Some((path, stated)) => {
+                let best = find_whdload(material, &hardfiles, clock)?;
+                let newer_elsewhere = match (&best, &stated) {
+                    (Some(best), Some(own)) => {
+                        (best.version, best.revision) > (own.version, own.revision)
+                    }
+                    (Some(_), None) => true,
+                    (None, _) => false,
+                };
+                Some(TreeWhdload {
+                    path,
+                    name: stated.map(|v| format!("{} {}.{}", v.name, v.version, v.revision)),
+                    best_elsewhere: best.map(|choice| choice.name),
+                    newer_elsewhere,
+                })
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+
     let kickstarts = propose_kickstarts(&needs, collection_dirs, material)?;
 
     // System again, with everything this card may still add to it.
-    let mut system =
+    let tree_only =
         measured
             .system
             .sources
@@ -445,24 +527,28 @@ pub fn stage_card(
                 sum.merge(&source.measure.content);
                 sum
             });
+    let mut system = tree_only;
     if let Some(choice) = &whdload {
         system.add_file("WHDLoad", choice.binary.len() as u64);
         if let Some(prefs) = &choice.prefs {
             system.add_file("WHDLoad.prefs", prefs.len() as u64);
         }
     }
-    let mut any_supplied = false;
+    let mut supplied = Vec::new();
     for item in &kickstarts.items {
         if let Offer::Supplied { wanted, by } = &item.offer {
+            // The file's size on disk: an encrypted Amiga Forever ROM is 11
+            // bytes larger than the image `place` decodes from it, so this
+            // errs on the side of counting too much (the ledger's T10 note).
             let rom_bytes = std::fs::metadata(&by.path)
                 .map(|m| m.len())
                 .unwrap_or_else(|_| wanted.size.map(u64::from).unwrap_or(KICKSTART_MAX_BYTES));
             system.add_file(&item.name, rom_bytes);
             system.add_file(&format!("{}.RTB", item.name), RTB_CHARGE_BYTES);
-            any_supplied = true;
+            supplied.push(item.name.clone());
         }
     }
-    if any_supplied {
+    if !supplied.is_empty() {
         system.add_directory("Kickstarts");
     }
     let system_blocks = measured
@@ -472,13 +558,25 @@ pub fn stage_card(
         .map(|p| p.bytes / PFS3_BLOCK)
         .unwrap_or(0);
     if !pfs3_fits(system_blocks, &system) {
-        return Err(CoreError::CardDoesNotFit(
+        let available_blocks = pfs3_data_blocks(system_blocks);
+        // I5: two refusals, two next steps — the tree alone, or what the
+        // card adds to it.
+        let refusal = if !pfs3_fits(system_blocks, &tree_only) {
             SizingRefusal::PartitionContentDoesNotFit {
                 volume_name: SYSTEM.to_string(),
+                needed_blocks: tree_only.data_blocks,
+                available_blocks,
+            }
+        } else {
+            SizingRefusal::SystemAdditionsDoNotFit {
                 needed_blocks: system.data_blocks,
-                available_blocks: pfs3_data_blocks(system_blocks),
-            },
-        ));
+                available_blocks,
+                tree_blocks: tree_only.data_blocks,
+                whdload: whdload.as_ref().map(|choice| choice.name.clone()),
+                kickstarts: supplied,
+            }
+        };
+        return Err(CoreError::CardDoesNotFit(refusal));
     }
 
     Ok(PreparedCard {
@@ -486,6 +584,7 @@ pub fn stage_card(
         roots,
         left_behind,
         whdload,
+        tree_whdload,
         kickstarts,
     })
 }
@@ -586,7 +685,7 @@ mod tests {
             &[material],
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -624,7 +723,7 @@ mod tests {
             &[material],
             None,
             &dir.join("drv"),
-            false,
+            &HstImagerState::NotConfigured,
             &UtcClock,
             &NoProgress,
         )
@@ -654,7 +753,7 @@ mod tests {
             &[material],
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -682,7 +781,7 @@ mod tests {
             &[material],
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -701,6 +800,7 @@ mod tests {
             vec![SpaceNeed {
                 place: PathBuf::from(r"E:\cards"),
                 bytes: image_bytes + 50,
+                what: SpacePlace::ImageAndScratch,
             }]
         );
         // Two volumes: two needs, in order.
@@ -715,10 +815,12 @@ mod tests {
                 SpaceNeed {
                     place: PathBuf::from(r"E:\cards"),
                     bytes: image_bytes,
+                    what: SpacePlace::Image,
                 },
                 SpaceNeed {
                     place: PathBuf::from(r"D:\scratch"),
                     bytes: 50,
+                    what: SpacePlace::Scratch,
                 },
             ]
         );
@@ -727,10 +829,12 @@ mod tests {
             SpaceNeed {
                 place: r"D:\scratch".into(),
                 bytes: 10,
+                what: SpacePlace::Scratch,
             },
             SpaceNeed {
                 place: r"E:\cards".into(),
                 bytes: 150,
+                what: SpacePlace::Image,
             },
         ];
         let available = |place: &Path| -> std::io::Result<u64> {
@@ -742,13 +846,70 @@ mod tests {
                 place,
                 needed,
                 available,
+                what,
             } => {
                 assert_eq!((&place[..], *needed, *available), (r"E:\cards", 150, 120));
+                assert_eq!(*what, SpacePlace::Image);
             }
             other => panic!("expected NotEnoughSpace, got {other:?}"),
         }
         assert!(err.to_string().contains("150") && err.to_string().contains("120"));
         assert!(check_free_space(&needs[..1], available).is_ok());
+    }
+
+    /// Card round 3, M7: a free-space question that fails names the place it
+    /// was about, rather than arriving as a bare OS error.
+    #[test]
+    fn a_free_space_question_that_fails_names_its_place() {
+        let needs = vec![SpaceNeed {
+            place: r"Q:\cards".into(),
+            bytes: 10,
+            what: SpacePlace::Image,
+        }];
+        let err = check_free_space(&needs, |_| {
+            Err(std::io::Error::other("The device is not ready."))
+        })
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(r"Q:\cards") && msg.contains("not ready"),
+            "{msg}"
+        );
+    }
+
+    /// Card round 3, I1: an hst-imager that was given but does not run is
+    /// refused by name for the partition that needs it — not accepted at
+    /// prepare and discovered at the build, after the image exists.
+    #[test]
+    fn an_hst_imager_that_does_not_run_is_refused_by_name_for_the_partition_that_needs_it() {
+        let (_guard, dir) = scratch("hst-unusable");
+        let tree = small_tree(&dir, true);
+        let parts = two_partitions(&dir);
+        let material = material_with_driver(&dir);
+        let tool = r"E:\tools\hst.imager.exe";
+
+        let err = measure_card(
+            16,
+            &tree,
+            &parts,
+            &[material],
+            None,
+            &dir.join("drv"),
+            &HstImagerState::Unusable {
+                path: tool.into(),
+                why: "the system cannot find the file specified".into(),
+            },
+            &UtcClock,
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "ART-HST-IMAGER-UNUSABLE", "{err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Stuff") && msg.contains(tool) && msg.contains("cannot find"),
+            "{msg}"
+        );
     }
 
     /// `Games`: one folder and one pack archive.
@@ -780,7 +941,7 @@ mod tests {
             &materials,
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -852,7 +1013,7 @@ mod tests {
             &materials,
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -897,7 +1058,8 @@ mod tests {
             sources: vec![games],
             floor_bytes: 0,
         }];
-        let materials = [material];
+        let gone = dir.join("no-such-material");
+        let materials = [material, gone.clone()];
         let measured = measure_card(
             16,
             &tree,
@@ -905,7 +1067,7 @@ mod tests {
             &materials,
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -924,6 +1086,12 @@ mod tests {
 
         assert_eq!(err.code(), "ART-WHDLOAD-NOT-FOUND", "{err}");
         assert!(err.to_string().starts_with("1 WHDLoad title(s)"), "{err}");
+        // M8: a material folder that does not exist is not "searched".
+        assert!(
+            err.to_string()
+                .contains(&format!("{} (does not exist)", gone.display())),
+            "{err}"
+        );
     }
 
     #[test]
@@ -931,6 +1099,10 @@ mod tests {
         let (_guard, dir) = scratch("tree-whdload");
         let tree = small_tree(&dir, true);
         let material = material_with_driver(&dir);
+        write_lha(
+            &material.join("WHDLoad_usr.lha"),
+            &[("WHDLoad/C/WHDLoad", &whdload_bytes("20.0"))],
+        );
         let games = folder_with(&dir, "Games", &[("Turrican/Turrican.slave", &slave())]);
         let parts = [PartitionInput {
             volume_name: "Games".into(),
@@ -945,7 +1117,7 @@ mod tests {
             &materials,
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -962,6 +1134,12 @@ mod tests {
         )
         .unwrap();
         assert!(prepared.whdload.is_none());
+        // M2: the tree's copy is kept, and the proposal says which it is
+        // beside the newer one in the material — never silently.
+        let kept = prepared.tree_whdload.expect("the tree's WHDLoad is said");
+        assert_eq!(kept.name.as_deref(), Some("WHDLoad 19.0"));
+        assert_eq!(kept.best_elsewhere.as_deref(), Some("WHDLoad 20.0"));
+        assert!(kept.newer_elsewhere);
     }
 
     /// System measured just under its limit: WHDLoad and one agreed-to-be
@@ -1003,7 +1181,7 @@ mod tests {
             &materials,
             None,
             &dir.join("drv"),
-            true,
+            &HstImagerState::Usable,
             &UtcClock,
             &NoProgress,
         )
@@ -1030,13 +1208,21 @@ mod tests {
         )
         .unwrap_err();
         match &over {
-            CoreError::CardDoesNotFit(SizingRefusal::PartitionContentDoesNotFit {
-                volume_name,
+            CoreError::CardDoesNotFit(SizingRefusal::SystemAdditionsDoNotFit {
+                whdload,
+                kickstarts,
+                tree_blocks,
                 ..
-            }) => assert_eq!(volume_name, "System"),
-            other => panic!("expected System not to fit, got {other:?}"),
+            }) => {
+                assert_eq!(whdload.as_deref(), Some("WHDLoad 20.0"));
+                assert_eq!(kickstarts, &["kick34005.A500".to_string()]);
+                assert_eq!(*tree_blocks, limit);
+            }
+            other => panic!("expected System's additions not to fit, got {other:?}"),
         }
+        // I5: the advice is one the user can follow before the build.
         assert!(over.to_string().starts_with("System needs"), "{over}");
+        assert!(over.to_string().contains("ROM files"), "{over}");
 
         // Control: 2 000 blocks of room hold WHDLoad, a 512-block ROM and its .RTB.
         let room = stage_card(

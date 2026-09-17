@@ -163,14 +163,22 @@ pub fn check_image(
     structural(&card, &mut items);
     from_manifest(image, manifest, &mut items)?;
 
-    let filled: std::collections::HashSet<&str> = manifest
-        .map(|m| m.partitions.iter().map(|p| p.drive_name.as_str()).collect())
+    // Keyed by area and drive name: a drive name is unique only within its
+    // own RDB (card round 3, M12).
+    let filled: std::collections::HashSet<(usize, &str)> = manifest
+        .map(|m| {
+            m.partitions
+                .iter()
+                .map(|p| (p.area, p.drive_name.as_str()))
+                .collect()
+        })
         .unwrap_or_default();
     let unformatted: usize = card
         .areas
         .iter()
-        .flat_map(|area| area.rdb.partitions.iter())
-        .filter(|part| !filled.contains(part.drive_name.as_str()))
+        .enumerate()
+        .flat_map(|(index, area)| area.rdb.partitions.iter().map(move |part| (index, part)))
+        .filter(|(index, part)| !filled.contains(&(*index, part.drive_name.as_str())))
         .count();
 
     let mut by_hand = vec![
@@ -764,6 +772,7 @@ mod tests {
         manifest.partitions = ["SDH0", "SDH1"]
             .iter()
             .map(|d| PartitionContent {
+                area: 0,
                 drive_name: d.to_string(),
                 volume_name: d.to_string(),
                 sources: vec![],
@@ -797,6 +806,7 @@ mod tests {
 
         let mut manifest = manifest_for(&image, true);
         manifest.partitions = vec![PartitionContent {
+            area: 0,
             drive_name: "SDH0".into(),
             volume_name: "SDH0".into(),
             sources: vec![],
@@ -816,5 +826,62 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M12: a drive name is unique only within its own RDB. On a card whose
+    /// two Amiga areas both have an `SDH0`, the first one filled does not
+    /// make the second one's formatting disappear from the list.
+    #[test]
+    fn a_filled_partition_does_not_hide_one_of_the_same_name_in_another_area() {
+        let (_guard, dir) = scratch("same-name-two-areas");
+        let image = dir.join("card.img");
+        let area = |size_bytes| AreaSpec {
+            size_bytes,
+            partitions: vec![PartitionSpec {
+                drive_name: "SDH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 200,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            file_systems: Vec::new(),
+        };
+        build_card(
+            &image,
+            &CardSpec {
+                total_bytes: 2 * GIB,
+                boot_bytes: 0,
+                label: "ART CARD".into(),
+                boot_files: vec![BootFile {
+                    name: "config.txt".into(),
+                    bytes: b"kernel=Emu68-pistorm.gz\n".to_vec(),
+                }],
+                areas: vec![area(400 * 1024 * 1024), area(0)],
+            },
+            &NoProgress,
+        )
+        .unwrap();
+
+        let mut manifest = manifest_for(&image, true);
+        manifest.partitions = vec![PartitionContent {
+            area: 0,
+            drive_name: "SDH0".into(),
+            volume_name: "System".into(),
+            sources: vec![],
+            files: 1,
+            bytes: 1,
+            writer: "native".into(),
+        }];
+
+        let report = check_image(&image, Some(&manifest), "pi4").unwrap();
+
+        assert!(
+            report
+                .by_hand
+                .contains(&ManualStep::VolumesNeedFormatting { count: 1 }),
+            "{:?}",
+            report.by_hand
+        );
     }
 }

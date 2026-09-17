@@ -56,17 +56,31 @@ impl OwnedScratch {
     pub fn create_in(root: &Path, prefix: &str) -> CoreResult<Self> {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let path = root.join(format!("{prefix}-{}-{n}", std::process::id()));
-        if path.exists() {
-            return Err(CoreError::SafetyRefused(format!(
-                "scratch folder already exists: {}",
-                path.display()
-            )));
+        Self::create_at(path)
+    }
+
+    /// [`create_in`](Self::create_in) at an exact `path`. The folder is
+    /// created with `create_dir`, which fails when it is already there — no
+    /// window between a check and the creation (card round 3, M15).
+    fn create_at(path: PathBuf) -> CoreResult<Self> {
+        if let Some(root) = path.parent() {
+            std::fs::create_dir_all(root)?;
         }
-        std::fs::create_dir_all(&path)?;
-        Ok(Self {
-            path,
-            finished: false,
-        })
+        match std::fs::create_dir(&path) {
+            Ok(()) => Ok(Self {
+                path,
+                finished: false,
+            }),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(CoreError::SafetyRefused(format!(
+                    "the scratch folder '{}' is already there — most likely left by an earlier \
+                     run of ART. ART removes only a folder it made in this run: delete it \
+                     yourself (it holds only scratch), then try again.",
+                    path.display()
+                )))
+            }
+            Err(err) => Err(err.into()),
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -168,6 +182,29 @@ mod tests {
         let a = OwnedScratch::create_in(&root, "card-os").unwrap();
         let b = OwnedScratch::create_in(&root, "card-os").unwrap();
         assert_ne!(a.path(), b.path());
+    }
+
+    /// M15: a folder already at the name — left by an earlier run whose
+    /// process id this one reuses — is refused with a next step, and left
+    /// exactly as it is.
+    #[test]
+    fn a_folder_already_at_the_name_is_refused_with_what_to_do_and_left_alone() {
+        let (_guard, root) = crate::core::ScratchDir::pair("art-owned-scratch", "taken");
+        let taken = root.join("card-os-1-1");
+        std::fs::create_dir_all(&taken).unwrap();
+        std::fs::write(taken.join("left.bin"), b"x").unwrap();
+
+        let err = match OwnedScratch::create_at(taken.clone()) {
+            Ok(_) => panic!("a folder already there was taken over"),
+            Err(err) => err,
+        };
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&taken.display().to_string()) && msg.contains("delete it"),
+            "{msg}"
+        );
+        assert_eq!(std::fs::read(taken.join("left.bin")).unwrap(), b"x");
     }
 
     #[test]

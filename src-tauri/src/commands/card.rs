@@ -618,19 +618,21 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
     })
 }
 
-/// Write the card image `request` describes at `dest`: the payload read, the
-/// source facts hashed, and the card built and read back. The manifest is the
-/// caller's — `build_requested_card` writes it beside `dest` at once, and the
-/// one-button card (`commands/cardos.rs`) writes it only once the partitions
-/// are filled and the image has its final name.
-///
-/// The source facts are hashed **before** the image is created, so a source
-/// that cannot be hashed leaves no image behind.
-pub(crate) fn write_card_image(
-    request: &CardBuildRequest,
-    dest: &Path,
-    progress: &dyn ProgressSink,
-) -> CoreResult<(BuiltCard, SourceFacts, Vec<ManifestFile>)> {
+/// Everything a card image is built from, read and checked before anything
+/// is created: the payload, the source facts hashed, the driver read and the
+/// card laid out as a [`CardSpec`]. A refusal here — a missing archive, a
+/// driver silent about its version, an encrypted ROM without its key — leaves
+/// nothing on disk.
+pub(crate) struct CardImageInputs {
+    pub spec: CardSpec,
+    pub facts: SourceFacts,
+    pub boot_files: Vec<ManifestFile>,
+}
+
+/// Read and check what [`CardImageInputs`] holds. The source facts are hashed
+/// **before** the image is created, so a source that cannot be hashed leaves
+/// no image behind.
+pub(crate) fn card_image_inputs(request: &CardBuildRequest) -> CoreResult<CardImageInputs> {
     let payload = payload_for(request)?;
 
     // Hashed here, from the bytes about to be written — the only place they
@@ -647,8 +649,26 @@ pub(crate) fn write_card_image(
     let facts = source_facts(request, &payload.kernel_file)?;
 
     let spec = card_spec(request, payload.files)?;
-    let built = build_card(dest, &spec, progress)?;
-    Ok((built, facts, boot_files))
+    Ok(CardImageInputs {
+        spec,
+        facts,
+        boot_files,
+    })
+}
+
+/// Write the card image `request` describes at `dest`: [`card_image_inputs`],
+/// then the card built and read back. The manifest is the caller's —
+/// `build_requested_card` writes it beside `dest` at once, and the one-button
+/// card (`commands/cardos.rs`) takes the two halves separately, so that every
+/// refusal comes before its own first write.
+pub(crate) fn write_card_image(
+    request: &CardBuildRequest,
+    dest: &Path,
+    progress: &dyn ProgressSink,
+) -> CoreResult<(BuiltCard, SourceFacts, Vec<ManifestFile>)> {
+    let inputs = card_image_inputs(request)?;
+    let built = build_card(dest, &inputs.spec, progress)?;
+    Ok((built, inputs.facts, inputs.boot_files))
 }
 
 /// Build the requested card. The half a unit test can host — `card_build` adds

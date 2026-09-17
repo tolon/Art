@@ -45,8 +45,12 @@
 //! differs.** `S/WHDLoad.prefs` is the user's own settings (QuitKey, splash
 //! behaviour, per-game overrides); the WHDLoad Installer and HstWB both
 //! refuse to overwrite one, and ART follows them (owner decision, W § 1.2).
-//! `C/WHDLoad` itself is written whenever it differs, because there is
-//! nothing personal in the binary the way there is in the prefs.
+//! **`C/WHDLoad` is not replaced either:** a tree that already has one keeps
+//! it — the preparation chooses nothing to install, and [`install_whdload`]
+//! keeps a differing binary it finds (`KeptExisting`). Keeping it is never
+//! silent: the preparation says which version the tree's copy states beside
+//! the best one found elsewhere (`core::cardos::prepare::TreeWhdload`, card
+//! round 3, M2).
 
 use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
@@ -549,15 +553,29 @@ fn write_into(dir: &Path, name: &str, bytes: &[u8]) -> CoreResult<TreeWrite> {
             })
         }
         Some(existing) => {
-            let on_disk = std::fs::read(&existing)?;
             let path = existing.display().to_string();
-            if on_disk == bytes {
+            // Compared by length first, and read only when the lengths
+            // agree — a bounded read of a file already in the tree (M13).
+            let same = std::fs::metadata(&existing)?.len() == bytes.len() as u64
+                && read_bounded(&existing, bytes.len() as u64)? == bytes;
+            if same {
                 Ok(TreeWrite::AlreadyThere { path })
             } else {
                 Ok(TreeWrite::KeptExisting { path })
             }
         }
     }
+}
+
+/// The tree's own `C/WHDLoad`, when it has one, and the version it states
+/// (`None` when it states none). Read within [`WHDLOAD_MAX_BYTES`].
+pub fn read_tree_whdload(tree: &Path) -> CoreResult<Option<(PathBuf, Option<AmigaVersion>)>> {
+    let Some(path) = find_named_dir(tree, "C").and_then(|c_dir| find_named_file(&c_dir, "WHDLoad"))
+    else {
+        return Ok(None);
+    };
+    let bytes = read_bounded(&path, WHDLOAD_MAX_BYTES)?;
+    Ok(Some((path, amigaver::read(&bytes))))
 }
 
 /// Whether `tree` already carries a `C/WHDLoad` (case-insensitive walk of `C`).

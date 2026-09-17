@@ -349,36 +349,10 @@ pub struct RequestedPartition {
     pub floor_bytes: u64,
 }
 
-/// Why [`plan_card_image`] could not build a plan.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-#[serde(
-    tag = "refusal",
-    rename_all = "kebab-case",
-    rename_all_fields = "camelCase"
-)]
-pub enum SizingRefusal {
-    DoesNotFit {
-        needed: u64,
-        available: u64,
-        /// The requested partition with the most measured content — `None`
-        /// when `content` is empty or none of it was measured.
-        largest: Option<String>,
-    },
-    PartitionTooLarge {
-        volume_name: String,
-        bytes: u64,
-    },
-    CardTooSmall {
-        card_gb: u32,
-    },
-    /// A partition's measured content does not fit the size it is given —
-    /// today only System, whose size is fixed.
-    PartitionContentDoesNotFit {
-        volume_name: String,
-        needed_blocks: u64,
-        available_blocks: u64,
-    },
-}
+/// Why [`plan_card_image`] could not build a plan. Declared in
+/// `core::error` (card round 3, M9): the error module sits below every other
+/// `core/` module and must not import one of them to name a refusal.
+pub use crate::core::error::SizingRefusal;
 
 /// One partition of the plan, ready for `core::rdb::create_rdb_layout`.
 #[derive(Debug, Clone, serde::Serialize)]

@@ -82,15 +82,38 @@ pub fn find_pfs3_driver(
     stage_dir: &Path,
 ) -> CoreResult<FoundDriver> {
     if let Some(path) = explicit {
-        let bytes = read_loose_bytes(path)?;
-        // The user chose this file themselves: ART reads its `$VER:` when it
-        // has one to report, but does not refuse an explicit choice for
-        // lacking one the way an unlabelled *material* candidate is skipped.
-        let version = amigaver::read(&bytes).unwrap_or(AmigaVersion {
-            name: String::new(),
-            version: 0,
-            revision: 0,
-        });
+        let bytes = read_loose_bytes(path).map_err(|err| match err {
+            CoreError::Io(io) => CoreError::InvalidInput(format!(
+                "the PFS3 driver you chose, '{}', cannot be read ({io}). Choose the driver file \
+                 again, or clear the choice so ART searches your material folders.",
+                path.display()
+            )),
+            other => other,
+        })?;
+        // The user chose this file themselves, and it still has to state its
+        // version: the card's RDB records it, and AmigaOS keeps the higher of
+        // that and the one already loaded. The card writer refuses a silent
+        // driver (`commands::hdf::read_file_systems`) — said here, before the
+        // preparation stages anything, in the same words (the ledger's T7).
+        // The same reading the card writer does, so this refuses exactly
+        // what it would.
+        let loose = || {
+            crate::core::rdb::version_from_ver_string(&bytes).map(|(version, revision)| {
+                AmigaVersion {
+                    name: String::new(),
+                    version: version.into(),
+                    revision: revision.into(),
+                }
+            })
+        };
+        let version = amigaver::read(&bytes).or_else(loose).ok_or_else(|| {
+            CoreError::InvalidInput(format!(
+                "'{}' does not say what version it is. AmigaOS keeps the higher of the version in \
+                 the disk and the one already loaded, so ART will not guess one — choose a \
+                 pfs3aio that states its version (Aminet disk/misc/pfs3aio).",
+                path.display()
+            ))
+        })?;
         let candidate = Candidate {
             bytes,
             version,
@@ -105,7 +128,7 @@ pub fn find_pfs3_driver(
     let mut best: Option<Candidate> = None;
 
     for folder in material {
-        searched.push(folder.display().to_string());
+        searched.push(crate::core::cardos::searched_folder(folder));
 
         for loose in [folder.join("pfs3aio"), folder.join("L").join("pfs3aio")] {
             if !loose.is_file() {
@@ -387,6 +410,57 @@ mod tests {
             (18, 0, None)
         );
         assert_eq!(found.path, explicit);
+    }
+
+    /// T7 (deferred minor): a driver the user chose that states no version is
+    /// refused at the preparation, with the sentence the card writer would
+    /// otherwise give only at the build, after the whole preparation ran.
+    #[test]
+    fn an_explicit_driver_silent_about_its_version_is_refused_at_once() {
+        let (_guard, dir) = scratch("explicit-silent");
+        let explicit = dir.join("pfs3aio");
+        std::fs::write(&explicit, vec![0u8; 64]).unwrap();
+
+        let err = find_pfs3_driver(Some(&explicit), &[], &dir.join("stage")).unwrap_err();
+
+        assert_eq!(err.code(), "ART-INPUT-INVALID", "{err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&explicit.display().to_string())
+                && msg.contains("does not say what version it is"),
+            "{msg}"
+        );
+    }
+
+    /// M7: a driver the user chose that is not there is refused naming the
+    /// file and the next step, not as a bare "cannot find the file".
+    #[test]
+    fn a_missing_explicit_driver_is_refused_by_name() {
+        let (_guard, dir) = scratch("explicit-missing");
+        let explicit = dir.join("gone").join("pfs3aio");
+
+        let err = find_pfs3_driver(Some(&explicit), &[], &dir.join("stage")).unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&explicit.display().to_string()) && msg.contains("Choose the driver"),
+            "{msg}"
+        );
+    }
+
+    /// M8: a material folder that does not exist is named as such, not as a
+    /// folder that was searched and held nothing.
+    #[test]
+    fn a_material_folder_that_does_not_exist_is_said_so() {
+        let (_guard, dir) = scratch("gone-folder");
+        let gone = dir.join("no-such-folder");
+        let err = find_pfs3_driver(None, &[dir.clone(), gone.clone()], &dir).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains(&format!("{} (does not exist)", gone.display()))
+                && !msg.contains(&format!("{} (does not exist)", dir.display())),
+            "{msg}"
+        );
     }
 
     /// An archive whose name looks like the driver but which ART cannot open
