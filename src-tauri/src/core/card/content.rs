@@ -46,13 +46,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::core::adf::bcpl::{AmigaDate, TICKS_PER_SEC};
 use crate::core::adf::blocks::EntryKind;
 use crate::core::adf::extract::extract_file_on;
 use crate::core::adf::fs::{list_directory_on, read_header_on, FileEntry};
 use crate::core::archive::extract::{extract_selection, OverwritePolicy, Wanted};
 use crate::core::archive::{self, ArchiveEntry, EntryDate};
 use crate::core::card::sizing::ContentMeasure;
-use crate::core::clock::{amiga_from_wall, AmigaClock};
+use crate::core::clock::AmigaClock;
 use crate::core::detect::{detect, FormatCategory};
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::gameindex::readers::lhadrawer::slave_drawers;
@@ -798,10 +799,13 @@ pub struct Prepared {
 /// file four times that is not a floppy image.
 const MAX_ADF_BYTES: u64 = 4 * 1024 * 1024;
 
-/// Wall-clock seconds since 1970 for an MS-DOS date (high word) and time (low
-/// word). No zone is involved: the pair is what a wall clock showed, which is
-/// exactly what an Amiga date is too. `None` for a field out of range.
-fn dos_wall_seconds(bits: u32) -> Option<i64> {
+/// The Amiga date for an MS-DOS date (high word) and time (low word). No zone is
+/// involved: the pair is what a wall clock showed, which is exactly what an
+/// Amiga date is too, so the fields become days, minutes and ticks directly and
+/// never pass through an instant (`core::clock` owns every instant-to-Amiga
+/// conversion, ART-317). An MS-DOS year starts at 1980, after the Amiga epoch,
+/// so nothing needs clamping. `None` for a field out of range.
+fn dos_amiga_date(bits: u32) -> Option<AmigaDate> {
     let date = bits >> 16;
     let time = bits & 0xFFFF;
     let year = 1980 + i64::from(date >> 9);
@@ -818,12 +822,13 @@ fn dos_wall_seconds(bits: u32) -> Option<i64> {
     {
         return None;
     }
-    Some(
-        days_from_civil(year, i64::from(month), i64::from(day)) * 86_400
-            + i64::from(hour) * 3600
-            + i64::from(minute) * 60
-            + i64::from(second),
-    )
+    let days =
+        days_from_civil(year, i64::from(month), i64::from(day)) - days_from_civil(1978, 1, 1);
+    Some(AmigaDate {
+        days: u32::try_from(days).ok()?,
+        mins: hour * 60 + minute,
+        ticks: second * TICKS_PER_SEC as u32,
+    })
 }
 
 /// Put `path`'s contents (already classified as `kind`) where a partition
@@ -1084,7 +1089,7 @@ fn prepare_archive(
             continue;
         }
         let date = match entry.amiga.date {
-            Some(EntryDate::MsDos(bits)) => dos_wall_seconds(bits).map(amiga_from_wall),
+            Some(EntryDate::MsDos(bits)) => dos_amiga_date(bits),
             Some(EntryDate::Unix(seconds)) => Some(clock.amiga_from_unix(seconds)),
             None => None,
         };
@@ -1779,18 +1784,36 @@ mod tests {
 
     #[test]
     fn a_dos_date_is_wall_clock_seconds() {
+        // 2025-01-01 00:00:00 is 1 735 689 600 wall seconds, day 17 167 of the Amiga epoch.
+        let midnight = dos_amiga_date(((45 << 9) | (1 << 5) | 1) << 16).expect("a date");
         assert_eq!(
-            dos_wall_seconds(((45 << 9) | (1 << 5) | 1) << 16),
-            Some(1_735_689_600)
+            midnight,
+            AmigaDate {
+                days: 17_167,
+                mins: 0,
+                ticks: 0
+            }
         );
+        assert_eq!(midnight.to_wall_seconds(), 1_735_689_600);
         // 2025-01-01 13:14:10 — hour, minute and the two-second field.
+        let afternoon =
+            dos_amiga_date((((45 << 9) | (1 << 5) | 1) << 16) | (13 << 11) | (14 << 5) | 5)
+                .expect("a date");
         assert_eq!(
-            dos_wall_seconds((((45 << 9) | (1 << 5) | 1) << 16) | (13 << 11) | (14 << 5) | 5),
-            Some(1_735_689_600 + 13 * 3600 + 14 * 60 + 10)
+            afternoon,
+            AmigaDate {
+                days: 17_167,
+                mins: 13 * 60 + 14,
+                ticks: 10 * 50
+            }
         );
-        assert_eq!(dos_wall_seconds(0), None, "month 0 is not a date");
         assert_eq!(
-            dos_wall_seconds((((45 << 9) | (1 << 5) | 1) << 16) | (24 << 11)),
+            afternoon.to_wall_seconds(),
+            1_735_689_600 + 13 * 3600 + 14 * 60 + 10
+        );
+        assert_eq!(dos_amiga_date(0), None, "month 0 is not a date");
+        assert_eq!(
+            dos_amiga_date((((45 << 9) | (1 << 5) | 1) << 16) | (24 << 11)),
             None,
             "hour 24 is not a time"
         );
