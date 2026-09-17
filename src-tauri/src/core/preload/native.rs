@@ -1296,7 +1296,7 @@ fn copy_in_ffs(
 pub(crate) mod test_support {
     use std::path::{Path, PathBuf};
 
-    /// An 8 MB RDB card with one PFS3 (`PDS`) partition, formatted `Work`.
+    /// An 8 MB RDB card with one PFS3 (`PDS`) partition, formatted `Work`.
     pub(crate) fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
         super::tests::formatted_pds3_image()
     }

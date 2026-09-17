@@ -418,7 +418,8 @@ pub enum CoreError {
     /// (`core::preload::amiga_fold`). Copying both would merge one into the
     /// other or replace it; neither is something to do silently (card round 2).
     #[error(
-        "'{first}' and '{second}' both put '{name}' at the top of this partition. Rename one,          or give them different partitions."
+        "'{first}' and '{second}' both put '{name}' at the top of this partition. Rename one, \
+         or give them different partitions."
     )]
     SourceNamesCollide {
         name: String,
@@ -430,7 +431,8 @@ pub enum CoreError {
     /// same escaped host name (`windows_safe_name`), so neither could be
     /// copied as itself (card round 2).
     #[error(
-        "'{first}' and '{second}' in '{source_path}' would both be staged as '{host}' on Windows, so          neither could be copied as itself. Rename one on the Amiga side first."
+        "'{first}' and '{second}' in '{source_path}' would both be staged as '{host}' on Windows, so \
+         neither could be copied as itself. Rename one on the Amiga side first."
     )]
     ///
     /// `source_path`, not `source`: `thiserror` takes a field called `source`
@@ -610,7 +612,10 @@ fn non_ascii_pfs3_message(paths: &[String], more: usize) -> String {
 /// The sentence for [`CoreError::NamesNoWriterCanCopy`].
 fn names_no_writer_message(non_ascii: &[String], escaped: &[String]) -> String {
     format!(
-        "This partition holds names the native PFS3 writer cannot write, because they are not          ASCII ({}; ART-113), and names Windows forced ART to change, which hst-imager cannot          put back ({}; ART-160) — so neither writer can copy all of it. Rename the first set to          ASCII, or put the sources holding them on a different partition from the second.",
+        "This partition holds names the native PFS3 writer cannot write, because they are not \
+         ASCII ({}; ART-113), and names Windows forced ART to change, which hst-imager cannot \
+         put back ({}; ART-160) — so neither writer can copy all of it. Rename the first set to \
+         ASCII, or put the sources holding them on a different partition from the second.",
         non_ascii.join(", "),
         escaped.join(", ")
     )
