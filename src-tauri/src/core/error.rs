@@ -7,6 +7,91 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+/// Why `core::card::sizing::plan_card_image` (or the card preparation's own
+/// System re-check) could not lay a card out. Declared here rather than in
+/// `core/card` (card round 3, M9): this module sits below every other `core/`
+/// module and names a refusal without importing the module that makes it.
+/// `core::card::sizing` re-exports it under its old path.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "refusal",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SizingRefusal {
+    DoesNotFit {
+        needed: u64,
+        available: u64,
+        /// The requested partition with the most measured content — `None`
+        /// when `content` is empty or none of it was measured.
+        largest: Option<String>,
+    },
+    PartitionTooLarge {
+        volume_name: String,
+        bytes: u64,
+    },
+    CardTooSmall {
+        card_gb: u32,
+    },
+    /// A partition's own measured content does not fit the size it is given
+    /// — today only System's tree, whose partition size is fixed.
+    PartitionContentDoesNotFit {
+        volume_name: String,
+        needed_blocks: u64,
+        available_blocks: u64,
+    },
+    /// System's tree fits, and what the card would still add to it — WHDLoad
+    /// and every Kickstart the collection can answer, each with its `.RTB` —
+    /// does not (card round 3, I5). Its own sentence, because the user agrees
+    /// to Kickstarts only at the build: "agree to fewer" names a step that
+    /// does not exist yet, and what does work is taking the ROM files that
+    /// answer them out of the folders ART scans. The partition is always
+    /// System, so it is not a field — which also keeps `CoreError` inside
+    /// clippy's `result_large_err` budget.
+    SystemAdditionsDoNotFit {
+        needed_blocks: u64,
+        available_blocks: u64,
+        /// The tree's own blocks, before anything was added.
+        tree_blocks: u64,
+        /// The WHDLoad that would be added, as it states itself.
+        whdload: Option<String>,
+        /// Every Kickstart name that would be added.
+        kickstarts: Vec<String>,
+    },
+}
+
+/// Which of a card build's places a free-space refusal is about — each has
+/// its own next step: the image's folder is chosen on the card screen, the
+/// scratch folder in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SpacePlace {
+    Image,
+    Scratch,
+    /// The image and the scratch folder are on one volume, summed.
+    ImageAndScratch,
+}
+
+/// The most items a card refusal lists by name before it says "and N more".
+pub const MAX_NAMED_IN_REFUSAL: usize = 20;
+
+/// `items` joined, at most [`MAX_NAMED_IN_REFUSAL`] of them, then "and N more".
+fn listed_capped(items: &[String]) -> String {
+    let mut text = items
+        .iter()
+        .take(MAX_NAMED_IN_REFUSAL)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if items.len() > MAX_NAMED_IN_REFUSAL {
+        text.push_str(&format!(
+            ", and {} more",
+            items.len() - MAX_NAMED_IN_REFUSAL
+        ));
+    }
+    text
+}
+
 /// Why ART will not edit an RDB in place (ART-117). Every one is decided
 /// before the first byte is written, and each has its own stable code, so a
 /// user can act on it and a maintainer can find it (§68).
@@ -276,6 +361,25 @@ pub enum CoreError {
     /// A destructive operation was refused to protect the original file.
     #[error("operation refused to protect data: {0}")]
     SafetyRefused(String),
+
+    /// A distribution tree destination used `:` or `/` inside one of its own
+    /// segments (ART-341). Both are reserved in AmigaDOS since DOS — `:`
+    /// separates a device or volume name from the path that follows it, and
+    /// `/` means "parent directory" rather than a path separator — so
+    /// neither can appear *inside* a file or drawer name; a distribution
+    /// tree that carried one only worked by accident, escaped for whatever
+    /// host filesystem happened to receive it
+    /// (AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
+    /// Conventions). Raised in `core::osinstall::apply` before a single byte
+    /// is written, the same "before anything is written" shape as
+    /// [`SafetyRefused`](Self::SafetyRefused) but its own variant so a
+    /// caller can tell "the name itself is illegal" from "the escaped host
+    /// names collide".
+    #[error(
+        "'{path}' cannot be an AmigaDOS name: a colon (:) or a slash (/) is reserved in \
+         AmigaDOS file and drawer names. Rename it in the source and run again."
+    )]
+    AmigaNameReserved { path: String },
 
     #[error("not yet implemented: {0}")]
     NotImplemented(String),
@@ -596,6 +700,279 @@ pub enum CoreError {
         journal: PathBuf,
         detail: String,
     },
+
+    /// A `<image>.partial` was already on disk when a card build started
+    /// (P3). ART removes only a file it created in this run — a `.partial`
+    /// left from an earlier one might not have been looked at yet, and this
+    /// refusal names it rather than silently building over or deleting it.
+    #[error(
+        "'{path}' is a half-built card image from an earlier run. ART does not remove a file it \
+         did not create in this run: delete it yourself, or choose another image name, and \
+         build again."
+    )]
+    PartialImageExists { path: String },
+
+    /// No PFS3 driver was found in any material folder — a loose `pfs3aio`,
+    /// nor an archive holding one — and the caller gave no `explicit` choice
+    /// either (`core::cardos::driver::find_pfs3_driver`, R4). `searched`
+    /// names every folder looked in, in order; `unreadable` names any file
+    /// whose name looked like the driver but which ART could not open or
+    /// read, so a refusal never reads as "nothing was there" when something
+    /// was and ART simply could not use it.
+    #[error("{}", pfs3_driver_not_found_message(searched, unreadable))]
+    Pfs3DriverNotFound {
+        searched: Vec<String>,
+        unreadable: Vec<String>,
+    },
+
+    /// `core::cardos::whdload::find_whdload` found nothing anywhere ART
+    /// looks, while the card holds at least one title that needs it (P6): a
+    /// card whose games cannot start is exactly the confident wrong sentence
+    /// CLAUDE.md warns about, so this is a refusal, not a silent card.
+    /// `searched` names every material folder and hardfile ART looked in.
+    #[error("{}", whdload_not_found_message(*titles, searched))]
+    WhdloadNotFound {
+        titles: usize,
+        searched: Vec<String>,
+    },
+
+    /// `core::cardos::kickstarts::place_agreed` was asked to place a name
+    /// `KickstartProposal` does not offer: absent from `items` entirely,
+    /// present but not `Offer::Supplied`, or `Supplied` with a `Missing`
+    /// `.RTB`. Refused before a single byte is written, for every agreed
+    /// name in the batch, before any of them is placed.
+    ///
+    /// **This is what keeps the owner's 2026-08-21 rule true by
+    /// construction rather than by discipline**: ART offers, and places
+    /// only what the user agreed to *from that offer* — a caller cannot pass
+    /// a name that never appeared on the screen and have it land anyway.
+    #[error(
+        "'{name}' cannot be placed: {why}. Prepare the card again and agree only to what the \
+         proposal offers."
+    )]
+    KickstartNotProposed { name: String, why: String },
+
+    /// One of a card partition's sources cannot be used
+    /// (`core::cardos::prepare::measure_card`). `why` is the sentence for the
+    /// source's `Unusable` reason, rendered by `core::cardos` — this module
+    /// sits below `core/cardos` and does not import its types (ART-339).
+    #[error(
+        "'{source_path}' in {partition} cannot be used: {why}. Remove it from {partition} or fix \
+         it."
+    )]
+    CardSourceUnusable {
+        partition: String,
+        source_path: String,
+        why: String,
+    },
+
+    /// A card partition holds non-ASCII names and no hst-imager is set up:
+    /// ART's own PFS3 writer cannot write them (ART-113), and the card
+    /// path never writes them wrong silently.
+    #[error("{}", card_names_need_hst_message(partition, paths, *more))]
+    CardNamesNeedHstImager {
+        partition: String,
+        paths: Vec<String>,
+        more: usize,
+    },
+
+    /// The card cannot be laid out: the sizing refusal, said per variant.
+    #[error("{}", card_does_not_fit_message(.0))]
+    CardDoesNotFit(SizingRefusal),
+
+    /// A place the card build writes to has less free space than it needs.
+    #[error("{}", not_enough_space_message(place, *needed, *available, *what))]
+    NotEnoughSpace {
+        place: String,
+        needed: u64,
+        available: u64,
+        /// Which place it is — each has its own next step (card round 3, M7).
+        what: SpacePlace,
+    },
+
+    /// The one-button card's last gate (`commands/cardos.rs`): the image ART
+    /// just built and filled failed `core::card::health::check_image`.
+    /// `checks` names each failed check as the health report does. The image
+    /// is not given its final name; the caller says what became of it.
+    #[error(
+        "the card image failed {failures} of its checks ({checks}), so ART did not finish it. \
+         Build it again; if it fails the same way, keep the operation log for a report."
+    )]
+    CardCheckFailed { failures: usize, checks: String },
+
+    /// hst-imager cannot be used — none was given, the file is missing, or it
+    /// does not run — and `partitions` hold names only it can write
+    /// (ART-113). Said by name before anything is written (card round 3, I1).
+    /// `path` is empty when no hst-imager was given at all.
+    #[error("{}", hst_imager_unusable_message(partitions, path, why))]
+    HstImagerUnusable {
+        partitions: Vec<String>,
+        path: String,
+        why: String,
+    },
+
+    /// An agreed Kickstart's source file is not the file the proposal offered
+    /// any more — changed, gone, or unreadable since the card was prepared
+    /// (`core::cardos::kickstarts::check_agreed`; card round 3, the ROM half
+    /// of ART-343). The file the user agreed to is the file placed, so the
+    /// build is refused before anything is written.
+    #[error(
+        "'{name}' cannot be placed: '{path}' {why} since the card was prepared. Nothing was \
+         written — prepare the card again, so the proposal offers what is there now."
+    )]
+    KickstartSourceChanged {
+        name: String,
+        path: String,
+        why: String,
+    },
+
+    /// A card partition would hold more files and folders than the finished
+    /// card's read-back counts (`core::cardos::readback`), so it could be
+    /// written and then fail its check. Refused at prepare, before anything is
+    /// written (card round 3, N2).
+    #[error(
+        "'{partition}' would hold {entries} files and folders, more than the {bound} ART counts \
+         back off a finished card partition. Move some of what it holds to another partition, \
+         and prepare the card again."
+    )]
+    CardPartitionTooManyEntries {
+        partition: String,
+        entries: u64,
+        bound: u64,
+    },
+
+    /// The finished card was linked to its own name, and neither the
+    /// `.partial` name nor the new name could then be removed
+    /// (`core::cardos::partial::finish_partial`; card round 3, N6). Both
+    /// names are ART's own card — nobody else's file.
+    #[error(
+        "ART could not finish naming its card: neither '{partial}' nor the new name could be \
+         removed ({why}). '{image}' is ART's own half-built card, not somebody else's file — \
+         remove it yourself before building again."
+    )]
+    CardFinishLeftBothNames {
+        image: String,
+        partial: String,
+        /// Both removals' errors in one sentence — three strings keep
+        /// `CoreError` inside clippy's `result_large_err` bound.
+        why: String,
+    },
+}
+
+/// The sentence for [`CoreError::HstImagerUnusable`].
+fn hst_imager_unusable_message(partitions: &[String], path: &str, why: &str) -> String {
+    let tool = if path.is_empty() {
+        "no hst.imager.exe was given to this build".to_string()
+    } else {
+        format!("'{path}' cannot be used as hst-imager ({why})")
+    };
+    let hold = if partitions.len() == 1 {
+        "holds"
+    } else {
+        "hold"
+    };
+    format!(
+        "{} {hold} names only hst-imager can write (ART-113), and {tool}. Point ART at a working \
+         hst.imager.exe in Settings, or rename those names to ASCII, and prepare the card again.",
+        listed_capped(partitions)
+    )
+}
+
+/// The sentence for [`CoreError::NotEnoughSpace`], with the next step for
+/// the place it is about.
+fn not_enough_space_message(place: &str, needed: u64, available: u64, what: SpacePlace) -> String {
+    let choose = match what {
+        SpacePlace::Image => "choose another folder for the card image",
+        SpacePlace::Scratch => "choose another scratch folder in Settings",
+        SpacePlace::ImageAndScratch => {
+            "choose another folder for the card image, or another scratch folder in Settings"
+        }
+    };
+    format!(
+        "'{place}' has {available} bytes free and this card needs {needed} there. Free some \
+         space on that drive, or {choose}, and prepare again."
+    )
+}
+
+/// The sentence for [`CoreError::CardNamesNeedHstImager`].
+fn card_names_need_hst_message(partition: &str, paths: &[String], more: usize) -> String {
+    let mut listed = paths.join(", ");
+    if more > 0 {
+        listed.push_str(&format!(", and {more} more"));
+    }
+    format!(
+        "{partition} holds names ART's own PFS3 writer cannot write yet (ART-113): {listed}. \
+         Point ART at hst-imager in Settings, or rename them."
+    )
+}
+
+/// The sentence for [`CoreError::CardDoesNotFit`], one per refusal.
+fn card_does_not_fit_message(refusal: &SizingRefusal) -> String {
+    match refusal {
+        SizingRefusal::DoesNotFit {
+            needed,
+            available,
+            largest,
+        } => {
+            let advice = match largest {
+                Some(name) => format!(
+                    "{name} holds the most; move some of it to another card, or choose a larger \
+                     card."
+                ),
+                None => "Choose a larger card.".to_string(),
+            };
+            format!(
+                "These partitions do not fit this card: they need {needed} bytes and the card \
+                 has {available}. {advice}"
+            )
+        }
+        SizingRefusal::PartitionTooLarge { volume_name, bytes } => format!(
+            "{volume_name} would need {bytes} bytes, more than one PFS3 partition can hold. \
+             Split its sources across two partitions."
+        ),
+        SizingRefusal::CardTooSmall { card_gb } => format!(
+            "A {card_gb} GB card is too small to hold System and the RDB. Choose a larger card."
+        ),
+        SizingRefusal::PartitionContentDoesNotFit {
+            volume_name,
+            needed_blocks,
+            available_blocks,
+        } => format!(
+            "{volume_name}'s tree needs {needed_blocks} blocks of data and {volume_name} has room \
+             for {available_blocks}. Take something out of the tree and prepare again."
+        ),
+        SizingRefusal::SystemAdditionsDoNotFit {
+            needed_blocks,
+            available_blocks,
+            tree_blocks,
+            whdload,
+            kickstarts,
+        } => {
+            let mut added = Vec::new();
+            if let Some(whdload) = whdload {
+                added.push(whdload.clone());
+            }
+            if !kickstarts.is_empty() {
+                added.push(format!(
+                    "the Kickstarts {} with their .RTB files",
+                    listed_capped(kickstarts)
+                ));
+            }
+            let advice = if kickstarts.is_empty() {
+                "Take something out of the tree and prepare again."
+            } else {
+                "ART counts every Kickstart your ROM files can answer, because you choose which \
+                 to place only when you build. Take the ROM files that answer some of them out of \
+                 your material and Kickstart folders, take out the titles that need them, or take \
+                 something out of the tree, and prepare again."
+            };
+            format!(
+                "System needs {needed_blocks} blocks of data with {} added, and has room for \
+                 {available_blocks}; its tree alone needs {tree_blocks}. {advice}",
+                added.join(" and ")
+            )
+        }
+    }
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -655,6 +1032,35 @@ fn pfs3_names_too_long_message(paths: &[String], more: usize, max_bytes: usize) 
     msg
 }
 
+/// The sentence for [`CoreError::Pfs3DriverNotFound`] — the folders searched
+/// are always said; the archives ART could not read are said only when
+/// there were any (most searches never meet one).
+fn pfs3_driver_not_found_message(searched: &[String], unreadable: &[String]) -> String {
+    let mut msg = format!(
+        "No PFS3 driver was found. ART looked for 'pfs3aio' or 'pfs3aio.lha' in: {}. Put \
+         pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the \
+         driver file yourself.",
+        listed_capped(searched)
+    );
+    if !unreadable.is_empty() {
+        msg.push_str(&format!(
+            " ART could not read: {}.",
+            listed_capped(unreadable)
+        ));
+    }
+    msg
+}
+
+/// The sentence for [`CoreError::WhdloadNotFound`].
+fn whdload_not_found_message(titles: usize, searched: &[String]) -> String {
+    format!(
+        "{titles} WHDLoad title(s) are on this card and no WHDLoad was found, so they would not \
+         start. ART looked in: {}. Put WHDLoad_usr.lha (from whdload.de) in one of your material \
+         folders and prepare again.",
+        listed_capped(searched)
+    )
+}
+
 /// The sentence for [`CoreError::RdbEditFailed`]: two endings, two next steps.
 fn rdb_edit_failed_message(
     backup: &std::path::Path,
@@ -695,6 +1101,7 @@ impl CoreError {
             Self::Malformed { .. } => "ART-FORMAT-MALFORMED",
             Self::InvalidInput(_) => "ART-INPUT-INVALID",
             Self::SafetyRefused(_) => "ART-SAFETY-REFUSED",
+            Self::AmigaNameReserved { .. } => "ART-AMIGA-NAME-RESERVED",
             Self::NotImplemented(_) => "ART-NOT-IMPLEMENTED",
             Self::MirrorUnreachable(_) => "ART-MIRROR-UNREACHABLE",
             Self::IntegrityMismatch(_) => "ART-INTEGRITY-MISMATCH",
@@ -721,6 +1128,19 @@ impl CoreError {
                 restored: false, ..
             } => "ART-RDB-EDIT-ROLLBACK-FAILED",
             Self::RdbEditJournalLeft { .. } => "ART-RDB-EDIT-JOURNAL-LEFT",
+            Self::PartialImageExists { .. } => "ART-CARD-PARTIAL-EXISTS",
+            Self::Pfs3DriverNotFound { .. } => "ART-PFS3-DRIVER-NOT-FOUND",
+            Self::WhdloadNotFound { .. } => "ART-WHDLOAD-NOT-FOUND",
+            Self::KickstartNotProposed { .. } => "ART-KICKSTART-NOT-PROPOSED",
+            Self::CardSourceUnusable { .. } => "ART-CARD-SOURCE-UNUSABLE",
+            Self::CardNamesNeedHstImager { .. } => "ART-CARD-NAMES-NEED-HST",
+            Self::CardDoesNotFit(_) => "ART-CARD-DOES-NOT-FIT",
+            Self::NotEnoughSpace { .. } => "ART-NOT-ENOUGH-SPACE",
+            Self::CardCheckFailed { .. } => "ART-CARD-CHECK-FAILED",
+            Self::HstImagerUnusable { .. } => "ART-HST-IMAGER-UNUSABLE",
+            Self::KickstartSourceChanged { .. } => "ART-KICKSTART-SOURCE-CHANGED",
+            Self::CardPartitionTooManyEntries { .. } => "ART-CARD-PARTITION-TOO-MANY-ENTRIES",
+            Self::CardFinishLeftBothNames { .. } => "ART-CARD-FINISH-LEFT-BOTH-NAMES",
         }
     }
 
@@ -830,6 +1250,7 @@ mod tests {
             },
             CoreError::InvalidInput("x".into()),
             CoreError::SafetyRefused("x".into()),
+            CoreError::AmigaNameReserved { path: "x".into() },
             CoreError::NotImplemented("x".into()),
             CoreError::MirrorUnreachable("x".into()),
             CoreError::IntegrityMismatch("x".into()),
@@ -930,6 +1351,60 @@ mod tests {
                 journal: "j".into(),
                 detail: "x".into(),
             },
+            CoreError::PartialImageExists { path: "x".into() },
+            CoreError::Pfs3DriverNotFound {
+                searched: vec!["x".into()],
+                unreadable: vec![],
+            },
+            CoreError::WhdloadNotFound {
+                titles: 1,
+                searched: vec!["x".into()],
+            },
+            CoreError::KickstartNotProposed {
+                name: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::CardSourceUnusable {
+                partition: "x".into(),
+                source_path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::CardNamesNeedHstImager {
+                partition: "x".into(),
+                paths: vec!["x".into()],
+                more: 0,
+            },
+            CoreError::CardDoesNotFit(SizingRefusal::CardTooSmall { card_gb: 1 }),
+            CoreError::NotEnoughSpace {
+                place: "x".into(),
+                needed: 2,
+                available: 1,
+                what: SpacePlace::Image,
+            },
+            CoreError::CardCheckFailed {
+                failures: 1,
+                checks: "x".into(),
+            },
+            CoreError::HstImagerUnusable {
+                partitions: vec!["x".into()],
+                path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::KickstartSourceChanged {
+                name: "x".into(),
+                path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::CardPartitionTooManyEntries {
+                partition: "x".into(),
+                entries: 2,
+                bound: 1,
+            },
+            CoreError::CardFinishLeftBothNames {
+                image: "x".into(),
+                partial: "x".into(),
+                why: "x".into(),
+            },
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();
@@ -968,6 +1443,80 @@ mod tests {
         );
         assert!(msg.contains("22 more"), "{msg}");
         assert!(msg.contains("FFS"), "the actionable advice: {msg}");
+    }
+
+    /// Card round 3, M8: a refusal lists at most 20 places and counts the
+    /// rest, whatever the search covered.
+    #[test]
+    fn a_card_refusal_lists_at_most_twenty_places_and_counts_the_rest() {
+        let searched: Vec<String> = (1..=25).map(|n| format!("E:\\games\\t{n}.hdf")).collect();
+        let whd = CoreError::WhdloadNotFound {
+            titles: 25,
+            searched: searched.clone(),
+        }
+        .to_string();
+        assert!(whd.contains("t20.hdf") && !whd.contains("t21.hdf"), "{whd}");
+        assert!(whd.contains("and 5 more"), "{whd}");
+
+        let drv = CoreError::Pfs3DriverNotFound {
+            searched: searched.clone(),
+            unreadable: searched,
+        }
+        .to_string();
+        assert!(drv.contains("t20.hdf") && !drv.contains("t21.hdf"), "{drv}");
+        assert_eq!(drv.matches("and 5 more").count(), 2, "{drv}");
+    }
+
+    /// Card round 3, I5: the tree alone and the tree with what the card adds
+    /// are two sentences, and only the second sends the user to the ROM files.
+    #[test]
+    fn system_s_two_refusals_give_their_own_next_step() {
+        let tree = CoreError::CardDoesNotFit(SizingRefusal::PartitionContentDoesNotFit {
+            volume_name: "System".into(),
+            needed_blocks: 900,
+            available_blocks: 800,
+        })
+        .to_string();
+        assert!(tree.contains("tree"), "{tree}");
+        assert!(!tree.contains("Kickstart"), "{tree}");
+
+        let added = CoreError::CardDoesNotFit(SizingRefusal::SystemAdditionsDoNotFit {
+            needed_blocks: 900,
+            available_blocks: 800,
+            tree_blocks: 700,
+            whdload: Some("WHDLoad 20.0".into()),
+            kickstarts: vec!["kick34005.A500".into()],
+        })
+        .to_string();
+        assert!(added.starts_with("System needs 900"), "{added}");
+        assert!(
+            added.contains("WHDLoad 20.0") && added.contains("kick34005.A500"),
+            "{added}"
+        );
+        assert!(added.contains("ROM files"), "{added}");
+        assert!(!added.contains("agree to fewer"), "{added}");
+    }
+
+    /// Card round 3, M7: the scratch folder is a Settings choice, and a
+    /// free-space refusal about it says so.
+    #[test]
+    fn a_free_space_refusal_names_where_its_place_is_chosen() {
+        let msg = |what| {
+            CoreError::NotEnoughSpace {
+                place: "E:\\scratch".into(),
+                needed: 2,
+                available: 1,
+                what,
+            }
+            .to_string()
+        };
+        assert!(
+            msg(SpacePlace::Scratch).contains("scratch folder in Settings"),
+            "{}",
+            msg(SpacePlace::Scratch)
+        );
+        assert!(!msg(SpacePlace::Image).contains("Settings"));
+        assert!(msg(SpacePlace::Image).contains("folder for the card image"));
     }
 
     /// The other half: no `more` at all must not claim there is any.

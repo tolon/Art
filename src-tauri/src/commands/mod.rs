@@ -13,6 +13,7 @@ pub mod archives;
 pub mod artwork;
 pub mod bundles;
 pub mod card;
+pub mod cardos;
 pub mod cbm;
 pub mod checkout;
 pub mod distro;

@@ -17,6 +17,7 @@ wording of every entry, with what was measured, is in git history
 - **A first-boot step can restart the Amiga**; on AmigaOS 3.9, which has no restart command, first boot logs that and carries on.
 - **ART reads Amiga LZX archives** with its own reader, behind the same safety checks as LHA, ZIP and 7z (checked against unar).
 - **Groundwork for the one-button card's content step** (no screen yet): folders, archives, WHDLoad hardfiles and ADFs are checked and measured before a card partition is written, and one partition can take several folders.
+- **More groundwork for the one-button card, still no screen**: the PFS3 driver, WHDLoad and the Kickstarts a card's titles need are found — Kickstarts are only ever placed on the names you agree to — and the card is built under a temporary name, checked, and only then given its own.
 
 ### Changed
 
@@ -26,6 +27,7 @@ wording of every entry, with what was measured, is in git history
 - The first-boot report says when a step asked for a restart and what happened, and a timed-out rehearsal names the preferences window it was waiting in.
 - The sentence for a restart the Amiga could not carry out says what may not take effect, instead of telling you to restart "to finish".
 - Applying a screen depth twice no longer keeps a backup of ART's own four-byte marker file.
+- **A note owed since 0.9.2:** an RDB partition table ART writes (a hard-disk image with partitions, or a card's Amiga area) counts whole cylinders only, rounding down. Where the size asked for is not a whole number of cylinders (16 × 63 sectors, 516 096 bytes), the table — and a new partitioned HDF's file — is one cylinder smaller than 0.9.1 made it: at or under the size asked for, never over. The old rounding let the last partition end past the disk ([ART-309](docs/ISSUES.md)).
 
 ### Fixed
 

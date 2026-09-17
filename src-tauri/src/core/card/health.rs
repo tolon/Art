@@ -111,7 +111,8 @@ pub enum ManualStep {
     HdmiBeforePower,
     /// The build was made for one Pi; the machine has whichever is in it.
     PiModelMatches { pi: String },
-    /// SD-1 builds the shape, not the system.
+    /// SD-1 builds the shape; a partition the manifest records as filled is
+    /// not counted.
     VolumesNeedFormatting { count: usize },
 }
 
@@ -162,18 +163,32 @@ pub fn check_image(
     structural(&card, &mut items);
     from_manifest(image, manifest, &mut items)?;
 
-    let by_hand = vec![
+    // Keyed by area and drive name: a drive name is unique only within its
+    // own RDB (card round 3, M12).
+    let filled: std::collections::HashSet<(usize, &str)> = manifest
+        .map(|m| {
+            m.partitions
+                .iter()
+                .map(|p| (p.area, p.drive_name.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let unformatted: usize = card
+        .areas
+        .iter()
+        .enumerate()
+        .flat_map(|(index, area)| area.rdb.partitions.iter().map(move |part| (index, part)))
+        .filter(|(index, part)| !filled.contains(&(*index, part.drive_name.as_str())))
+        .count();
+
+    let mut by_hand = vec![
         ManualStep::FlashTheCard,
         ManualStep::HdmiBeforePower,
         ManualStep::PiModelMatches { pi: pi.into() },
-        ManualStep::VolumesNeedFormatting {
-            count: card
-                .areas
-                .iter()
-                .map(|area| area.rdb.partitions.len())
-                .sum(),
-        },
     ];
+    if unformatted > 0 {
+        by_hand.push(ManualStep::VolumesNeedFormatting { count: unformatted });
+    }
 
     Ok(HealthReport { items, by_hand })
 }
@@ -352,7 +367,7 @@ fn from_manifest(
 mod tests {
     use super::*;
     use crate::core::card::build::{build_card, AreaSpec, CardSpec};
-    use crate::core::card::manifest::{describe_card, ManifestFile, SourceFacts};
+    use crate::core::card::manifest::{describe_card, ManifestFile, PartitionContent, SourceFacts};
     use crate::core::fat32::BootFile;
     use crate::core::hashing::sha256_bytes;
     use crate::core::jobs::NoProgress;
@@ -411,6 +426,56 @@ mod tests {
         .unwrap();
     }
 
+    /// A card whose one Amiga area holds several primary partitions, named as
+    /// given — for the "some of the card's partitions are filled" checks,
+    /// which need more than one drive to tell filled from unfilled.
+    fn build_with_partitions(dest: &Path, drives: &[&str]) {
+        build_card(
+            dest,
+            &CardSpec {
+                total_bytes: 2 * GIB,
+                boot_bytes: 0,
+                label: "ART CARD".into(),
+                boot_files: vec![
+                    BootFile {
+                        name: "config.txt".into(),
+                        bytes: b"kernel=Emu68-pistorm.gz\n".to_vec(),
+                    },
+                    BootFile {
+                        name: "cmdline.txt".into(),
+                        bytes: b"sd.unit0=ro\n".to_vec(),
+                    },
+                    BootFile {
+                        name: "Emu68-pistorm.gz".into(),
+                        bytes: b"kernel".to_vec(),
+                    },
+                    BootFile {
+                        name: "kick.rom".into(),
+                        bytes: vec![0xAB; 1024],
+                    },
+                ],
+                areas: vec![AreaSpec {
+                    size_bytes: 0,
+                    partitions: drives
+                        .iter()
+                        .enumerate()
+                        .map(|(index, name)| PartitionSpec {
+                            drive_name: (*name).into(),
+                            fs_type: AmigaHardDiskFs::FfsStandard,
+                            size_mb: 200,
+                            bootable: index == 0,
+                            boot_priority: 0,
+                            num_buffers: 0,
+                        })
+                        .collect(),
+                    file_systems: Vec::new(),
+                }],
+            },
+            &NoProgress,
+        )
+        .unwrap();
+    }
+
     fn manifest_for(image: &Path, with_rom: bool) -> CardManifest {
         describe_card(
             image,
@@ -452,6 +517,8 @@ mod tests {
                 },
             ],
             None,
+            Vec::new(),
+            Vec::new(),
         )
         .unwrap()
     }
@@ -690,5 +757,131 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A card whose manifest records every partition as filled asks for no
+    /// formatting — SD-1 builds the shape, SD-2 fills it, and the health check
+    /// stops calling a finished card unfinished.
+    #[test]
+    fn a_card_whose_manifest_records_every_partition_filled_asks_for_no_formatting() {
+        let (_guard, dir) = scratch("filled");
+        let image = dir.join("card.img");
+        build_with_partitions(&image, &["SDH0", "SDH1"]);
+
+        let mut manifest = manifest_for(&image, true);
+        manifest.partitions = ["SDH0", "SDH1"]
+            .iter()
+            .map(|d| PartitionContent {
+                area: 0,
+                drive_name: d.to_string(),
+                volume_name: d.to_string(),
+                sources: vec![],
+                files: 1,
+                bytes: 1,
+                writer: "native".into(),
+            })
+            .collect();
+
+        let report = check_image(&image, Some(&manifest), "pi4").unwrap();
+
+        assert!(
+            !report
+                .by_hand
+                .iter()
+                .any(|s| matches!(s, ManualStep::VolumesNeedFormatting { .. })),
+            "{:?}",
+            report.by_hand
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One partition left unfilled is asked for by itself — the count names
+    /// exactly what still needs formatting, not the whole card.
+    #[test]
+    fn a_card_with_one_partition_unfilled_asks_for_exactly_that_one() {
+        let (_guard, dir) = scratch("partly-filled");
+        let image = dir.join("card.img");
+        build_with_partitions(&image, &["SDH0", "SDH1"]);
+
+        let mut manifest = manifest_for(&image, true);
+        manifest.partitions = vec![PartitionContent {
+            area: 0,
+            drive_name: "SDH0".into(),
+            volume_name: "SDH0".into(),
+            sources: vec![],
+            files: 1,
+            bytes: 1,
+            writer: "native".into(),
+        }];
+
+        let report = check_image(&image, Some(&manifest), "pi4").unwrap();
+
+        assert!(
+            report
+                .by_hand
+                .contains(&ManualStep::VolumesNeedFormatting { count: 1 }),
+            "{:?}",
+            report.by_hand
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M12: a drive name is unique only within its own RDB. On a card whose
+    /// two Amiga areas both have an `SDH0`, the first one filled does not
+    /// make the second one's formatting disappear from the list.
+    #[test]
+    fn a_filled_partition_does_not_hide_one_of_the_same_name_in_another_area() {
+        let (_guard, dir) = scratch("same-name-two-areas");
+        let image = dir.join("card.img");
+        let area = |size_bytes| AreaSpec {
+            size_bytes,
+            partitions: vec![PartitionSpec {
+                drive_name: "SDH0".into(),
+                fs_type: AmigaHardDiskFs::FfsStandard,
+                size_mb: 200,
+                bootable: true,
+                boot_priority: 0,
+                num_buffers: 0,
+            }],
+            file_systems: Vec::new(),
+        };
+        build_card(
+            &image,
+            &CardSpec {
+                total_bytes: 2 * GIB,
+                boot_bytes: 0,
+                label: "ART CARD".into(),
+                boot_files: vec![BootFile {
+                    name: "config.txt".into(),
+                    bytes: b"kernel=Emu68-pistorm.gz\n".to_vec(),
+                }],
+                areas: vec![area(400 * 1024 * 1024), area(0)],
+            },
+            &NoProgress,
+        )
+        .unwrap();
+
+        let mut manifest = manifest_for(&image, true);
+        manifest.partitions = vec![PartitionContent {
+            area: 0,
+            drive_name: "SDH0".into(),
+            volume_name: "System".into(),
+            sources: vec![],
+            files: 1,
+            bytes: 1,
+            writer: "native".into(),
+        }];
+
+        let report = check_image(&image, Some(&manifest), "pi4").unwrap();
+
+        assert!(
+            report
+                .by_hand
+                .contains(&ManualStep::VolumesNeedFormatting { count: 1 }),
+            "{:?}",
+            report.by_hand
+        );
     }
 }

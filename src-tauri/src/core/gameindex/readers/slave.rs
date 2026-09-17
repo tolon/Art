@@ -391,6 +391,12 @@ pub(crate) mod tests_support {
         pub(crate) kickname: Option<&'static str>,
         /// Written into `ws_kickname` verbatim, overriding the string.
         pub(crate) kickname_offset_override: Option<u16>,
+        /// `ws_kicksize`, the single-image case's declared byte length.
+        pub(crate) kicksize: Option<u32>,
+        /// `ws_kickcrc`, the single-image case's declared checksum. Ignored
+        /// when `kick_list` is non-empty, which writes the `$ffff` sentinel
+        /// there instead.
+        pub(crate) kickcrc: Option<u16>,
         /// `(crc16, image name)` pairs. When set, `ws_kickcrc` becomes the
         /// `$ffff` sentinel and `ws_kickname` points at the list instead of a
         /// single name — the shape ART-137 turned out to be.
@@ -442,6 +448,16 @@ pub(crate) mod tests_support {
                     body.extend_from_slice(text.as_bytes());
                     body.push(0);
                 }
+            }
+            // `ws_kicksize` / `ws_kickcrc` — fixed fields inside the
+            // structure's own head, so writing them cannot collide with the
+            // strings appended above.
+            if let (Some(size), true) = (self.kicksize, body.len() >= 48) {
+                body[44..48].copy_from_slice(&size.to_be_bytes());
+            }
+            if let (Some(crc), true) = (self.kickcrc, self.kick_list.is_empty() && body.len() >= 50)
+            {
+                body[48..50].copy_from_slice(&crc.to_be_bytes());
             }
             // The list, laid out exactly as two real slaves lay it out: the
             // entries, a zero to end them, then the names back to back, each
@@ -508,6 +524,19 @@ pub(crate) mod tests_support {
             name: Some(name),
             copyright: Some(copyright),
             ..SlaveBuilder::new(version)
+        }
+        .build()
+    }
+
+    /// A v16 slave that names exactly one Kickstart image — `core::cardos::kickstarts`'
+    /// own fixture, kept here so its shape stays in step with the format this
+    /// module reads rather than a second, hand-rolled copy of the header.
+    pub(crate) fn slave_needing(name: &'static str, crc: u16, size: u32) -> Vec<u8> {
+        SlaveBuilder {
+            kickname: Some(name),
+            kickcrc: Some(crc),
+            kicksize: Some(size),
+            ..SlaveBuilder::new(16)
         }
         .build()
     }

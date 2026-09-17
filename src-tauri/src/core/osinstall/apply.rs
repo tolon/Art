@@ -273,7 +273,7 @@ pub struct FileRecord {
     /// Windows filesystem will not carry every AmigaDOS name: `AUX` is one of
     /// the 22 reserved device names and it is really on the owner's AmigaOS
     /// 3.9 disc at `Storage/DOSDrivers/AUX`, and a legal AmigaDOS
-    /// `Prices: 1993` is refused outright. [`super::host_destination`]
+    /// `Prices? 1993` is refused outright. [`super::host_destination`]
     /// escapes those, and this is the record of it — without which the tree
     /// and the manifest would disagree about which file is which, and
     /// `core/preload` (which reads the Amiga name off the host filename)
@@ -955,7 +955,7 @@ impl<'a> TreeWriter<'a> {
 
             // The *host* path, which is `item.to` for every destination a
             // Windows filesystem can carry verbatim and an escaped form for
-            // the handful it cannot (`AUX`, `Prices: 1993`) — ART-160. The
+            // the handful it cannot (`AUX`, `Prices? 1993`) — ART-160. The
             // AmigaDOS name stays in `item.to`, which is what every record,
             // key and map below is built from.
             let target = super::host_destination(self.root, &item.to)?;
@@ -1052,6 +1052,25 @@ impl<'a> TreeWriter<'a> {
 /// corollary. See [`super::host_name_collisions`] for why escaping without
 /// this loses a file silently.
 fn refuse_host_name_collisions(items: &[PlanItem]) -> CoreResult<()> {
+    // ART-341, before the collision fold below: `:` and `/` are reserved in
+    // AmigaDOS itself, not merely awkward for a host filesystem, so a
+    // destination that carries one is not a name to escape — it is not an
+    // AmigaDOS name at all. `item.to` is split on `/` to walk it segment by
+    // segment, so `/` can never appear *inside* a segment here; what a
+    // leading, trailing or doubled `/` produces is an empty segment, refused
+    // the same way.
+    for item in items {
+        let amiga = item.to.as_str();
+        if amiga
+            .split('/')
+            .any(|segment| segment.contains(':') || segment.is_empty())
+        {
+            return Err(CoreError::AmigaNameReserved {
+                path: amiga.to_string(),
+            });
+        }
+    }
+
     // Every destination, drawers included — see `host_name_collisions` for
     // why the `is_dir` flag it used to take was the wrong question.
     let destinations: Vec<String> = items.iter().map(|item| item.to.clone()).collect();
@@ -2588,53 +2607,63 @@ mod tests {
     ///
     /// `Storage/DOSDrivers/AUX` is not invented: it is on the owner's own
     /// AmigaOS 3.9 disc, and `AUX` is one of the 22 device names Windows has
-    /// reserved since DOS. `Devs/Prices: 1993` is the other half of the same
-    /// problem and the harder one — a colon is legal in an AmigaDOS filename
-    /// and NTFS refuses it outright, so before this fix `apply()` did not
-    /// write it under a wrong name, it failed with a raw OS error partway
-    /// through building the tree.
+    /// reserved since DOS. `Devs/Prices? 1993` is the other half of the same
+    /// problem — `?` is legal in an AmigaDOS filename and NTFS refuses it
+    /// outright. (Before ART-341, this fixture used `Devs/Prices: 1993` for
+    /// the same purpose; a colon is not a legal AmigaDOS name at all, so
+    /// `apply()` now refuses it before either half of this fixture is
+    /// written — see [`planned_with_names`] and the test that uses it.)
     fn planned_with_host_hostile_names() -> (crate::core::ScratchDir, InstallPlan, PathBuf) {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let (_guard, dir) = fixtures::scratch(&format!("apply-hostile-{n}"));
+        let (_guard, dir) = fixtures::scratch("apply-hostile");
+        let plan = planned_with_names(&dir, &["Storage/DOSDrivers/AUX", "Devs/Prices? 1993"]);
+        (_guard, plan, dir)
+    }
+
+    /// [`planned_with_host_hostile_names`], generalised to take an arbitrary
+    /// list of destinations — ART-341's own test needs exactly one illegal
+    /// name, not the AUX/`?` pair that fixture demonstrates. `dir` must
+    /// already exist (the caller's own [`fixtures::scratch`]); this only adds
+    /// a `media` folder under it.
+    fn planned_with_names(dir: &Path, destinations: &[&str]) -> InstallPlan {
         let folder = dir.join("media");
         std::fs::create_dir(&folder).unwrap();
-        fixtures::media(
-            &folder,
-            "Workbench3.9",
-            "wb.adf",
-            &[("AUX", b"aux-driver", 0x00), ("Prices", b"listing", 0x00)],
-        );
+        let contents: Vec<Vec<u8>> = destinations
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("content-{i}").into_bytes())
+            .collect();
+        // The `from` names have to outlive the `entries` slice below, so
+        // they are built first, into their own owned vector.
+        let from_names: Vec<String> = (0..destinations.len()).map(|i| format!("F{i}")).collect();
+        let entries: Vec<(&str, &[u8], u32)> = from_names
+            .iter()
+            .zip(contents.iter())
+            .map(|(from, bytes)| (from.as_str(), bytes.as_slice(), 0x00))
+            .collect();
+        fixtures::media(&folder, "Workbench3.9", "wb.adf", &entries);
 
         let mut media_paths = BTreeMap::new();
         media_paths.insert("Workbench3.9".to_string(), folder.join("wb.adf"));
 
-        let items = vec![
-            PlanItem {
+        let items: Vec<PlanItem> = destinations
+            .iter()
+            .zip(from_names.iter())
+            .zip(contents.iter())
+            .map(|((to, from), bytes)| PlanItem {
                 component: "workbench-base".into(),
                 media: "Workbench3.9".into(),
-                from: "AUX".into(),
-                to: "Storage/DOSDrivers/AUX".into(),
+                from: from.clone(),
+                to: (*to).to_string(),
                 is_dir: false,
-                bytes: 10,
+                bytes: bytes.len() as u64,
                 decompress: false,
                 merge_icon: false,
-            },
-            PlanItem {
-                component: "workbench-base".into(),
-                media: "Workbench3.9".into(),
-                from: "Prices".into(),
-                to: "Devs/Prices: 1993".into(),
-                is_dir: false,
-                bytes: 7,
-                decompress: false,
-                merge_icon: false,
-            },
-        ];
+            })
+            .collect();
         let total_bytes = items.iter().map(|i| i.bytes).sum();
         let total_files = items.iter().filter(|i| !i.is_dir).count() as u64;
 
-        let plan = InstallPlan {
+        InstallPlan {
             release: "AmigaOS 3.9".into(),
             items,
             refusals: Vec::new(),
@@ -2650,18 +2679,72 @@ mod tests {
             media_stamps: BTreeMap::new(),
             removals: Vec::new(),
             layers: Vec::new(),
-        };
-        (_guard, plan, dir)
+        }
+    }
+
+    /// **ART-341.** `:` is not a legal AmigaDOS name at all — it separates a
+    /// device or volume name from the path after it — so a destination
+    /// carrying one is refused before anything is written, not escaped like
+    /// `Prices? 1993` is (that fixture is [`planned_with_host_hostile_names`],
+    /// just above).
+    #[test]
+    fn a_name_with_a_colon_is_refused_before_anything_is_written() {
+        let (_guard, dir) = fixtures::scratch("apply-colon");
+        let destination = dir.join("tree");
+        // The fixture every name test here uses, with one AmigaDOS-illegal
+        // name.
+        let plan = planned_with_names(&dir, &["Devs/Prices: 1993"]);
+        let err = apply_staging_in(
+            &plan,
+            &destination,
+            &dir,
+            &crate::core::clock::UtcClock,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-AMIGA-NAME-RESERVED");
+        assert!(err.to_string().contains("'Devs/Prices: 1993'"), "{err}");
+        assert!(
+            !destination.exists(),
+            "nothing may be written before the refusal"
+        );
+    }
+
+    /// **ART-341, the other reserved character.** A leading, trailing or
+    /// doubled `/` is an empty segment — `Devs//1993` is not a two-level
+    /// path, it is a name nobody could type on the Amiga — and gets the same
+    /// refusal as a colon, not a different one.
+    #[test]
+    fn a_name_with_a_doubled_slash_is_refused_before_anything_is_written() {
+        let (_guard, dir) = fixtures::scratch("apply-doubleslash");
+        let destination = dir.join("tree");
+        let plan = planned_with_names(&dir, &["Devs//1993"]);
+        let err = apply_staging_in(
+            &plan,
+            &destination,
+            &dir,
+            &crate::core::clock::UtcClock,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "ART-AMIGA-NAME-RESERVED");
+        assert!(
+            !destination.exists(),
+            "nothing may be written before the refusal"
+        );
     }
 
     /// **ART-160's corollary (F5): two names, one host file.**
     ///
     /// `windows_safe_name` maps every refused character onto the single
-    /// replacement `_`, so `Prices: 1993` and `Prices? 1993` — two different,
+    /// replacement `_`, so `Prices* 1993` and `Prices? 1993` — two different,
     /// legal AmigaDOS filenames — escape to the same host name. `apply` wrote
     /// items in order and `atomic_write` replaces, so the second silently
     /// overwrote the first and the tree held one file where the media held
     /// two. Refused before anything is written.
+    ///
+    /// (`*` and `?`, not `:` — a colon is not a legal AmigaDOS name at all
+    /// since ART-341 and is refused earlier, by a different test.)
     #[test]
     fn two_destinations_that_escape_to_one_host_name_are_refused() {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -2684,7 +2767,7 @@ mod tests {
                 component: "workbench-base".into(),
                 media: "Workbench3.9".into(),
                 from: "A".into(),
-                to: "Devs/Prices: 1993".into(),
+                to: "Devs/Prices* 1993".into(),
                 is_dir: false,
                 bytes: 5,
                 decompress: false,
@@ -2726,7 +2809,7 @@ mod tests {
         let err = apply(&plan, &root, &NoProgress).unwrap_err();
         assert_eq!(err.code(), "ART-SAFETY-REFUSED");
         let msg = format!("{err}");
-        assert!(msg.contains("Prices: 1993"), "{msg}");
+        assert!(msg.contains("Prices* 1993"), "{msg}");
         assert!(msg.contains("Prices? 1993"), "{msg}");
         assert!(
             msg.contains("Prices_ 1993"),
@@ -2761,13 +2844,20 @@ mod tests {
     /// pair differing only in case never met in the map: `apply` returned
     /// `Ok`, wrote one file and recorded two.
     ///
-    /// `Devs/Prices: 1993` claims `Devs/Prices_ 1993` and `Devs/prices? 1993`
+    /// `Devs/Prices* 1993` claims `Devs/Prices_ 1993` and `Devs/prices? 1993`
     /// claims `Devs/prices_ 1993` — two keys, one file on a case-insensitive
     /// filesystem. `destination_key` is what both sides use now.
+    ///
+    /// (`*` and `?`, not the same character differing only by case: AmigaDOS
+    /// itself folds case, so two destinations differing *only* in case are
+    /// the same AmigaDOS name — `same_destination` correctly calls that an
+    /// ordinary overwrite, not a clash, the same as `C/ASSIGN`/`C/Assign`
+    /// below. This test needs two names that are genuinely different on the
+    /// Amiga and still collide once escaped and case-folded on the host.)
     #[test]
     fn two_destinations_differing_only_in_case_still_collide() {
         let items = vec![
-            "Devs/Prices: 1993".to_string(),
+            "Devs/Prices* 1993".to_string(),
             "Devs/prices? 1993".to_string(),
         ];
         let clashes = crate::core::osinstall::host_name_collisions(&items);
@@ -2776,7 +2866,7 @@ mod tests {
             1,
             "the case fold must not hide it: {clashes:?}"
         );
-        assert_eq!(clashes[0].1, "Devs/Prices: 1993");
+        assert_eq!(clashes[0].1, "Devs/Prices* 1993");
         assert_eq!(clashes[0].2, "Devs/prices? 1993");
     }
 
@@ -2805,7 +2895,7 @@ mod tests {
                 component: "workbench-base".into(),
                 media: "Workbench3.9".into(),
                 from: "A".into(),
-                to: "Devs/Prices: 1993".into(),
+                to: "Devs/Prices* 1993".into(),
                 is_dir: false,
                 bytes: 5,
                 decompress: false,
@@ -2927,8 +3017,9 @@ mod tests {
             .join("_AUX")
             .is_file());
         assert!(!root.join("Storage").join("DOSDrivers").join("AUX").exists());
-        // ...and the colon one exists at all, which is the half that used to
-        // fail with an OS error rather than land wrong.
+        // ...and the `?` one too — the character NTFS refuses, as opposed to
+        // `:`, which is not a legal AmigaDOS name at all and is refused
+        // earlier (ART-341, a different test).
         assert!(root.join("Devs").join("Prices_ 1993").is_file());
 
         let manifest: DistributionManifest =
@@ -2951,7 +3042,7 @@ mod tests {
         let prices = manifest
             .files
             .iter()
-            .find(|f| f.path == "Devs/Prices: 1993")
+            .find(|f| f.path == "Devs/Prices? 1993")
             .expect("the manifest records the Amiga name");
         assert_eq!(prices.host_path.as_deref(), Some("Devs/Prices_ 1993"));
     }
@@ -2972,7 +3063,7 @@ mod tests {
 
         let names = crate::core::preload::amiga_names::AmigaNames::read(&root);
         assert_eq!(names.name_for("Storage/DOSDrivers/_AUX"), Some("AUX"));
-        assert_eq!(names.name_for("Devs/Prices_ 1993"), Some("Prices: 1993"));
+        assert_eq!(names.name_for("Devs/Prices_ 1993"), Some("Prices? 1993"));
     }
 
     /// A tree with nothing to escape carries no `hostPath` at all — the field

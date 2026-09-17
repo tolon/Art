@@ -78,6 +78,10 @@ pub fn run() {
                 .unwrap_or_else(|_| std::env::temp_dir());
             app.manage(JsonlOperationLog::new(log_dir.join("operations.jsonl")));
             app.manage(std::sync::Arc::new(JobRegistry::new()));
+            // One-button card sessions (ART-340): each holds its own scratch folder.
+            app.manage(std::sync::Arc::new(
+                crate::commands::cardos::CardOsSessions::default(),
+            ));
 
             // The software catalog and download cache (§41.5). Both live
             // outside any disk image by design: a failed download must never
@@ -142,6 +146,10 @@ pub fn run() {
             commands::card::card_build,
             commands::card::card_check_image,
             commands::card::card_intake,
+            commands::cardos::card_os_open,
+            commands::cardos::card_os_prepare,
+            commands::cardos::card_os_build,
+            commands::cardos::card_os_close,
             commands::preload::preload_probe,
             commands::preload::preload_plan,
             commands::preload::preload_run,

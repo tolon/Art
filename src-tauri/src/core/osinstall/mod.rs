@@ -673,7 +673,10 @@ pub(crate) fn strip_sys_prefix_ci(amiga_path: &str) -> Option<&str> {
 /// names are AmigaDOS names — and AmigaDOS allows names a Windows filesystem
 /// does not. `Storage/DOSDrivers/AUX` is on the owner's own AmigaOS 3.9 disc,
 /// and `AUX` is one of the 22 device names Windows has reserved since DOS;
-/// `Prices: 1993` is a legal AmigaDOS filename that NTFS refuses outright.
+/// `Prices? 1993` is a legal AmigaDOS filename that NTFS refuses outright
+/// (`:` and `/` are not legal AmigaDOS filenames at all — `apply` refuses a
+/// destination carrying either before this function is ever reached,
+/// ART-341).
 /// Every other "copy out" path in ART already escapes those through
 /// [`windows_safe_name`](crate::core::volume::write::copy::windows_safe_name),
 /// and this module wrote straight through under whatever name the media
@@ -741,7 +744,7 @@ pub fn host_relative(to: &str) -> String {
 ///
 /// | on the medium | on the host |
 /// |---|---|
-/// | `Devs/Prices: 1993` | `Devs/Prices_ 1993` |
+/// | `Devs/Prices* 1993` | `Devs/Prices_ 1993` |
 /// | `Devs/Prices? 1993` | `Devs/Prices_ 1993` |
 /// | `Storage/DOSDrivers/AUX` | `Storage/DOSDrivers/_AUX` |
 /// | `Storage/DOSDrivers/_AUX` | `Storage/DOSDrivers/_AUX` |
@@ -787,7 +790,7 @@ pub fn host_name_collisions(destinations: &[String]) -> Vec<(String, String, Str
     // Keyed on `destination_key`, **not** on the host path as spelled. The
     // first version keyed the map exact-case while comparing with
     // `same_destination` (which folds ASCII case), so a pair differing only
-    // in case never met in the map at all: `Devs/Prices: 1993` claimed
+    // in case never met in the map at all: `Devs/Prices* 1993` claimed
     // `Devs/Prices_ 1993` and `Devs/prices? 1993` claimed `Devs/prices_ 1993`,
     // two different keys for one file on a case-insensitive filesystem.
     // `apply` then returned `Ok`, wrote one file and recorded two — the exact

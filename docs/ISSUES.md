@@ -206,54 +206,50 @@ and a listing comes back short — ART-330's confident wrong sentence, from anot
 the block by name in both walks, as `Error::DamagedDirectory` does for a malformed entry, and give the fixture's late
 failure another shape.
 
-**ART-339** 🔵 **`core/card` and `core/preload` import each other, against CLAUDE.md's inward-layering rule** —
-*found 2026-09-17 by the pre-flight scan of card round 2's plan (ledger § 3, ruling R6), by reading; accepted for
-that round on `art-card-round-2`, unmerged*
-`src-tauri/src/core/preload/embed.rs` (`use crate::core::card::{is_dynamic_vhd, read_card}`),
-`src-tauri/src/core/card/content.rs` (`use crate::core::preload::{amiga_fold, first_collision}`,
-`preload::amiga_names::{write_record, AMIGA_NAMES_RECORD}`, `preload::native::…`) · CLAUDE.md: "a lower-level
-`core/` module must not import a higher-level one". `core/preload` already imported `core/card`'s card reader before
-round 2; round 2's `core/card/content.rs` imports `core/preload`'s name fold, collision rule, names record and native
-copy helpers, so the two modules now depend on each other. The round 2 plan's Global Constraints said "`core/preload`
-does not import `core/card`" — false on the day it was written; corrected in place (dated 2026-09-17). **Nothing is
-broken by it today:** `embed.rs` uses only `card/mod.rs`'s low-level readers, and nothing below imports
-`content.rs`. The cost is the one the rule exists for — neither module can be lifted into a crate alone.
-**Fix direction:** move `content.rs` out of `core/card` (for example to `core/cardcontent/`), or move the card
-reader `embed.rs` needs below both modules.
+**ART-342** 🔵 **`core/whdload` and `core/gameindex` import each other** — *found 2026-09-17 by card round 3's research
+(`.superpowers/sdd/2026-09-17-one-button-card-round-3/research-tree.md` § 1), by reading; not fixed*
+`src-tauri/src/core/whdload/install.rs` imports `core::gameindex` (`:624`, `:713-716`, `:1238-1240`) while
+`core/gameindex/readers/drawer.rs:24`, `lhadrawer.rs:67` and `whdhdf.rs:37` import `core::whdload` — the shape ART-339
+was. **Nothing is broken by it**; neither module can be lifted into a crate alone. Card round 3 put its own WHDLoad work
+in `core/cardos/` rather than deepen it. **Fix direction:** move `install.rs` (the volume installer, which needs the
+catalogue) up out of `core/whdload`, leaving `core/whdload` the pure layout analysis both use.
 
-**ART-340** 🟡 **A card source refused after unpacking began leaves its staging folder part-filled, and nothing owns
-removing it yet** — *found 2026-09-16 by card round 2's Task 9 (ledger), triaged by the final whole-branch review
-(2026-09-17) as acceptable for a core round and owed by round 3; on `art-card-round-2`, unmerged*
-`src-tauri/src/core/card/content.rs` (`prepare`, `prepare_archive`, `prepare_hardfile`). `prepare` refuses a hostile
-name, two escaped names that would share a host path and a hardfile's collisions before it writes anything, but a
-refusal that only the unpacking itself can find — a member that fails its CRC, a `.uaem` sidecar ART cannot read, a
-disk error — comes after files are already in `staging`. The contract is documented (`prepare`'s doc comment: "a
-refusal after unpacking began leaves `staging` for the caller to remove"), `staging` is the caller's scratch, and
-`require_empty_staging` stops the folder being reused by accident, so **nothing reaches a card today** — there is no
-caller. The cost arrives with round 3's `card_os_prepare`/`card_os_build`: a command that forgets it leaves a
-part-unpacked archive in the scratch root after every refused source. **Fix direction (round 3):** the command holds
-each source's staging folder in a `core::ScratchDir`-style guard that removes it on every ending, and when it cannot
-be removed, the refusal names the folder rather than claiming it is gone.
+**ART-343** 🟡 **Nothing checks that a prepared card's tree and sources are still what is on disk when it is
+built** — *found 2026-09-17 by card round 3's final whole-branch review
+(`.superpowers/sdd/2026-09-17-one-button-card-round-3/final-review.md`, M5), by reading; filed by the fix wave as
+design; narrowed 2026-09-17 by the residual fix round, which fixed the ROM half*
+`src-tauri/src/commands/cardos.rs` (`card_os_prepare` → `card_os_build`), `core/cardos/prepare.rs`
+(`PreparedCard`) · Between prepare and build the OS Builder may rewrite `tree/`, and folder sources are copied in
+place from the user's own folders, so System's re-check and every partition's size can be stale: the build then
+fails in its Partitions phase **after the image exists**. **Why filed, not fixed:** it needs a design — what a
+fingerprint of a large tree costs, whether a folder's mtime is trustworthy on every filesystem ART reads, and
+whether a change is refused or re-prepared — and the round's rule is that a fix wave does not build unreviewed
+design. **Fix direction:** record each source's size and modification time and the tree's fingerprint in
+`PreparedCard`; refuse in the build's preflight (which already runs before anything is written, card round 3 I3)
+when any differs, naming what changed and "prepare again". **The ROM half is fixed** (card round 3's residual
+round, re-review's split-out of M5): `core/cardos/kickstarts.rs::check_agreed` re-reads each agreed Kickstart's
+source through `identify_rom` and compares its WHDLoad CRC-16, and its size when the offer stated one, with the
+offer; a changed, missing or unreadable file is `CoreError::KickstartSourceChanged`
+(`ART-KICKSTART-SOURCE-CHANGED`), a `Refused { Whdload }` ending before the tree or the image is written, naming
+the file, both checksums and "prepare the card again". Tests:
+`an_agreed_kickstart_whose_file_changed_since_the_proposal_is_refused_by_name` (both arms: unchanged control,
+changed bytes, a stated size that differs, the file gone) and, through the build,
+`a_kickstart_changed_since_prepare_is_refused_before_the_tree_or_the_image`; the comparison, the size check and the
+call each mutated and seen red.
 
-**ART-341** 🟡 **`core/osinstall` treats `:` as legal in an AmigaDOS name and keeps such a name in the manifest, so a
-tree carrying one fails partway through the copy, after the format** — *found 2026-09-17 by card round 2's scoped
-re-review of the fix wave (`.superpowers/sdd/2026-09-16-one-button-card-round-2/fix-wave-re-review.md`), filed by
-reading; on `art-card-round-2`, unmerged; not fixed*
-`src-tauri/src/core/osinstall/mod.rs` (the doc comments at `host_destination`, ~676 and ~744) and `apply.rs` (~276,
-~958, ~2591) state that `Prices: 1993` is "a legal AmigaDOS filename", and the manifest keeps `:` names, while
-`core/volume/write/dir.rs` `check_name` refuses `:` and `/` — and the card (`content.rs` `refuse_unholdable_name`)
-now refuses them up front. **`:` is not legal:** AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
-Conventions — "Colons (:) and slashes (/) are reserved and cannot be used in file or directory names."
-(<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Working_With_AmigaDOS>); the *AmigaDOS Quick Reference*
-(Rugheimer/Spanik, Abacus 1988) says the same. It is the DOS naming rule, so OFS, FFS and PFS3 all sit behind it.
-The `Prices: 1993` name pinned in `apply.rs`'s tests is invented: a bounded search of the owner's material
-(`find /e/amiga -maxdepth 6 -iname "*prices*"`) found no such file, and the test's own comment says only `AUX`
-came from the owner's 3.9 disc. **Cost today:** none on real media — a sane writer cannot present such a name — but
-a tree built from a hostile or damaged image with a `:` name is recorded in `distribution.json` and then refused by
-`check_name` mid-copy, after the volume was formatted, instead of up front. **Fix direction:** osinstall refuses
-`/`/`:` names by name as `refuse_unholdable_name` does; the manifest rule in `core/preload/amiga_names.rs` refuses
-`:` like the record; the `Prices: 1993` fixture is replaced by a Windows-hostile name that *is* legal on the Amiga
-(`?`, `*`, `"`, `<`, `>`, `|` — e.g. `Prices? 1993`, which the collision tests already use).
+**ART-344** 🔵 **A card session's scratch folder is left behind when the app exits without closing it, and a
+panicking job leaves the session busy** — *found 2026-09-17 by card round 3's final whole-branch review
+(`final-review.md`, M6), by reading; filed by the fix wave as design, not built*
+`src-tauri/src/commands/cardos.rs` (`CardOsSessions`), `src-tauri/src/lib.rs` · A session folder under the scratch
+root (staging can be several GB) is removed by `card_os_close` or by the build's every ending. If the app exits
+without either, nothing removes it: Tauri does not drop managed state on exit, and `OwnedScratch`'s `Drop` backstop
+therefore never runs. With `panic = "abort"` a panic in a job does the same; in a dev build a panic leaves the
+session `busy` forever, so it cannot be closed. `OwnedScratch::create_in` names a leftover folder when a later run
+reuses its name (card round 3, M15), but nothing finds and offers to remove the rest. **Why filed, not fixed:** an
+exit hook that deletes several GB while the window closes, and a startup sweep of `card-os-*` folders from earlier
+processes, are both design choices (what to remove without asking, what to show). **Fix direction:** drain
+`CardOsSessions` on `RunEvent::Exit` and report what could not be removed to the log; list leftover `card-os-*`
+folders under the scratch root at startup and offer them for removal, never removing one silently.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
@@ -278,6 +274,9 @@ Fixed and closed entries live in full, verbatim, in
 [ISSUES-archive.md](ISSUES-archive.md). The index below lists each one, newest
 first, as `ID · title · when it was fixed` (the date as the entry states it).
 
+- [ART-341](ISSUES-archive.md) · `core/osinstall` treated `:` as legal in an AmigaDOS name and kept such a name in the manifest, so a tree carrying one failed partway through the copy, after the format — fixed: `:` and an empty path segment are refused before anything is written · fixed 2026-09-17
+- [ART-340](ISSUES-archive.md) · A card source refused after unpacking began left its staging folder part-filled, with nothing owning its removal — fixed: a product scratch guard (`OwnedScratch`) that a card-OS session holds and removes on every ending · fixed 2026-09-17
+- [ART-339](ISSUES-archive.md) · `core/card` and `core/preload` imported each other, against CLAUDE.md's inward-layering rule — fixed: `content.rs` moved to `core/cardos/`, above both · fixed 2026-09-17
 - [ART-338](ISSUES-archive.md) · ART's own LZX reader refused a match that reaches back before a merged group's first byte, which real archives do — fixed: that part of the window reads as zeros, as the Amiga archiver's does · fixed 2026-09-17
 - [ART-337](ISSUES-archive.md) · ART's native FFS copy dropped a `.uaem` sidecar's comment, for files and drawers, without counting the loss · fixed 2026-09-17
 - [ART-336](ISSUES-archive.md) · hst-imager's fallback copy ignored every `.uaem` sidecar, silently — protection bits, dates and comments were dropped and nothing said so · fixed 2026-09-17

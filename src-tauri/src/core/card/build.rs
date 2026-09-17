@@ -120,15 +120,67 @@ pub fn build_card(
     spec: &CardSpec,
     progress: &dyn ProgressSink,
 ) -> CoreResult<BuiltCard> {
+    build_card_reporting(dest, spec, progress).map_err(|failure| failure.error)
+}
+
+/// What became of the file a failed [`build_card_reporting`] was writing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageLeft {
+    /// The build ended before it created the file: nothing of its is there.
+    NotCreated,
+    /// The build created the file and removed it again.
+    Removed,
+    /// The build created the file and could not remove it; `why` is the
+    /// removal's own error.
+    NotRemoved { why: String },
+}
+
+/// A failed build: its error, and what it did with the file it was writing.
+#[derive(Debug)]
+pub struct CardBuildFailure {
+    pub error: CoreError,
+    pub image: ImageLeft,
+}
+
+/// [`build_card`], saying on a failure whether the file was created and, if
+/// so, whether it was removed — a caller that reports the file's fate must
+/// not have to guess it from the filesystem (card round 3, I2).
+pub fn build_card_reporting(
+    dest: &Path,
+    spec: &CardSpec,
+    progress: &dyn ProgressSink,
+) -> Result<BuiltCard, Box<CardBuildFailure>> {
+    build_card_with(dest, spec, progress, read_card, |file, len| {
+        file.set_len(len)
+    })
+}
+
+/// [`build_card_reporting`]'s body, with the read-back reader and the sizing
+/// call passed in — the seams that let a test make a step after the file's
+/// creation fail without a card the real reader cannot read or a disk that
+/// is really full.
+fn build_card_with(
+    dest: &Path,
+    spec: &CardSpec,
+    progress: &dyn ProgressSink,
+    read: impl Fn(&Path) -> CoreResult<CardImage>,
+    size: impl Fn(&std::fs::File, u64) -> std::io::Result<()>,
+) -> Result<BuiltCard, Box<CardBuildFailure>> {
+    let refused = |error: CoreError| {
+        Box::new(CardBuildFailure {
+            error,
+            image: ImageLeft::NotCreated,
+        })
+    };
     if dest.exists() {
-        return Err(CoreError::SafetyRefused(format!(
+        return Err(refused(CoreError::SafetyRefused(format!(
             "'{}' already exists — ART will not build over a card that is already there",
             dest.display()
-        )));
+        ))));
     }
 
     let shares: Vec<u64> = spec.areas.iter().map(|area| area.size_bytes).collect();
-    let layout = plan_card(spec.total_bytes, spec.boot_bytes, &shares)?;
+    let layout = plan_card(spec.total_bytes, spec.boot_bytes, &shares).map_err(refused)?;
 
     // Steps, for the bar: the table, the boot partition, then one per area,
     // then reading it back.
@@ -144,58 +196,67 @@ pub fn build_card(
         .read(true)
         .write(true)
         .create_new(true)
-        .open(dest)?;
+        .open(dest)
+        .map_err(|err| refused(CoreError::Io(err)))?;
 
-    // **The destination decides the container.** A `.vhd` costs what it holds;
-    // anything else is the raw image every card writer takes. Both are laid
-    // out by the same code below — `lay_out` is generic over `Read + Write +
-    // Seek`, which `create_boot_partition` already required — so the two paths
-    // cannot drift apart in what they write, only in how it is stored.
-    let as_vhd = dest
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("vhd"));
+    // From here on the file is ART's own from this call: **every** error
+    // removes it, and says whether the removal worked. The file handle is
+    // moved into `written` and closed before the removal — Windows does not
+    // delete a file that is still open.
+    let written = (|| -> CoreResult<BuiltCard> {
+        // **The destination decides the container.** A `.vhd` costs what it
+        // holds; anything else is the raw image every card writer takes. Both
+        // are laid out by the same code below — `lay_out` is generic over
+        // `Read + Write + Seek`, which `create_boot_partition` already
+        // required — so the two paths cannot drift apart in what they write,
+        // only in how it is stored.
+        let as_vhd = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("vhd"));
 
-    let outcome = if as_vhd {
-        let mut image =
-            crate::core::vhd::DynamicVhd::create(file, layout.total_sectors * SECTOR_BYTES)?;
-        let laid = lay_out(&mut image, &layout, spec, &mut step, progress);
-        match laid {
-            Ok(()) => image.finish()?.sync_all().map_err(CoreError::Io),
-            Err(err) => Err(err),
+        if as_vhd {
+            let mut image =
+                crate::core::vhd::DynamicVhd::create(file, layout.total_sectors * SECTOR_BYTES)?;
+            lay_out(&mut image, &layout, spec, &mut step, progress)?;
+            image.finish()?.sync_all()?;
+        } else {
+            let mut image = file;
+            size(&image, layout.total_sectors * SECTOR_BYTES)?;
+            lay_out(&mut image, &layout, spec, &mut step, progress)?;
+            image.sync_all()?;
         }
-    } else {
-        let mut image = file;
-        image.set_len(layout.total_sectors * SECTOR_BYTES)?;
-        let laid = lay_out(&mut image, &layout, spec, &mut step, progress);
-        match laid {
-            Ok(()) => image.sync_all().map_err(CoreError::Io),
-            Err(err) => Err(err),
+
+        step("Checking what was built");
+        let verified = read(dest)?;
+        if verified.areas.len() != spec.areas.len() {
+            return Err(CoreError::Malformed {
+                format: "card".into(),
+                detail: format!(
+                    "the card was written with {} Amiga disks and reads back with {}",
+                    spec.areas.len(),
+                    verified.areas.len()
+                ),
+            });
         }
-    };
+        Ok(BuiltCard {
+            layout: layout.clone(),
+            verified,
+        })
+    })();
 
-    if let Err(err) = outcome {
-        // §54: between whole units of work. The half-built file is ART's own —
-        // it did not exist a moment ago — so it goes with the failure rather
-        // than being left as a card-shaped thing somebody might try to boot.
-        let _ = std::fs::remove_file(dest);
-        return Err(err);
-    }
-
-    step("Checking what was built");
-    let verified = read_card(dest)?;
-    if verified.areas.len() != spec.areas.len() {
-        return Err(CoreError::Malformed {
-            format: "card".into(),
-            detail: format!(
-                "the card was written with {} Amiga disks and reads back with {}",
-                spec.areas.len(),
-                verified.areas.len()
-            ),
-        });
-    }
-
-    Ok(BuiltCard { layout, verified })
+    written.map_err(|error| {
+        // §54: between whole units of work. A half-built file goes with the
+        // failure rather than being left as a card-shaped thing somebody
+        // might try to boot — and the removal's own outcome is kept.
+        let image = match std::fs::remove_file(dest) {
+            Ok(()) => ImageLeft::Removed,
+            Err(err) => ImageLeft::NotRemoved {
+                why: err.to_string(),
+            },
+        };
+        Box::new(CardBuildFailure { error, image })
+    })
 }
 
 /// Put the table, the boot partition and every RDB into an image.
@@ -609,6 +670,104 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A build whose read-back fails does not leave the file it just wrote —
+    /// it is ART's own from this call, and a card ART cannot itself read back
+    /// is not a card. R7: a minimal one-area spec (the reader is injected, so
+    /// the spec only has to lay out honestly).
+    #[test]
+    fn a_card_that_does_not_read_back_is_removed_not_left() {
+        let (_guard, dir) = scratch("readback");
+        let dest = dir.join("card.img");
+
+        let spec = CardSpec::new(
+            SMALLEST,
+            vec![AreaSpec {
+                size_bytes: 0,
+                partitions: vec![work_partition("SDH0", 512)],
+                file_systems: Vec::new(),
+            }],
+        );
+
+        let failure = build_card_with(
+            &dest,
+            &spec,
+            &NoProgress,
+            |_| {
+                Err(CoreError::Malformed {
+                    format: "card".into(),
+                    detail: "injected".into(),
+                })
+            },
+            |file, len| file.set_len(len),
+        )
+        .unwrap_err();
+
+        assert!(
+            failure.error.to_string().contains("injected"),
+            "{}",
+            failure.error
+        );
+        assert_eq!(failure.image, ImageLeft::Removed);
+        assert!(!dest.exists(), "a build that cannot be read is removed");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// I2 (card round 3): a failure right after the file is created — the
+    /// sizing call, as a full disk makes it fail — removes the file and says
+    /// so. It used to return through `?` and leave a 0-byte image behind
+    /// while its caller reported that nothing had been created.
+    #[test]
+    fn a_failure_after_the_file_is_created_removes_it_and_says_so() {
+        let (_guard, dir) = scratch("sizing-fails");
+        let dest = dir.join("card.img");
+        let spec = CardSpec::new(
+            SMALLEST,
+            vec![AreaSpec {
+                size_bytes: 0,
+                partitions: vec![work_partition("SDH0", 512)],
+                file_systems: Vec::new(),
+            }],
+        );
+
+        let failure = build_card_with(&dest, &spec, &NoProgress, read_card, |_, _| {
+            Err(std::io::Error::other(
+                "there is not enough space on the disk",
+            ))
+        })
+        .unwrap_err();
+
+        assert!(
+            failure.error.to_string().contains("not enough space"),
+            "{}",
+            failure.error
+        );
+        assert_eq!(failure.image, ImageLeft::Removed);
+        assert!(!dest.exists(), "the file this build created is gone");
+    }
+
+    /// A refusal before the file exists says `NotCreated`, and a file that
+    /// was already there is not touched.
+    #[test]
+    fn a_refusal_before_creation_reports_not_created() {
+        let (_guard, dir) = scratch("refused-reporting");
+        let dest = dir.join("card.img");
+        std::fs::write(&dest, b"somebody's afternoon").unwrap();
+        let spec = CardSpec::new(
+            SMALLEST,
+            vec![AreaSpec {
+                size_bytes: 0,
+                partitions: vec![work_partition("SDH0", 512)],
+                file_systems: Vec::new(),
+            }],
+        );
+
+        let failure = build_card_reporting(&dest, &spec, &NoProgress).unwrap_err();
+
+        assert_eq!(failure.image, ImageLeft::NotCreated);
+        assert_eq!(std::fs::read(&dest).unwrap(), b"somebody's afternoon");
     }
 
     /// A card too small is refused before anything is created, and leaves no

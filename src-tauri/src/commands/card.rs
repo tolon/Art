@@ -17,7 +17,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
-use crate::core::card::build::{build_card, AreaSpec, CardSpec};
+use crate::core::card::build::{build_card, AreaSpec, BuiltCard, CardSpec};
 use crate::core::card::health::{check_image, HealthReport};
 use crate::core::card::intake::{role_for, CardRole};
 use crate::core::card::manifest::{
@@ -76,7 +76,7 @@ pub fn card_open(path: String) -> AppResult<CardReport> {
 }
 
 /// The two derived answers, in the one place that knows the rule.
-fn report_for(card: CardImage) -> CardReport {
+pub(crate) fn report_for(card: CardImage) -> CardReport {
     let file_systems = card.file_systems();
     let unmountable = card
         .partitions_missing_driver()
@@ -618,12 +618,21 @@ pub fn card_plan_build(request: CardBuildRequest) -> AppResult<CardBuildPlan> {
     })
 }
 
-/// Build the requested card. The half a unit test can host — `card_build` adds
-/// the job, the event and the log around it.
-fn build_requested_card(
-    request: &CardBuildRequest,
-    progress: &dyn ProgressSink,
-) -> CoreResult<BuiltRequestedCard> {
+/// Everything a card image is built from, read and checked before anything
+/// is created: the payload, the source facts hashed, the driver read and the
+/// card laid out as a [`CardSpec`]. A refusal here — a missing archive, a
+/// driver silent about its version, an encrypted ROM without its key — leaves
+/// nothing on disk.
+pub(crate) struct CardImageInputs {
+    pub spec: CardSpec,
+    pub facts: SourceFacts,
+    pub boot_files: Vec<ManifestFile>,
+}
+
+/// Read and check what [`CardImageInputs`] holds. The source facts are hashed
+/// **before** the image is created, so a source that cannot be hashed leaves
+/// no image behind.
+pub(crate) fn card_image_inputs(request: &CardBuildRequest) -> CoreResult<CardImageInputs> {
     let payload = payload_for(request)?;
 
     // Hashed here, from the bytes about to be written — the only place they
@@ -637,20 +646,50 @@ fn build_requested_card(
             sha256: sha256_bytes(&file.bytes),
         })
         .collect();
-    let kernel_file = payload.kernel_file.clone();
+    let facts = source_facts(request, &payload.kernel_file)?;
 
-    let image = Path::new(request.dest.trim());
     let spec = card_spec(request, payload.files)?;
-    let built = build_card(image, &spec, progress)?;
+    Ok(CardImageInputs {
+        spec,
+        facts,
+        boot_files,
+    })
+}
+
+/// Write the card image `request` describes at `dest`: [`card_image_inputs`],
+/// then the card built and read back. The manifest is the caller's —
+/// `build_requested_card` writes it beside `dest` at once, and the one-button
+/// card (`commands/cardos.rs`) takes the two halves separately, so that every
+/// refusal comes before its own first write.
+pub(crate) fn write_card_image(
+    request: &CardBuildRequest,
+    dest: &Path,
+    progress: &dyn ProgressSink,
+) -> CoreResult<(BuiltCard, SourceFacts, Vec<ManifestFile>)> {
+    let inputs = card_image_inputs(request)?;
+    let built = build_card(dest, &inputs.spec, progress)?;
+    Ok((built, inputs.facts, inputs.boot_files))
+}
+
+/// Build the requested card. The half a unit test can host — `card_build` adds
+/// the job, the event and the log around it.
+fn build_requested_card(
+    request: &CardBuildRequest,
+    progress: &dyn ProgressSink,
+) -> CoreResult<BuiltRequestedCard> {
+    let image = Path::new(request.dest.trim());
+    let (built, facts, boot_files) = write_card_image(request, image, progress)?;
 
     // G7: the manifest is written from the *finished* card, so it records what
     // is there rather than what the builder meant. Beside the image, through
     // `core/safety` like every other write.
     let manifest = describe_card(
         image,
-        source_facts(request, &kernel_file)?,
+        facts,
         boot_files,
         request.built_at.clone(),
+        Vec::new(),
+        Vec::new(),
     )?;
     let manifest_path = manifest_path_for(image);
     atomic_write(&manifest_path, render_manifest(&manifest)?.as_bytes())?;

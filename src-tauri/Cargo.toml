@@ -228,6 +228,15 @@ jpeg-decoder = { version = "0.3", default-features = false }
 [patch.crates-io]
 libpfs3 = { path = "vendor/libpfs3" }
 
+# GetDiskFreeSpaceExW, for the card build's own free-space preflight
+# (design § 6, `core/cardos/prepare.rs`). **Outside `core/`**, in
+# `tools/free_space.rs`: a card build refuses before it writes when the
+# image's or the scratch's volume is short. Already in the build through
+# other crates at this exact version (`trash`, `chrono`); this makes it a
+# direct dependency with one feature rather than an undocumented incidental.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 # The 7z *encoder*, for building test fixtures only. ART ships no archives, so
 # every fixture is written at runtime — and a 7z cannot be hand-assembled the

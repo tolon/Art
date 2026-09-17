@@ -55,7 +55,7 @@
 //! It is deliberately not `distribution.json` under a different name —
 //! writing that filename here would let a hostile archive entry impersonate
 //! the manifest this module already trusts (see `SourceKind`/`place_archive`
-//! in `core/card/content.rs`, which never stages an entry called either name
+//! in `core/cardos/content.rs`, which never stages an entry called either name
 //! at a source's root). And it is written **only when there is something to
 //! record**: an empty map is refused rather than written, so a folder that
 //! needed no escaping never carries the file at all, and
@@ -231,8 +231,14 @@ impl AmigaNames {
         for (host, amiga) in pairs {
             let host_parts: Vec<&str> = host.split('/').collect();
             let amiga_parts: Vec<&str> = amiga.split('/').collect();
+            // ART-341: `:` is reserved in AmigaDOS itself, the same rule
+            // `record_pairs` already applies to the private record below —
+            // the manifest half used to keep such a name, which is the gap
+            // that issue closed.
             if host_parts.len() != amiga_parts.len()
-                || !amiga_parts.iter().all(|part| is_one_segment(part))
+                || !amiga_parts
+                    .iter()
+                    .all(|part| is_one_segment(part) && !part.contains(':'))
             {
                 continue;
             }
@@ -269,12 +275,16 @@ impl AmigaNames {
 }
 
 /// A value that can be one node's name: not empty, not `.` or `..`, and no
-/// `/`. The record also refuses `:`. The manifest does not yet, but `:` is
-/// not legal in an AmigaDOS name either — AmigaOS Manual, *AmigaDOS: Working
-/// With AmigaDOS*, § Naming Conventions: "Colons (:) and slashes (/) are
-/// reserved and cannot be used in file or directory names."
+/// `/`. `:` is refused too, by both callers (`record_pairs` directly, and
+/// `from_records` beside this) — it is not legal in an AmigaDOS name either
+/// — AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
+/// Conventions: "Colons (:) and slashes (/) are reserved and cannot be used
+/// in file or directory names."
 /// (<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Working_With_AmigaDOS>).
-/// `core/osinstall` keeps such names today; that is ART-341, not a rule.
+/// `core/osinstall::apply` refuses such a destination before anything is
+/// written (ART-341), so a well-formed manifest never carries one — this is
+/// a second line of defence for a manifest that predates that fix, or was
+/// hand-edited.
 fn is_one_segment(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }
@@ -342,6 +352,16 @@ mod tests {
     fn a_pair_whose_halves_disagree_on_depth_is_dropped() {
         let names = AmigaNames::from_records([("A/B", "A/B/C")].into_iter());
         assert!(names.is_empty());
+    }
+
+    /// ART-341: the manifest half refuses a colon the same way `record_pairs`
+    /// already does — a `distribution.json` built before that fix, or hand
+    /// edited, must not resurrect an AmigaDOS-illegal name.
+    #[test]
+    fn the_manifest_half_refuses_a_colon_as_the_record_half_does() {
+        let names =
+            AmigaNames::from_records([("Devs/Prices_ 1993", "Devs/Prices: 1993")].into_iter());
+        assert_eq!(names.name_for("Devs/Prices_ 1993"), None);
     }
 
     /// **ART-160's other half.** A staging folder with no `distribution.json`

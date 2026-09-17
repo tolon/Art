@@ -101,6 +101,28 @@ pub struct SourceFacts {
     pub kernel_file: String,
 }
 
+/// What ART put into one partition. Names only, never host paths: a manifest
+/// is shareable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PartitionContent {
+    /// Which Amiga area of the card the partition is in, counted from 0 in
+    /// the order the card's table lists them — a drive name is unique only
+    /// within its own RDB (card round 3, M12). A manifest written before the
+    /// field existed was a one-area card: 0.
+    #[serde(default)]
+    pub area: usize,
+    pub drive_name: String,
+    pub volume_name: String,
+    /// Each source's file name (`WHDLoadDemos100.lha`, `Games`) — `system
+    /// tree` for System.
+    pub sources: Vec<String>,
+    pub files: u64,
+    pub bytes: u64,
+    /// `"native"`, or `hst-imager <its probed version>`.
+    pub writer: String,
+}
+
 /// One primary partition, as the table records it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotFacts {
@@ -148,6 +170,11 @@ pub struct CardManifest {
     /// shape as one written then.
     #[serde(default)]
     pub os: Vec<String>,
+    /// What ART put into each partition. Empty for a card the Card Builder
+    /// screen built — its volumes stay unformatted — and for a manifest
+    /// written before this field existed.
+    #[serde(default)]
+    pub partitions: Vec<PartitionContent>,
 }
 
 /// Something on the card that does not match its manifest.
@@ -291,6 +318,8 @@ pub fn describe_card(
     source: SourceFacts,
     boot_files: Vec<ManifestFile>,
     built_at: Option<String>,
+    os: Vec<String>,
+    partitions: Vec<PartitionContent>,
 ) -> CoreResult<CardManifest> {
     let facts = read_facts(image)?;
 
@@ -304,7 +333,8 @@ pub fn describe_card(
         source,
         boot_files,
         areas: facts.areas,
-        os: Vec::new(),
+        os,
+        partitions,
     })
 }
 
@@ -461,6 +491,7 @@ mod tests {
             }],
             areas: Vec::new(),
             os: Vec::new(),
+            partitions: Vec::new(),
         }
     }
 
@@ -509,7 +540,8 @@ mod tests {
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
-        let manifest = describe_card(&image, source(), boot_files(), None).unwrap();
+        let manifest =
+            describe_card(&image, source(), boot_files(), None, Vec::new(), Vec::new()).unwrap();
 
         assert_eq!(manifest.schema, MANIFEST_SCHEMA);
         assert_eq!(manifest.total_bytes, 2 * GIB);
@@ -532,7 +564,8 @@ mod tests {
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
-        let manifest = describe_card(&image, source(), boot_files(), None).unwrap();
+        let manifest =
+            describe_card(&image, source(), boot_files(), None, Vec::new(), Vec::new()).unwrap();
         let report = verify_against_image(&manifest, &image).unwrap();
 
         assert!(report.matches(), "{:?}", report.findings);
@@ -549,7 +582,8 @@ mod tests {
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
-        let manifest = describe_card(&image, source(), boot_files(), None).unwrap();
+        let manifest =
+            describe_card(&image, source(), boot_files(), None, Vec::new(), Vec::new()).unwrap();
         let report = verify_against_image(&manifest, &image).unwrap();
 
         assert_eq!(
@@ -568,7 +602,8 @@ mod tests {
         let (_guard, dir) = scratch("tamper");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
-        let manifest = describe_card(&image, source(), boot_files(), None).unwrap();
+        let manifest =
+            describe_card(&image, source(), boot_files(), None, Vec::new(), Vec::new()).unwrap();
 
         // A byte inside the first entry's CHS fields: the table's bytes change
         // and `read_card` still parses it, which is the case a checksum has to
@@ -608,7 +643,8 @@ mod tests {
         let (_guard, dir) = scratch("rdb-tamper");
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
-        let manifest = describe_card(&image, source(), boot_files(), None).unwrap();
+        let manifest =
+            describe_card(&image, source(), boot_files(), None, Vec::new(), Vec::new()).unwrap();
         let area = manifest.areas[0].offset_bytes;
 
         let mut file = std::fs::OpenOptions::new()
@@ -641,7 +677,8 @@ mod tests {
         build(&mine, 2 * GIB, "SDH0");
         build(&theirs, 4 * GIB, "WORK");
 
-        let manifest = describe_card(&mine, source(), boot_files(), None).unwrap();
+        let manifest =
+            describe_card(&mine, source(), boot_files(), None, Vec::new(), Vec::new()).unwrap();
         let report = verify_against_image(&manifest, &theirs).unwrap();
 
         assert!(!report.matches());
@@ -665,7 +702,8 @@ mod tests {
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
-        let mut manifest = describe_card(&image, source(), boot_files(), None).unwrap();
+        let mut manifest =
+            describe_card(&image, source(), boot_files(), None, Vec::new(), Vec::new()).unwrap();
         manifest.schema = MANIFEST_SCHEMA + 1;
 
         let report = verify_against_image(&manifest, &image).unwrap();
@@ -726,6 +764,19 @@ mod tests {
         assert_eq!(read.source.kickstart_stated_major, None);
     }
 
+    /// A manifest written before `partitions` existed still reads. Built by
+    /// removing the key from a real manifest's own JSON, like the field above
+    /// — a hand-typed literal would drift from the schema the moment another
+    /// field is added.
+    #[test]
+    fn a_manifest_written_before_partitions_existed_still_reads() {
+        let mut value = serde_json::to_value(manifest()).unwrap();
+        value.as_object_mut().unwrap().remove("partitions");
+        let read: CardManifest = serde_json::from_value(value).unwrap();
+
+        assert!(read.partitions.is_empty());
+    }
+
     /// It has to survive a trip through the file it is written to.
     #[test]
     fn a_manifest_round_trips_through_json() {
@@ -733,8 +784,15 @@ mod tests {
         let image = dir.join("card.img");
         build(&image, 2 * GIB, "SDH0");
 
-        let manifest =
-            describe_card(&image, source(), boot_files(), Some("2026-08-14".into())).unwrap();
+        let manifest = describe_card(
+            &image,
+            source(),
+            boot_files(),
+            Some("2026-08-14".into()),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
         let path = manifest_path_for(&image);
         std::fs::write(&path, render_manifest(&manifest).unwrap()).unwrap();
 

@@ -315,10 +315,10 @@ pub struct StopReport {
 
 /// A run that stopped, with what it had done and which tool did each step.
 #[derive(Debug)]
-struct Stopped {
-    error: CoreError,
-    outcome: PreloadOutcome,
-    steps: Vec<StepReport>,
+pub(crate) struct Stopped {
+    pub(crate) error: CoreError,
+    pub(crate) outcome: PreloadOutcome,
+    pub(crate) steps: Vec<StepReport>,
 }
 
 /// What one step changed, so [`run_with_fallback`] can fold it into a
@@ -481,7 +481,7 @@ fn paired_copy_forces_fallback(
 /// through `copy_in` or `can_copy_in`. So trying native first and reacting
 /// to exactly this typed error never leaves a half-written step behind — the
 /// failed attempt touched nothing.
-fn run_with_fallback(
+pub(crate) fn run_with_fallback(
     made: &PreloadPlan,
     native: &dyn VolumeFormatter,
     fallback: Option<&dyn VolumeFormatter>,
@@ -2198,7 +2198,8 @@ mod tests {
                 kernel_file,
             };
 
-            let manifest = describe_card(image, source, boot_files, None).expect("describe_card");
+            let manifest = describe_card(image, source, boot_files, None, Vec::new(), Vec::new())
+                .expect("describe_card");
             atomic_write(
                 &manifest_path_for(image),
                 render_manifest(&manifest).unwrap().as_bytes(),

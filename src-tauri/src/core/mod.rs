@@ -18,6 +18,7 @@ pub mod archive;
 pub mod artwork;
 pub mod binary;
 pub mod card;
+pub mod cardos;
 pub mod cbm;
 pub mod clock;
 pub mod compatibility;
@@ -52,6 +53,7 @@ pub mod rdbedit;
 pub mod recovery;
 pub mod rom;
 pub mod safety;
+pub mod scratch_guard;
 pub mod security;
 pub mod sources;
 pub mod validation;
@@ -1646,5 +1648,156 @@ fn production_after() -> u32 {
              cannot read these files at all: {}",
             blind.join(", ")
         );
+    }
+
+    /// ART-339: `core/card` must not import `core/preload` — the two used to
+    /// import each other, against CLAUDE.md's inward-layering rule — and now
+    /// that `core/cardos` sits above both (`core/cardos/mod.rs`'s own module
+    /// doc), nothing below `core/cardos` may import it either, or the new
+    /// module becomes exactly the layering problem it was created to close.
+    ///
+    /// Mutate by adding a line naming `crate::core::preload` to a product file
+    /// under `core/card/`, or a line naming `crate::core::cardos` to a product
+    /// file outside `core/cardos/`; each fails.
+    #[test]
+    fn core_card_does_not_import_preload_and_nothing_below_imports_cardos() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core");
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&rel, &lines);
+            // A `use` statement is read whole, however many lines it spans.
+            let mut statement: Option<(usize, String)> = None;
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                let starts_use = {
+                    let t = line.trim_start();
+                    t.starts_with("use ")
+                        || t.starts_with("pub use ")
+                        || t.starts_with("pub(crate) use ")
+                };
+                if statement.is_none() && starts_use {
+                    statement = Some((n, String::new()));
+                }
+                let mut checked = vec![(n, line.to_string())];
+                if let Some((first, text)) = statement.as_mut() {
+                    text.push_str(line);
+                    text.push(' ');
+                    if line.contains(';') {
+                        checked.push((*first, std::mem::take(text)));
+                        statement = None;
+                    }
+                }
+                for (at, text) in checked {
+                    let card_imports_preload =
+                        rel.starts_with("card/") && use_names_module(&text, "preload");
+                    let below_imports_cardos =
+                        !rel.starts_with("cardos/") && use_names_module(&text, "cardos");
+                    if card_imports_preload || below_imports_cardos {
+                        offenders.push(format!("{rel}:{}: {}", at + 1, text.trim()));
+                    }
+                }
+            }
+        }
+        offenders.dedup();
+        assert!(offenders.is_empty(), "layering (ART-339): {offenders:#?}");
+    }
+
+    /// Whether `text` — one line, or a whole `use` statement joined — names
+    /// `core::<module>` in any spelling (card round 3, M10).
+    fn use_names_module(text: &str, module: &str) -> bool {
+        let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        // Every path that starts at `crate::core::`, wherever it is.
+        let mut roots: Vec<&str> = compact
+            .match_indices("crate::core::")
+            .map(|(at, found)| &compact[at + found.len()..])
+            .collect();
+        // A `use super::…` statement climbs to `core/` from inside it.
+        let statement = compact
+            .strip_prefix("pub(crate)")
+            .or_else(|| compact.strip_prefix("pub"))
+            .unwrap_or(&compact);
+        if let Some(mut rest) = statement.strip_prefix("use") {
+            let mut climbed = false;
+            while let Some(after) = rest.strip_prefix("super::") {
+                rest = after;
+                climbed = true;
+            }
+            if climbed {
+                roots.push(rest);
+            }
+        }
+        roots
+            .into_iter()
+            .any(|rest| first_level_names(rest).contains(&module))
+    }
+
+    /// The names a path begins with: `cardos::x` is `[cardos]`, and
+    /// `{card, cardos::{a, b}}` is `[card, cardos]`.
+    fn first_level_names(rest: &str) -> Vec<&str> {
+        fn ident(s: &str) -> &str {
+            let end = s
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(s.len());
+            &s[..end]
+        }
+        let Some(group) = rest.strip_prefix('{') else {
+            return vec![ident(rest)];
+        };
+        let mut names = Vec::new();
+        let mut depth = 0usize;
+        let mut start = 0usize;
+        for (at, c) in group.char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' if depth == 0 => {
+                    names.push(ident(&group[start..at]));
+                    return names;
+                }
+                '}' => depth -= 1,
+                ',' if depth == 0 => {
+                    names.push(ident(&group[start..at]));
+                    start = at + 1;
+                }
+                _ => {}
+            }
+        }
+        names.push(ident(&group[start..]));
+        names
+    }
+
+    /// M10: the layering guard used to match one spelling. A grouped import,
+    /// one split across lines, and a `super::` path all name the module too.
+    #[test]
+    fn a_layering_import_is_seen_in_every_spelling() {
+        for named in [
+            "use crate::core::cardos::prepare::stage_card;",
+            "use crate::core::{card, cardos::prepare};",
+            "use crate::core::{ card::sizing, cardos };",
+            "use crate::core::{error::CoreError, cardos::{kickstarts, whdload}};",
+            "pub(crate) use super::super::cardos::partial;",
+            "use super::cardos;",
+            "let x = crate::core::cardos::prepare::measure_card;",
+        ] {
+            assert!(use_names_module(named, "cardos"), "{named}");
+        }
+        for not_named in [
+            "use crate::core::card::sizing;",
+            "use crate::core::{card, preload};",
+            "use crate::core::cardosx::y;",
+            "use crate::core::card::{cardos_like, x};",
+            "use super::super::card::cardos;",
+        ] {
+            assert!(!use_names_module(not_named, "cardos"), "{not_named}");
+        }
     }
 }
