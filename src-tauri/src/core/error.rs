@@ -705,6 +705,16 @@ pub enum CoreError {
         needed: u64,
         available: u64,
     },
+
+    /// The one-button card's last gate (`commands/cardos.rs`): the image ART
+    /// just built and filled failed `core::card::health::check_image`.
+    /// `checks` names each failed check as the health report does. The image
+    /// is not given its final name; the caller says what became of it.
+    #[error(
+        "the card image failed {failures} of its checks ({checks}), so ART did not finish it. \
+         Build it again; if it fails the same way, keep the operation log for a report."
+    )]
+    CardCheckFailed { failures: usize, checks: String },
 }
 
 /// The sentence for [`CoreError::CardNamesNeedHstImager`].
@@ -917,6 +927,7 @@ impl CoreError {
             Self::CardNamesNeedHstImager { .. } => "ART-CARD-NAMES-NEED-HST",
             Self::CardDoesNotFit(_) => "ART-CARD-DOES-NOT-FIT",
             Self::NotEnoughSpace { .. } => "ART-NOT-ENOUGH-SPACE",
+            Self::CardCheckFailed { .. } => "ART-CARD-CHECK-FAILED",
         }
     }
 
@@ -1157,6 +1168,10 @@ mod tests {
                 place: "x".into(),
                 needed: 2,
                 available: 1,
+            },
+            CoreError::CardCheckFailed {
+                failures: 1,
+                checks: "x".into(),
             },
         ];
 
