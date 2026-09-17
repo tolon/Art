@@ -357,9 +357,27 @@ pub struct RequestedPartition {
     rename_all_fields = "camelCase"
 )]
 pub enum SizingRefusal {
-    DoesNotFit { needed: u64, available: u64 },
-    PartitionTooLarge { volume_name: String, bytes: u64 },
-    CardTooSmall { card_gb: u32 },
+    DoesNotFit {
+        needed: u64,
+        available: u64,
+        /// The requested partition with the most measured content — `None`
+        /// when `content` is empty or none of it was measured.
+        largest: Option<String>,
+    },
+    PartitionTooLarge {
+        volume_name: String,
+        bytes: u64,
+    },
+    CardTooSmall {
+        card_gb: u32,
+    },
+    /// A partition's measured content does not fit the size it is given —
+    /// today only System, whose size is fixed.
+    PartitionContentDoesNotFit {
+        volume_name: String,
+        needed_blocks: u64,
+        available_blocks: u64,
+    },
 }
 
 /// One partition of the plan, ready for `core::rdb::create_rdb_layout`.
@@ -491,6 +509,7 @@ fn split_work(rest: u64) -> Vec<(String, Option<u32>, u64)> {
 /// pfs3aio's (ART-311, fixed).
 pub fn plan_card_image(
     card_gb: u32,
+    system: Option<&ContentMeasure>,
     content: &[RequestedPartition],
 ) -> Result<CardImagePlan, SizingRefusal> {
     let image_bytes = image_bytes_for_label(card_gb);
@@ -509,6 +528,16 @@ pub fn plan_card_image(
     let system_wanted = (u64::from(MEASURED_SYSTEM_MB) * 1024 * 1024).div_ceil(BYTES_PER_CYLINDER)
         * BYTES_PER_CYLINDER;
     let (sys_mb, sys_built) = mb_and_built_bytes(system_wanted);
+    if let Some(tree) = system {
+        let blocks = sys_built / PFS3_BLOCK;
+        if !pfs3_fits(blocks, tree) {
+            return Err(SizingRefusal::PartitionContentDoesNotFit {
+                volume_name: "System".to_string(),
+                needed_blocks: tree.data_blocks,
+                available_blocks: pfs3_data_blocks(blocks),
+            });
+        }
+    }
     let mut committed = vec![("System".to_string(), sys_mb, sys_built)];
     for part in content {
         // I1 (round-1 review): an Advanced override past PFS3's own ceiling
@@ -549,9 +578,27 @@ pub fn plan_card_image(
     let committed_bytes: u64 = committed.iter().map(|(_, _, b)| b).sum();
     let needed = committed_bytes + PFS3_MIN_BYTES;
     if needed > usable {
+        // The requested partition with the most measured content — a tie
+        // keeps the first (`Iterator::max_by_key` keeps the *last* on a tie,
+        // so this folds by hand with a strict `>`), and an unmeasured or
+        // empty `content` names none.
+        let mut largest: Option<(String, u64)> = None;
+        for part in content {
+            if let Some(m) = &part.content {
+                let is_larger = match &largest {
+                    Some((_, blocks)) => m.data_blocks > *blocks,
+                    None => true,
+                };
+                if is_larger {
+                    largest = Some((part.volume_name.clone(), m.data_blocks));
+                }
+            }
+        }
+        let largest = largest.map(|(name, _)| name);
         return Err(SizingRefusal::DoesNotFit {
             needed,
             available: usable,
+            largest,
         });
     }
     let rest = usable - committed_bytes;
@@ -1107,7 +1154,7 @@ mod tests {
 
     #[test]
     fn a_card_is_system_then_the_users_partitions_then_work() {
-        let plan = plan_card_image(64, &[games(4000)]).unwrap();
+        let plan = plan_card_image(64, None, &[games(4000)]).unwrap();
         let names: Vec<&str> = plan
             .partitions
             .iter()
@@ -1158,7 +1205,7 @@ mod tests {
             floor_bytes: 1627 * BYTES_PER_CYLINDER,
         };
 
-        let plan = plan_card_image(32, &[g4000, g900, extra]).unwrap();
+        let plan = plan_card_image(32, None, &[g4000, g900, extra]).unwrap();
         let specs: Vec<PartitionSpec> = plan.partitions.iter().map(|p| p.spec.clone()).collect();
         let layout = create_rdb_layout(plan.area_bytes, &specs, &[]).unwrap();
         assert!(layout.total_size <= plan.area_bytes);
@@ -1204,16 +1251,125 @@ mod tests {
 
     #[test]
     fn content_that_does_not_fit_is_refused_with_both_numbers() {
-        let err = plan_card_image(16, &[games(20_000)]).unwrap_err();
-        let SizingRefusal::DoesNotFit { needed, available } = err else {
+        let err = plan_card_image(16, None, &[games(20_000)]).unwrap_err();
+        let SizingRefusal::DoesNotFit {
+            needed, available, ..
+        } = err
+        else {
             panic!("{err:?}")
         };
         assert!(needed > available);
     }
 
+    /// A `ContentMeasure` of `files` files of `bytes_each` bytes each, all in
+    /// one directory, named `f00000`, `f00001`, ... — Task 4's shared
+    /// content-measure builder for the sizing-refusal tests below.
+    fn measure_of(files: u64, bytes_each: u64) -> ContentMeasure {
+        let mut m = ContentMeasure::default();
+        for i in 0..files {
+            m.add_file(&format!("f{i:05}"), bytes_each);
+        }
+        m
+    }
+
+    /// P8 (round 3): an overflowing card names the partition with the most
+    /// content, not just the two numbers. `big`'s 10 000 files of 2 MiB
+    /// (~19.07 GiB) sit well under `PFS3_CEILING_BYTES` (~101 GiB), so
+    /// `content_partition_bytes` still gives it a size (this is a
+    /// `DoesNotFit`, never a `PartitionTooLarge`) — it is the *card*, not
+    /// PFS3, that cannot hold System + Stuff + a ~24-GiB Games partition
+    /// (headroom included) on a 16 GB (~15.2 GB image) card.
+    #[test]
+    fn a_card_that_overflows_names_its_largest_partition() {
+        let big = measure_of(10_000, 2 * 1024 * 1024); // 10 000 files of 2 MiB
+        let small = measure_of(10, 1024);
+        assert!(content_partition_bytes(&big).is_some());
+        let request = [
+            RequestedPartition {
+                volume_name: "Stuff".into(),
+                content: Some(small),
+                floor_bytes: 0,
+            },
+            RequestedPartition {
+                volume_name: "Games".into(),
+                content: Some(big),
+                floor_bytes: 0,
+            },
+        ];
+        match plan_card_image(16, None, &request) {
+            Err(SizingRefusal::DoesNotFit { largest, .. }) => {
+                assert_eq!(largest.as_deref(), Some("Games"))
+            }
+            other => panic!("expected DoesNotFit naming Games, got {other:?}"),
+        }
+    }
+
+    /// P8/P5 (round 3): a tie keeps the first partition named, never the
+    /// last — `Iterator::max_by_key` would keep the last, which is why
+    /// `plan_card_image` folds by hand with a strict `>` (M4c).
+    #[test]
+    fn two_equal_partitions_name_the_first() {
+        let a = measure_of(10_000, 2 * 1024 * 1024);
+        let b = measure_of(10_000, 2 * 1024 * 1024);
+        let request = [
+            RequestedPartition {
+                volume_name: "Alpha".into(),
+                content: Some(a),
+                floor_bytes: 0,
+            },
+            RequestedPartition {
+                volume_name: "Beta".into(),
+                content: Some(b),
+                floor_bytes: 0,
+            },
+        ];
+        match plan_card_image(16, None, &request) {
+            Err(SizingRefusal::DoesNotFit { largest, .. }) => {
+                assert_eq!(largest.as_deref(), Some("Alpha"))
+            }
+            other => panic!("expected DoesNotFit naming Alpha, got {other:?}"),
+        }
+    }
+
+    /// P5/P8 (round 3): a System tree larger than the fixed 800 MiB
+    /// partition is refused naming System, not `DoesNotFit` — System's size
+    /// never moves, so there is nothing else to blame.
+    #[test]
+    fn a_system_tree_larger_than_system_is_refused_naming_system() {
+        let tree = measure_of(1_000, 1024 * 1024); // ~1 GiB
+        match plan_card_image(16, Some(&tree), &[]) {
+            Err(SizingRefusal::PartitionContentDoesNotFit {
+                volume_name,
+                needed_blocks,
+                available_blocks,
+            }) => {
+                assert_eq!(volume_name, "System");
+                assert!(needed_blocks > available_blocks);
+            }
+            other => panic!("expected System refused, got {other:?}"),
+        }
+    }
+
+    /// P5/P8 (round 3): a System tree that fits changes nothing else in the
+    /// plan — the owner's own 3.2.2 tree, synthetic and same shape (STATUS).
+    #[test]
+    fn a_system_tree_that_fits_changes_nothing_in_the_plan() {
+        let tree = measure_of(4_066, 5_093); // the owner's 3.2.2 tree: 4 066 files, ~20.7 MB
+        let with = plan_card_image(16, Some(&tree), &[]).unwrap();
+        let without = plan_card_image(16, None, &[]).unwrap();
+        assert_eq!(
+            with.partitions.iter().map(|p| p.bytes).collect::<Vec<_>>(),
+            without
+                .partitions
+                .iter()
+                .map(|p| p.bytes)
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn work_past_pfs3s_largest_partition_is_split() {
-        let plan = plan_card_image(128, &[]).unwrap();
+        let plan = plan_card_image(128, None, &[]).unwrap();
         let names: Vec<&str> = plan
             .partitions
             .iter()
@@ -1255,7 +1411,7 @@ mod tests {
         let mut g = games(1);
         g.floor_bytes = content_wanted;
 
-        let plan = plan_card_image(128, &[g]).unwrap();
+        let plan = plan_card_image(128, None, &[g]).unwrap();
         let work: Vec<&PlannedPartition> = plan
             .partitions
             .iter()
@@ -1285,12 +1441,12 @@ mod tests {
     fn an_override_is_a_floor_never_a_way_past_the_card() {
         let mut g = games(100);
         g.floor_bytes = 5 * 1024 * 1024 * 1024;
-        let plan = plan_card_image(16, &[g]).unwrap();
+        let plan = plan_card_image(16, None, &[g]).unwrap();
         assert!(plan.partitions[1].bytes >= 5 * 1024 * 1024 * 1024);
         let mut huge = games(100);
         huge.floor_bytes = 40 * 1000 * 1000 * 1000;
         assert!(matches!(
-            plan_card_image(16, &[huge]),
+            plan_card_image(16, None, &[huge]),
             Err(SizingRefusal::DoesNotFit { .. })
         ));
     }
@@ -1305,7 +1461,7 @@ mod tests {
         // refusal must come from PFS3's own ceiling, not from the card
         // running out of room.
         g.floor_bytes = PFS3_MAX_BYTES + 1024 * 1024 * 1024;
-        let err = plan_card_image(128, &[g]).unwrap_err();
+        let err = plan_card_image(128, None, &[g]).unwrap_err();
         let SizingRefusal::PartitionTooLarge { volume_name, bytes } = err else {
             panic!("{err:?}")
         };
@@ -1417,6 +1573,7 @@ mod tests {
 
         let plan = plan_card_image(
             128,
+            None,
             &[RequestedPartition {
                 volume_name: "Games".into(),
                 content: Some(m),
@@ -1436,7 +1593,7 @@ mod tests {
     fn a_floor_at_pfs3s_maximum_builds_inside_pfs3s_normal_mode() {
         let mut g = games(1);
         g.floor_bytes = PFS3_MAX_BYTES;
-        let plan = plan_card_image(128, &[g]).unwrap();
+        let plan = plan_card_image(128, None, &[g]).unwrap();
         assert_built_as_planned(&plan);
         assert_eq!(plan.partitions[1].bytes, PFS3_CEILING_BYTES);
     }
@@ -1461,6 +1618,7 @@ mod tests {
             let floor = floor_for_two_ceilings + k * BYTES_PER_CYLINDER - 300 * BYTES_PER_CYLINDER;
             let plan = plan_card_image(
                 256,
+                None,
                 &[RequestedPartition {
                     volume_name: "Extra".into(),
                     content: None,
