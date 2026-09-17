@@ -643,8 +643,8 @@ documents no way in. ART leaves them blank rather than guessing.
 |---|---|
 | Where the project is, what is next | [docs/STATUS.md](docs/STATUS.md) |
 | Feature-by-feature state | [docs/FEATURES.md](docs/FEATURES.md) |
-| Known defects | [docs/ISSUES.md](docs/ISSUES.md) |
-| Phase definitions | [docs/roadmap.md](docs/roadmap.md) |
+| Known defects | [docs/ISSUES.md](docs/ISSUES.md) (closed ones: [docs/ISSUES-archive.md](docs/ISSUES-archive.md)) |
+| Stage plan and its order | [docs/STATUS.md § Stage plan](docs/STATUS.md#stage-plan) |
 | Released changes | [CHANGELOG.md](CHANGELOG.md) |
 
 ## Install

@@ -259,13 +259,14 @@ check + THIRD_PARTY_LICENSES entry as usual.
 > **Route B itself landed**: [`libpfs3`](https://github.com/metaneutrons/pfs3)
 > v0.1.3 (LGPL-3.0-or-later) is a pure-Rust PFS3 implementation that reads,
 > writes and sets AmigaDOS protection bits correctly, measured against a real
-> CaffeineOS card rather than only a synthetic fixture (see
-> `docs/superpowers/specs/2026-08-15-os-install-design.md`). `core/preload/native.rs`
+> CaffeineOS card rather than only a synthetic fixture (the SD-2 G5 rows of
+> [FEATURES.md](FEATURES.md#emulation--hardware)). `core/preload/native.rs`
 > wraps it behind the same `VolumeFormatter` trait `hst-imager` already
 > implements, launches nothing, and is now the **default** writer —
-> `hst-imager` is a named fallback for two specific, typed gaps
-> ([ART-113](ISSUES.md)'s non-ASCII AmigaDOS names, [ART-117](ISSUES.md)'s
-> foreign-RDB driver embed), not the primary path any more. This is the
+> `hst-imager` is a named fallback for one specific, typed gap
+> ([ART-113](ISSUES-archive.md)'s non-ASCII AmigaDOS names), not the primary
+> path any more. The second gap, [ART-117](ISSUES-archive.md)'s foreign-RDB
+> driver embed, has been native since 2026-09-14. This is the
 > differentiator G0's own positioning section named as the long-term goal:
 > ART owns native PFS3 write, not just an imager wrapper.
 >
@@ -338,8 +339,7 @@ the driver back out SHA-256-identical to the file that went in. Closes
 
 > **Built and run against the user's own real 3.2 media, not a fixture.**
 > `core/osinstall/` (`recipe` → `source`/`scan` → `plan` → `apply` → `startup`
-> → `verify`, design in
-> `docs/superpowers/specs/2026-08-15-os-install-design.md`) turns AmigaOS
+> → `verify`; what is built is in FEATURES.md's SD-2 G5 rows) turns AmigaOS
 > install media into a populated system volume without running the Amiga
 > Installer. It does this **without copying whole disks**: a component is a
 > named set of paths, not a disk — measured, not assumed —
@@ -514,7 +514,7 @@ so all three verdicts come from real material rather than fixtures:
 The last is the only evidence that the check reads the tree's own capability
 rather than comparing version numbers, since 40 is not ≥ 47.
 
-Design: `docs/superpowers/specs/2026-08-17-rom-pairing-design.md`. Its final
+What is built: FEATURES.md's SD-2 G9 row. The round's final
 review found ten things and all ten were fixed ([ART-129](ISSUES.md)); two were
 blockers and both were the same failure — the check that exists to warn said
 nothing. **Real hardware untouched**, as everywhere else in SD-2.
