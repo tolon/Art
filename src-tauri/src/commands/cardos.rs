@@ -822,12 +822,21 @@ fn volumes_needing_hst_imager(prepared: &PreparedCard) -> Vec<String> {
         .collect()
 }
 
+/// The hst-imager a build falls back to, with the path the preparation
+/// probed — so a refusal names the tool that was given rather than saying
+/// none was (card round 3, N1).
+#[derive(Clone, Copy)]
+pub(crate) struct HstFallback<'a> {
+    pub path: &'a Path,
+    pub tool: &'a dyn VolumeFormatter,
+}
+
 /// I1: a card prepared with partitions for hst-imager is built only with an
 /// hst-imager that answers — asked here, before the image exists, rather
 /// than discovered at that partition's format with the card half written.
 fn refuse_without_hst_imager(
     prepared: &PreparedCard,
-    fallback: Option<&dyn VolumeFormatter>,
+    fallback: Option<HstFallback<'_>>,
 ) -> CoreResult<()> {
     let partitions = volumes_needing_hst_imager(prepared);
     if partitions.is_empty() {
@@ -839,14 +848,17 @@ fn refuse_without_hst_imager(
             path: String::new(),
             why: String::new(),
         }),
-        Some(tool) => tool
-            .probe()
-            .map(|_| ())
-            .map_err(|err| CoreError::HstImagerUnusable {
-                partitions,
-                path: String::new(),
-                why: err.to_string(),
-            }),
+        Some(fallback) => {
+            fallback
+                .tool
+                .probe()
+                .map(|_| ())
+                .map_err(|err| CoreError::HstImagerUnusable {
+                    partitions,
+                    path: fallback.path.display().to_string(),
+                    why: err.to_string(),
+                })
+        }
     }
 }
 
@@ -865,7 +877,7 @@ fn preflight(
     prepared: &PreparedCard,
     image: &Path,
     request: &CardOsBuildRequest,
-    fallback: Option<&dyn VolumeFormatter>,
+    fallback: Option<HstFallback<'_>>,
     progress: &dyn ProgressSink,
 ) -> PhaseResult<CardImageInputs> {
     use BuildPhase::*;
@@ -891,6 +903,25 @@ fn preflight(
     Ok(inputs)
 }
 
+/// The sentence for a finish that failed. `finish_partial`'s own sentence
+/// says the image is still at its partial name; the ending removes it, so
+/// that sentence would be wrong — a name taken meanwhile is said as such.
+fn finish_error(image: &Path, err: CoreError) -> CoreError {
+    // N6: both names left are ART's own card, said by `finish_partial` itself.
+    if matches!(err, CoreError::CardFinishLeftBothNames { .. }) {
+        return err;
+    }
+    if image.exists() {
+        CoreError::SafetyRefused(format!(
+            "'{}' appeared while ART was building it — ART left that file as it is and did \
+             not give its own image that name",
+            image.display()
+        ))
+    } else {
+        err
+    }
+}
+
 /// The phases, each error tagged with the phase it ended.
 #[allow(clippy::too_many_arguments)]
 fn run_phases(
@@ -900,7 +931,7 @@ fn run_phases(
     request: &CardOsBuildRequest,
     inputs: CardImageInputs,
     native: &dyn VolumeFormatter,
-    fallback: Option<&dyn VolumeFormatter>,
+    fallback: Option<HstFallback<'_>>,
     progress: &dyn ProgressSink,
     built: &mut BuiltCardOs,
     written: &mut Written,
@@ -941,7 +972,7 @@ fn run_phases(
     // 3. Every partition formatted, and filled from its roots.
     gate(Partitions, progress)?;
     let made = plan(&preload_request_for(prepared, tree, &partial)).map_err(at(Partitions))?;
-    match run_with_fallback(&made, native, fallback, progress) {
+    match run_with_fallback(&made, native, fallback.map(|f| f.tool), progress) {
         Ok((_outcome, steps)) => built.steps = steps,
         Err(stopped) => {
             let stopped = *stopped;
@@ -992,18 +1023,7 @@ fn run_phases(
     }
 
     if let Err(err) = finish_partial(image) {
-        // `finish_partial`'s own sentence says the image is still at its
-        // partial name; the ending removes it, so that sentence would be wrong.
-        let err = if image.exists() {
-            CoreError::SafetyRefused(format!(
-                "'{}' appeared while ART was building it — ART left that file as it is and did \
-                 not give its own image that name",
-                image.display()
-            ))
-        } else {
-            err
-        };
-        return Err((Check, err));
+        return Err((Check, finish_error(image, err)));
     }
     *written = Written::Finished;
 
@@ -1071,7 +1091,7 @@ pub(crate) fn build_card_os(
     image: &Path,
     request: &CardOsBuildRequest,
     native: &dyn VolumeFormatter,
-    fallback: Option<&dyn VolumeFormatter>,
+    fallback: Option<HstFallback<'_>>,
     progress: &dyn ProgressSink,
 ) -> BuiltCardOs {
     let mut built = BuiltCardOs {
@@ -1224,14 +1244,20 @@ pub fn card_os_build(
     let id = spawn_job(&app, registry, title, move |job_id, progress| {
         let native = NativeFormatter::new(&crate::tools::local_time::LOCAL_TIME);
         // I1: the hst-imager the preparation asked, never a second path.
-        let hst = ticket.hst_imager.as_ref().map(HstImager::at);
+        let hst = ticket
+            .hst_imager
+            .as_ref()
+            .map(|path| (path, HstImager::at(path)));
         let built = build_card_os(
             &ticket.prepared,
             &ticket.tree,
             &ticket.image,
             &request,
             &native,
-            hst.as_ref().map(|h| h as &dyn VolumeFormatter),
+            hst.as_ref().map(|(path, tool)| HstFallback {
+                path: path.as_path(),
+                tool: tool as &dyn VolumeFormatter,
+            }),
             progress,
         );
 
@@ -1919,9 +1945,16 @@ mod tests {
         );
         let before = listing(&tree);
 
+        let given = dir.join("tools").join("hst.imager.exe");
         for (arm, fallback) in [
             ("none", None),
-            ("broken", Some(&Broken as &dyn VolumeFormatter)),
+            (
+                "broken",
+                Some(HstFallback {
+                    path: &given,
+                    tool: &Broken as &dyn VolumeFormatter,
+                }),
+            ),
         ] {
             let image = dir.join(format!("card-{arm}.img"));
             let built = build_card_os(
@@ -1941,6 +1974,23 @@ mod tests {
                 } => {
                     assert_eq!(code, "ART-HST-IMAGER-UNUSABLE", "{arm}");
                     assert!(message.contains("Stuff"), "{arm}: {message}");
+                    if arm == "broken" {
+                        // N1: a tool was given — the sentence says which one
+                        // and carries the tool's own error, never "none given".
+                        assert!(
+                            !message.contains("no hst.imager.exe was given"),
+                            "{arm}: {message}"
+                        );
+                        assert!(
+                            message
+                                .contains("could not run 'E:\\tools\\hst.imager.exe': not found"),
+                            "{arm}: the tool's own error: {message}"
+                        );
+                        assert!(
+                            message.contains(&format!("'{}'", given.display())),
+                            "{arm}: the path the preparation probed: {message}"
+                        );
+                    }
                 }
                 other => panic!("{arm}: expected a Partitions refusal, got {other:?}"),
             }
@@ -1951,6 +2001,141 @@ mod tests {
             );
             assert_eq!(listing(&tree), before, "{arm}: the tree is unchanged");
         }
+    }
+
+    /// ART-343's ROM half, through the build: the agreed Kickstart's file
+    /// changed after the card was prepared, and the build is refused at
+    /// Whdload by name — before the tree or the image is touched.
+    #[test]
+    fn a_kickstart_changed_since_prepare_is_refused_before_the_tree_or_the_image() {
+        let (_guard, dir) = scratch("rom-changed");
+        let (prepared, tree) = small_prepared_card(&dir);
+        let before = listing(&tree);
+        let rom = dir.join("roms").join("my-13.rom");
+        let mut bytes = std::fs::read(&rom).unwrap();
+        bytes[100] ^= 0xFF;
+        std::fs::write(&rom, &bytes).unwrap();
+        let image = dir.join("card.img");
+
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_agreeing(&dir, &["kick34005.A500"]),
+            &NativeFormatter::UTC,
+            None,
+            &NoProgress,
+        );
+
+        match &built.ending {
+            CardOsEnding::Refused {
+                phase: BuildPhase::Whdload,
+                code,
+                message,
+            } => {
+                assert_eq!(code, "ART-KICKSTART-SOURCE-CHANGED", "{message}");
+                assert!(message.contains(&rom.display().to_string()), "{message}");
+                assert!(message.contains("prepare the card again"), "{message}");
+            }
+            other => panic!("expected a Whdload refusal, got {other:?}"),
+        }
+        assert_eq!(built.partial, PartialRemoval::NotCreated);
+        assert!(!partial_path_for(&image).exists() && !image.exists());
+        assert!(built.kickstarts.is_empty(), "{:?}", built.kickstarts);
+        assert_eq!(listing(&tree), before, "the tree is unchanged");
+    }
+
+    /// N5 (the survivor I2b): the card writer fails after it created the
+    /// `.partial` — here a stop asked at its first check once the file exists
+    /// (`lay_out`) — and the ending, through `build_card_os`, reports that
+    /// file removed, and it is gone. Never `NotCreated` for a file that was made.
+    #[test]
+    fn a_card_writer_stopped_after_creating_the_partial_reports_it_removed() {
+        /// Asks to stop from the first check after `.partial` exists.
+        struct StopOnceCreated {
+            partial: PathBuf,
+            saw_it: AtomicBool,
+        }
+        impl ProgressSink for StopOnceCreated {
+            fn report(&self, _: u64, _: Option<u64>, _: &str) {}
+            fn is_cancelled(&self) -> bool {
+                if self.partial.exists() {
+                    self.saw_it.store(true, Ordering::SeqCst);
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        let (_guard, dir) = scratch("stop-after-create");
+        let (prepared, tree) = small_prepared_card(&dir);
+        let image = dir.join("card.img");
+        let partial = partial_path_for(&image);
+        let sink = StopOnceCreated {
+            partial: partial.clone(),
+            saw_it: AtomicBool::new(false),
+        };
+
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_agreeing(&dir, &["kick34005.A500"]),
+            &NativeFormatter::UTC,
+            None,
+            &sink,
+        );
+
+        assert!(
+            sink.saw_it.load(Ordering::SeqCst),
+            "the stop must come after the file was created, or this proves nothing"
+        );
+        assert!(
+            matches!(
+                built.ending,
+                CardOsEnding::Stopped {
+                    phase: BuildPhase::Card
+                }
+            ),
+            "{:?} {:?}",
+            built.ending,
+            built.error
+        );
+        assert_eq!(
+            built.partial,
+            PartialRemoval::Removed {
+                path: partial.display().to_string()
+            }
+        );
+        assert!(!partial.exists(), "the .partial is gone");
+        assert!(!image.exists());
+    }
+
+    /// N6: a finish that left both names is said as ART's own card, never
+    /// rewritten into "appeared while ART was building it" because the image
+    /// name exists — it exists because ART linked it. The control: a name
+    /// that did appear is still said as such.
+    #[test]
+    fn a_finish_that_left_both_names_is_not_called_somebody_else_s_file() {
+        let (_guard, dir) = scratch("finish-error");
+        let image = dir.join("card.img");
+        std::fs::write(&image, b"card").unwrap();
+
+        let both = CoreError::CardFinishLeftBothNames {
+            image: image.display().to_string(),
+            partial: partial_path_for(&image).display().to_string(),
+            why: "in use; and the new name: in use".into(),
+        };
+        let said = finish_error(&image, both).to_string();
+        assert!(said.contains("ART's own half-built card"), "{said}");
+        assert!(!said.contains("appeared"), "{said}");
+
+        let raced = finish_error(&image, CoreError::SafetyRefused("x".into())).to_string();
+        assert!(
+            raced.contains("appeared while ART was building it"),
+            "{raced}"
+        );
     }
 
     /// M17: a manifest already beside the image name is someone's record, and
@@ -2423,7 +2608,9 @@ mod tests {
 
         let (_guard, dir) = scratch("oracle-hook");
         let (prepared, tree) = small_prepared_card_with(&dir, stuff_drawer);
-        let fallback = hst.as_ref().map(HstImager::at);
+        let fallback = hst
+            .as_ref()
+            .map(|path| (PathBuf::from(path), HstImager::at(path)));
         let started = std::time::Instant::now();
         let built = build_card_os(
             &prepared,
@@ -2431,7 +2618,10 @@ mod tests {
             &image,
             &request_agreeing(&dir, &["kick34005.A500"]),
             &NativeFormatter::UTC,
-            fallback.as_ref().map(|h| h as &dyn VolumeFormatter),
+            fallback.as_ref().map(|(path, tool)| HstFallback {
+                path: path.as_path(),
+                tool: tool as &dyn VolumeFormatter,
+            }),
             &NoProgress,
         );
         assert!(

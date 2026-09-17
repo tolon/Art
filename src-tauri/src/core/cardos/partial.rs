@@ -91,6 +91,15 @@ pub fn refuse_partial_destination(image: &Path) -> CoreResult<()> {
 /// links (FAT32, exFAT) falls back to check-then-rename and keeps that small
 /// window — disclosed, not closed.
 pub fn finish_partial(image: &Path) -> CoreResult<()> {
+    finish_partial_removing(image, |path: &Path| std::fs::remove_file(path))
+}
+
+/// [`finish_partial`], with the removal of a name given — so a test can make
+/// both removals fail, which no file state on NTFS reliably does (N6).
+pub(crate) fn finish_partial_removing(
+    image: &Path,
+    remove: impl Fn(&Path) -> std::io::Result<()>,
+) -> CoreResult<()> {
     let partial = partial_path_for(image);
     let appeared = || {
         CoreError::SafetyRefused(format!(
@@ -102,11 +111,20 @@ pub fn finish_partial(image: &Path) -> CoreResult<()> {
     };
     match std::fs::hard_link(&partial, image) {
         Ok(()) => {
-            if let Err(err) = std::fs::remove_file(&partial) {
+            if let Err(err) = remove(&partial) {
                 // Both names are one file now. Take the new name back off it,
                 // so the image is only at its partial name, as the caller's
                 // ending will say.
-                let _ = std::fs::remove_file(image);
+                if let Err(rollback) = remove(image) {
+                    // Neither name came off: both are ART's own card, and
+                    // the sentence says so rather than leaving the caller to
+                    // find a file at the image name and guess whose it is.
+                    return Err(CoreError::CardFinishLeftBothNames {
+                        image: image.display().to_string(),
+                        partial: partial.display().to_string(),
+                        why: format!("{err}; and the new name: {rollback}"),
+                    });
+                }
                 return Err(CoreError::Io(err));
             }
             Ok(())
@@ -174,6 +192,41 @@ mod tests {
 
     fn scratch(tag: &str) -> (crate::core::ScratchDir, PathBuf) {
         crate::core::ScratchDir::pair("art-cardos-partial", tag)
+    }
+
+    /// N6: the finished card is linked to its name, and then neither name can
+    /// be removed. The removal is injected: measured on NTFS, a handle that
+    /// does not share delete blocks only the name it was opened by (the
+    /// rollback through the other name works), and `std::fs::remove_file`
+    /// removes a read-only file — neither makes both removals fail. The
+    /// error is its own: it names both paths as ART's own card and never says
+    /// the file "appeared" or is somebody else's.
+    #[test]
+    fn a_finish_that_can_remove_neither_name_says_both_are_art_s_own_card() {
+        let (_guard, dir) = scratch("both-names");
+        let image = dir.join("amiga.img");
+        let partial = partial_path_for(&image);
+        std::fs::write(&partial, b"card").unwrap();
+
+        let err = finish_partial_removing(&image, |_: &Path| {
+            Err(std::io::Error::other("held by a scanner"))
+        })
+        .unwrap_err();
+
+        assert!(
+            partial.exists() && image.exists(),
+            "the premise: both names stayed"
+        );
+        assert_eq!(err.code(), "ART-CARD-FINISH-LEFT-BOTH-NAMES", "{err}");
+        let message = err.to_string();
+        assert!(message.contains(&image.display().to_string()), "{message}");
+        assert!(
+            message.contains(&partial.display().to_string()),
+            "{message}"
+        );
+        assert!(message.contains("held by a scanner"), "{message}");
+        assert!(message.contains("ART's own half-built card"), "{message}");
+        assert!(!message.contains("appeared"), "{message}");
     }
 
     #[test]

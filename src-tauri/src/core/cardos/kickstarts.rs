@@ -482,6 +482,7 @@ pub fn check_agreed<'a>(
                 why: "ART did not offer it — nothing in the collection matches it".into(),
             });
         };
+        recheck_source(name, item.offer.wanted(), by)?;
         if let RtbSource::Missing { get_from } = item.rtb {
             let package = match get_from {
                 RtbPackage::AminetSkick346 => "Aminet util/boot/skick346",
@@ -497,6 +498,59 @@ pub fn check_agreed<'a>(
         validated.push((item, by));
     }
     Ok(validated)
+}
+
+/// The agreed file is still the offered one (card round 3, the ROM half of
+/// ART-343): read again, and its WHDLoad CRC-16 — and its size, when the
+/// offer stated one — compared with what the proposal offered. Read the way
+/// the proposal read it (`identify_rom`: bounded, an Amiga Forever ROM
+/// decoded with its key), so the same file gives the same answer.
+fn recheck_source(
+    name: &str,
+    wanted: &WantedImage,
+    by: &crate::core::rom::offer::SuppliedBy,
+) -> CoreResult<()> {
+    let path = Path::new(&by.path);
+    let changed = |why: String| CoreError::KickstartSourceChanged {
+        name: name.to_string(),
+        path: by.path.clone(),
+        why,
+    };
+    let info = match crate::core::rom::identify_rom(path) {
+        Ok(info) => info,
+        Err(_) if !path.exists() => return Err(changed("is no longer there".into())),
+        Err(err) => return Err(changed(format!("can no longer be read ({err})"))),
+    };
+    if let Some(offered) = wanted.crc16 {
+        match info.whdload_crc16 {
+            Some(now) if now == offered => {}
+            Some(now) => {
+                return Err(changed(format!(
+                    "has changed: its WHDLoad checksum is ${now:04X}, and the proposal offered \
+                     ${offered:04X}"
+                )))
+            }
+            None => {
+                return Err(changed(format!(
+                    "can no longer be checked: ART cannot compute its WHDLoad checksum (an \
+                     encrypted Amiga Forever ROM without its rom.key beside it), and the proposal \
+                     offered ${offered:04X}"
+                )))
+            }
+        }
+    }
+    // The size the offer stated: the file's own when it differed from the
+    // slave's, the slave's otherwise.
+    if let Some(stated) = wanted.size {
+        let offered = u64::from(by.size_disagrees.unwrap_or(stated));
+        let now = info.size_bytes as u64;
+        if now != offered {
+            return Err(changed(format!(
+                "has changed: it is {now} bytes, and the proposal offered {offered}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The `.RTB` bytes a validated [`RtbSource`] names. Called only after
@@ -826,7 +880,10 @@ mod tests {
 
     // -- place_agreed --------------------------------------------------------
 
-    fn supplied(name: &str, from: &Path, crc: u16) -> Offer {
+    /// Offered as the file is now: its WHDLoad checksum read off the file,
+    /// the way `propose_kickstarts` read it (the build checks it again).
+    fn supplied(name: &str, from: &Path) -> Offer {
+        let crc = crate::core::hashing::crc16_arc(&std::fs::read(from).unwrap());
         Offer::Supplied {
             wanted: WantedImage {
                 name: name.to_string(),
@@ -852,7 +909,7 @@ mod tests {
                 name: "kick34005.A500".into(),
                 titles: vec!["Games/A/A.slave".into()],
                 titles_more: 0,
-                offer: supplied("kick34005.A500", &rom, 1),
+                offer: supplied("kick34005.A500", &rom),
                 rtb: RtbSource::Missing {
                     get_from: RtbPackage::AminetSkick346,
                 },
@@ -886,7 +943,7 @@ mod tests {
                     name: "kick34005.A500".into(),
                     titles: vec!["Games/A/A.slave".into()],
                     titles_more: 0,
-                    offer: supplied("kick34005.A500", &rom_a, 1),
+                    offer: supplied("kick34005.A500", &rom_a),
                     rtb: RtbSource::Loose {
                         path: rtb_a.clone(),
                     },
@@ -895,7 +952,7 @@ mod tests {
                     name: "kick40068.A1200".into(),
                     titles: vec!["Games/B/B.slave".into()],
                     titles_more: 0,
-                    offer: supplied("kick40068.A1200", &rom_b, 2),
+                    offer: supplied("kick40068.A1200", &rom_b),
                     rtb: RtbSource::Loose {
                         path: rtb_b.clone(),
                     },
@@ -934,6 +991,85 @@ mod tests {
                 .exists(),
             "only the agreed name is placed"
         );
+    }
+
+    /// ART-343's ROM half: the file the user agreed to is the file placed.
+    /// Each agreed Kickstart's source is read again when the build checks the
+    /// agreement, and one that changed or went since the proposal is refused
+    /// by name — its path, what the proposal offered and what is there now —
+    /// before anything is written. The unchanged file is the control.
+    #[test]
+    fn an_agreed_kickstart_whose_file_changed_since_the_proposal_is_refused_by_name() {
+        let (_guard, dir) = scratch("rom-changed");
+        let rom = dir.join("a.rom");
+        let rtb = dir.join("a.RTB");
+        std::fs::write(&rtb, vec![0xBBu8; 512]).unwrap();
+        let proposal_for = |offer: Offer| KickstartProposal {
+            items: vec![ProposedKickstart {
+                name: "kick34005.A500".into(),
+                titles: vec!["Games/A/A.slave".into()],
+                titles_more: 0,
+                offer,
+                rtb: RtbSource::Loose { path: rtb.clone() },
+            }],
+            unreadable_slaves: vec![],
+            rtb_missing: false,
+        };
+        let agreed = ["kick34005.A500".to_string()];
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+
+        // Control: the file as it was offered passes.
+        std::fs::write(&rom, vec![0xAAu8; 4096]).unwrap();
+        let unchanged = proposal_for(supplied("kick34005.A500", &rom));
+        assert_eq!(check_agreed(&unchanged, &agreed).unwrap().len(), 1);
+
+        // Its bytes changed: another checksum.
+        std::fs::write(&rom, vec![0xACu8; 4096]).unwrap();
+        let err = check_agreed(&unchanged, &agreed).unwrap_err();
+        assert_eq!(err.code(), "ART-KICKSTART-SOURCE-CHANGED", "{err}");
+        let message = err.to_string();
+        assert!(message.contains("kick34005.A500"), "{message}");
+        assert!(message.contains(&rom.display().to_string()), "{message}");
+        let offered = crate::core::hashing::crc16_arc(&vec![0xAAu8; 4096]);
+        let now = crate::core::hashing::crc16_arc(&vec![0xACu8; 4096]);
+        assert!(message.contains(&format!("${offered:04X}")), "{message}");
+        assert!(message.contains(&format!("${now:04X}")), "{message}");
+        assert!(message.contains("prepare the card again"), "{message}");
+        let err = place_agreed(&unchanged, &agreed, &tree).unwrap_err();
+        assert_eq!(err.code(), "ART-KICKSTART-SOURCE-CHANGED");
+        assert!(!tree.join("Devs").exists(), "nothing was written");
+
+        // The same checksum, and a size other than the offer stated.
+        std::fs::write(&rom, vec![0xAAu8; 4096]).unwrap();
+        let sized = |size: u32, disagrees: Option<u32>| match supplied("kick34005.A500", &rom) {
+            Offer::Supplied { mut wanted, mut by } => {
+                wanted.size = Some(size);
+                by.size_disagrees = disagrees;
+                proposal_for(Offer::Supplied { wanted, by })
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(check_agreed(&sized(4096, None), &agreed).unwrap().len(), 1);
+        assert_eq!(
+            check_agreed(&sized(8192, Some(4096)), &agreed)
+                .unwrap()
+                .len(),
+            1,
+            "the offer stated the file's own size beside the slave's"
+        );
+        let err = check_agreed(&sized(8192, None), &agreed).unwrap_err();
+        assert_eq!(err.code(), "ART-KICKSTART-SOURCE-CHANGED", "{err}");
+        assert!(err.to_string().contains("8192"), "{err}");
+
+        // It is gone.
+        std::fs::remove_file(&rom).unwrap();
+        let err = check_agreed(&unchanged, &agreed).unwrap_err();
+        assert_eq!(err.code(), "ART-KICKSTART-SOURCE-CHANGED", "{err}");
+        let message = err.to_string();
+        assert!(message.contains(&rom.display().to_string()), "{message}");
+        assert!(message.contains("no longer there"), "{message}");
+        assert!(!tree.join("Devs").exists(), "nothing was written");
     }
 
     #[test]

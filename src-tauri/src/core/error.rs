@@ -810,6 +810,53 @@ pub enum CoreError {
         path: String,
         why: String,
     },
+
+    /// An agreed Kickstart's source file is not the file the proposal offered
+    /// any more — changed, gone, or unreadable since the card was prepared
+    /// (`core::cardos::kickstarts::check_agreed`; card round 3, the ROM half
+    /// of ART-343). The file the user agreed to is the file placed, so the
+    /// build is refused before anything is written.
+    #[error(
+        "'{name}' cannot be placed: '{path}' {why} since the card was prepared. Nothing was \
+         written — prepare the card again, so the proposal offers what is there now."
+    )]
+    KickstartSourceChanged {
+        name: String,
+        path: String,
+        why: String,
+    },
+
+    /// A card partition would hold more files and folders than the finished
+    /// card's read-back counts (`core::cardos::readback`), so it could be
+    /// written and then fail its check. Refused at prepare, before anything is
+    /// written (card round 3, N2).
+    #[error(
+        "'{partition}' would hold {entries} files and folders, more than the {bound} ART counts \
+         back off a finished card partition. Move some of what it holds to another partition, \
+         and prepare the card again."
+    )]
+    CardPartitionTooManyEntries {
+        partition: String,
+        entries: u64,
+        bound: u64,
+    },
+
+    /// The finished card was linked to its own name, and neither the
+    /// `.partial` name nor the new name could then be removed
+    /// (`core::cardos::partial::finish_partial`; card round 3, N6). Both
+    /// names are ART's own card — nobody else's file.
+    #[error(
+        "ART could not finish naming its card: neither '{partial}' nor the new name could be \
+         removed ({why}). '{image}' is ART's own half-built card, not somebody else's file — \
+         remove it yourself before building again."
+    )]
+    CardFinishLeftBothNames {
+        image: String,
+        partial: String,
+        /// Both removals' errors in one sentence — three strings keep
+        /// `CoreError` inside clippy's `result_large_err` bound.
+        why: String,
+    },
 }
 
 /// The sentence for [`CoreError::HstImagerUnusable`].
@@ -819,8 +866,13 @@ fn hst_imager_unusable_message(partitions: &[String], path: &str, why: &str) -> 
     } else {
         format!("'{path}' cannot be used as hst-imager ({why})")
     };
+    let hold = if partitions.len() == 1 {
+        "holds"
+    } else {
+        "hold"
+    };
     format!(
-        "{} hold names only hst-imager can write (ART-113), and {tool}. Point ART at a working \
+        "{} {hold} names only hst-imager can write (ART-113), and {tool}. Point ART at a working \
          hst.imager.exe in Settings, or rename those names to ASCII, and prepare the card again.",
         listed_capped(partitions)
     )
@@ -1086,6 +1138,9 @@ impl CoreError {
             Self::NotEnoughSpace { .. } => "ART-NOT-ENOUGH-SPACE",
             Self::CardCheckFailed { .. } => "ART-CARD-CHECK-FAILED",
             Self::HstImagerUnusable { .. } => "ART-HST-IMAGER-UNUSABLE",
+            Self::KickstartSourceChanged { .. } => "ART-KICKSTART-SOURCE-CHANGED",
+            Self::CardPartitionTooManyEntries { .. } => "ART-CARD-PARTITION-TOO-MANY-ENTRIES",
+            Self::CardFinishLeftBothNames { .. } => "ART-CARD-FINISH-LEFT-BOTH-NAMES",
         }
     }
 
@@ -1333,6 +1388,21 @@ mod tests {
             CoreError::HstImagerUnusable {
                 partitions: vec!["x".into()],
                 path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::KickstartSourceChanged {
+                name: "x".into(),
+                path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::CardPartitionTooManyEntries {
+                partition: "x".into(),
+                entries: 2,
+                bound: 1,
+            },
+            CoreError::CardFinishLeftBothNames {
+                image: "x".into(),
+                partial: "x".into(),
                 why: "x".into(),
             },
         ];

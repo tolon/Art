@@ -24,7 +24,9 @@ use crate::core::cardos::content::{
     self, check_partition, classify, measure, Classified, SourceKind, SourceMeasure, Unusable,
 };
 use crate::core::cardos::driver::{find_pfs3_driver, FoundDriver};
-use crate::core::cardos::kickstarts::{find_title_needs, propose_kickstarts, KickstartProposal};
+use crate::core::cardos::kickstarts::{
+    find_title_needs, propose_kickstarts, KickstartProposal, MAX_WALK_NODES,
+};
 use crate::core::cardos::searched_folder;
 use crate::core::cardos::whdload::{
     find_whdload, read_tree_whdload, tree_has_whdload, WhdloadChoice,
@@ -192,11 +194,62 @@ fn check_and_choose_writer(
     }
 }
 
+/// A partition's files and folders against the bound the finished card's
+/// read-back counts to ([`MAX_WALK_NODES`], `core::cardos::readback`): a
+/// partition prepare accepts is one the build can count back, rather than
+/// one written in full and then failed at its check (card round 3, N2).
+/// `extra` is what the build adds that `content` does not hold yet.
+fn refuse_too_many_entries(
+    partition: &str,
+    content: &ContentMeasure,
+    extra: u64,
+    bound: usize,
+) -> CoreResult<()> {
+    let entries = content.files + content.directories + extra;
+    if entries > bound as u64 {
+        return Err(CoreError::CardPartitionTooManyEntries {
+            partition: partition.to_string(),
+            entries,
+            bound: bound as u64,
+        });
+    }
+    Ok(())
+}
+
 /// Classify and measure every source, check every partition, choose each
 /// partition's writer, find the driver, and lay the card out. Writes only
 /// `driver_stage` (a driver out of an archive).
 #[allow(clippy::too_many_arguments)]
 pub fn measure_card(
+    card_gb: u32,
+    tree: &Path,
+    partitions: &[PartitionInput],
+    material: &[PathBuf],
+    explicit_driver: Option<&Path>,
+    driver_stage: &Path,
+    hst_imager: &HstImagerState,
+    clock: &dyn AmigaClock,
+    progress: &dyn ProgressSink,
+) -> CoreResult<MeasuredCard> {
+    measure_card_within(
+        MAX_WALK_NODES,
+        card_gb,
+        tree,
+        partitions,
+        material,
+        explicit_driver,
+        driver_stage,
+        hst_imager,
+        clock,
+        progress,
+    )
+}
+
+/// [`measure_card`], with the per-partition entry bound given — a test's
+/// small bound stands in for one too large to build.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn measure_card_within(
+    entry_bound: usize,
     card_gb: u32,
     tree: &Path,
     partitions: &[PartitionInput],
@@ -219,6 +272,7 @@ pub fn measure_card(
         });
     }
     let system_sources = vec![measure_source(tree, SourceKind::Folder, clock, progress)?];
+    refuse_too_many_entries(SYSTEM, &system_sources[0].measure.content, 0, entry_bound)?;
     let system_writer = check_and_choose_writer(SYSTEM, &system_sources, hst_imager)?;
 
     let total_sources: usize = partitions.iter().map(|p| p.sources.len()).sum();
@@ -240,6 +294,15 @@ pub fn measure_card(
             done += 1;
         }
         let writer = check_and_choose_writer(&input.volume_name, &sources, hst_imager)?;
+        // N2: the sources together, as the read-back will count them (two
+        // sources never share a top-level drawer: `check_partition`).
+        let together = sources
+            .iter()
+            .fold(ContentMeasure::default(), |mut sum, source| {
+                sum.merge(&source.measure.content);
+                sum
+            });
+        refuse_too_many_entries(&input.volume_name, &together, 0, entry_bound)?;
         measured.push((input, sources, writer));
     }
 
@@ -431,6 +494,31 @@ pub fn stage_card(
     clock: &dyn AmigaClock,
     progress: &dyn ProgressSink,
 ) -> CoreResult<PreparedCard> {
+    stage_card_within(
+        MAX_WALK_NODES,
+        measured,
+        tree,
+        staging_root,
+        material,
+        collection_dirs,
+        clock,
+        progress,
+    )
+}
+
+/// [`stage_card`], with System's entry bound given (see
+/// [`measure_card_within`]).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn stage_card_within(
+    entry_bound: usize,
+    measured: MeasuredCard,
+    tree: &Path,
+    staging_root: &Path,
+    material: &[PathBuf],
+    collection_dirs: &[PathBuf],
+    clock: &dyn AmigaClock,
+    progress: &dyn ProgressSink,
+) -> CoreResult<PreparedCard> {
     let total_sources: usize = measured.partitions.iter().map(|p| p.sources.len()).sum();
     let mut done = 0u64;
     let mut roots = Vec::with_capacity(measured.partitions.len());
@@ -551,6 +639,18 @@ pub fn stage_card(
     if !supplied.is_empty() {
         system.add_directory("Kickstarts");
     }
+    // N2: System's entries as the read-back will count them — the drawers the
+    // build creates for these files, when the tree lacks them, as well.
+    let missing_drawer = |name: &str| u64::from(!tree.join(name).is_dir());
+    let mut new_drawers = 0;
+    if whdload.is_some() {
+        // `install_whdload` creates both, prefs or not.
+        new_drawers += missing_drawer("C") + missing_drawer("S");
+    }
+    if !supplied.is_empty() {
+        new_drawers += missing_drawer("Devs");
+    }
+    refuse_too_many_entries(SYSTEM, &system, new_drawers, entry_bound)?;
     let system_blocks = measured
         .plan
         .partitions
@@ -669,6 +769,129 @@ mod tests {
                 floor_bytes: 0,
             },
         ]
+    }
+
+    /// N2: prepare's bound is the read-back's bound, per partition. Two
+    /// folders that each fit and together do not are refused by name at
+    /// prepare — never written in full and failed at Check. The same for the
+    /// System tree. A small bound stands in for 200 000; the bound itself is
+    /// `MAX_WALK_NODES` in both places (`measure_card`, `readback.rs`).
+    #[test]
+    fn a_partition_over_the_read_back_entry_bound_is_refused_at_prepare() {
+        let (_guard, dir) = scratch("entry-bound");
+        let tree = small_tree(&dir, true); // C, S, C/Dir, S/Startup-Sequence, C/WHDLoad: 5
+        let one = folder_with(&dir, "One", &[("a", b"1"), ("b", b"2"), ("c", b"3")]);
+        let two = folder_with(&dir, "Two", &[("d", b"4"), ("e", b"5"), ("f", b"6")]);
+        let parts = [PartitionInput {
+            volume_name: "Games".into(),
+            sources: vec![one, two],
+            floor_bytes: 0,
+        }];
+        let material = material_with_driver(&dir);
+        let measure = |bound: usize| {
+            measure_card_within(
+                bound,
+                16,
+                &tree,
+                &parts,
+                std::slice::from_ref(&material),
+                None,
+                &dir.join("drv"),
+                &HstImagerState::Usable,
+                &UtcClock,
+                &NoProgress,
+            )
+        };
+
+        // Control: at the bound exactly, both pass.
+        assert!(measure(6).is_ok(), "{:?}", measure(6).err());
+
+        // Games holds 6: one over a bound of 5, though each folder holds 3.
+        let err = measure(5).unwrap_err();
+        assert_eq!(err.code(), "ART-CARD-PARTITION-TOO-MANY-ENTRIES", "{err}");
+        let message = err.to_string();
+        assert!(
+            message.contains("'Games' would hold 6 files and folders"),
+            "{message}"
+        );
+        assert!(message.contains("more than the 5"), "{message}");
+
+        // System's tree holds 5: over a bound of 4 before Games is looked at.
+        let err = measure(4).unwrap_err();
+        assert_eq!(err.code(), "ART-CARD-PARTITION-TOO-MANY-ENTRIES", "{err}");
+        assert!(err.to_string().contains("'System' would hold 5"), "{err}");
+        assert!(!dir.join("drv").exists(), "nothing was written");
+    }
+
+    /// N2, System's half: what the build adds to the tree — WHDLoad and its
+    /// prefs, each Kickstart and its `.RTB`, and the drawers they go in that
+    /// the tree lacks — counts against System's bound at prepare.
+    #[test]
+    fn what_the_build_adds_to_system_counts_against_its_entry_bound() {
+        let (_guard, dir) = scratch("entry-bound-system");
+        let tree = small_tree(&dir, false); // C, S, C/Dir, S/Startup-Sequence: 4
+        let material = material_with_driver(&dir);
+        write_lha(
+            &material.join("WHDLoad_usr.lha"),
+            &[
+                ("WHDLoad/C/WHDLoad", &whdload_bytes("20.0")),
+                ("WHDLoad/S/WHDLoad.prefs", b";prefs\n"),
+            ],
+        );
+        write_lha(
+            &material.join("skick346.lha"),
+            &[("Kickstarts/kick34005.A500.RTB", &[1u8; 4000][..])],
+        );
+        let roms = dir.join("roms");
+        std::fs::create_dir_all(&roms).unwrap();
+        let rom = vec![0x11u8; 262_144];
+        std::fs::write(roms.join("my-13.rom"), &rom).unwrap();
+        let crc = crate::core::hashing::crc16_arc(&rom);
+        let games = folder_with(
+            &dir,
+            "Games",
+            &[(
+                "Turrican/Turrican.slave",
+                &slave_needing("kick34005.A500", crc, 262_144),
+            )],
+        );
+        let parts = [PartitionInput {
+            volume_name: "Games".into(),
+            sources: vec![games],
+            floor_bytes: 0,
+        }];
+        let materials = [material];
+        let stage = |bound: usize| {
+            let measured = measure_card(
+                16,
+                &tree,
+                &parts,
+                &materials,
+                None,
+                &dir.join("drv"),
+                &HstImagerState::Usable,
+                &UtcClock,
+                &NoProgress,
+            )
+            .unwrap();
+            stage_card_within(
+                bound,
+                measured,
+                &tree,
+                &dir.join(format!("staging-{bound}")),
+                &materials,
+                std::slice::from_ref(&roms),
+                &UtcClock,
+                &NoProgress,
+            )
+        };
+
+        // 4 in the tree, plus WHDLoad, WHDLoad.prefs, the image, its .RTB,
+        // Devs and Kickstarts: 10.
+        assert!(stage(10).is_ok(), "{:?}", stage(10).err());
+        let err = stage(9).unwrap_err();
+        assert_eq!(err.code(), "ART-CARD-PARTITION-TOO-MANY-ENTRIES", "{err}");
+        assert!(err.to_string().contains("'System' would hold 10"), "{err}");
     }
 
     #[test]
