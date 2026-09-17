@@ -185,7 +185,7 @@ reader stops silently again, `entry_bounds(…).unwrap_or(None)`) → all three 
 **M6c** (the install check's own arm off) → its test red, `left: Some("its path could not be read: the directory 'C'
 is damaged: …")`. **Changed alongside:** `a_failed_pfs3_rename_over_an_existing_file_keeps_the_destination` fails the
 third read of "Dir"'s block, not the fourth — the source listing through the reader was the first. **Not changed:**
-a directory block without the `DB` id is still stepped over silently, filed [ART-331](#open); a comment running past
+a directory block without the `DB` id is still stepped over silently, filed [ART-331](ISSUES.md#open); a comment running past
 its entry still reads as empty.
 
 **ART-325** 🟡 **libpfs3 read a directory entry's extra fields in a layout neither pfs3aio nor hst-amiga uses — fixed:
@@ -210,7 +210,7 @@ OR-ed in (`:3729-3730`). An entry whose flags name more words than it holds list
 writer refuses it. Below 4 GiB `build_dir_entry` writes the same bytes as before. **Not changed, disclosed:**
 `file_size()` still adds `fsizex` on any volume; pfs3aio's `GetDEFileSize` adds it only on `MODE_LARGEFILE`
 (`directory.c:3641-3652`). With the layout right, no entry pfs3aio writes on another volume carries the field.
-*(Changed 2026-09-15 by the scoped re-review's follow-up 1, recorded under [ART-324](#open): `file_size()` adds it
+*(Changed 2026-09-15 by the scoped re-review's follow-up 1, recorded under [ART-324](ISSUES.md#open): `file_size()` adds it
 only on a largefile volume — `MODE_LARGEFILE` with `MODE_DIR_EXTENSION` — and the test below now reads its "Linked"
 entry on one.)*
 **Tests** (`core::preload::native`): `a_pfs3aio_entrys_extra_fields_read_back_as_pfs3aio_writes_them` — three
@@ -269,8 +269,8 @@ object's chain `clustersize` = the object's (`:3993-4028`). **Now** the writer d
 staged it reads the chain, and a node it cannot read or a chain that loops is refused `'<name>' was not moved: … —
 move it on the Amiga, or check this volume with a PFS3 repair tool and try again`. The scoped re-review's item 3
 (renaming both a pfs3aio link and its object dropped both `link` fields) is settled by the same change. The name is
-written Latin-1, or as UTF-8 bytes for a character above U+00FF ([ART-328](#open)). **Not done, filed
-[ART-329](#open):** a moved directory's blocks keep their old parent, and a move into its own subtree is not refused.
+written Latin-1, or as UTF-8 bytes for a character above U+00FF ([ART-328](ISSUES.md#open)). **Not done, filed
+[ART-329](ISSUES.md#open):** a moved directory's blocks keep their old parent, and a move into its own subtree is not refused.
 **Changed alongside:** `a_failed_pfs3_rename_over_an_existing_file_keeps_the_destination` now fails the fourth read of
 "Dir"'s block rather than the second; the second had been ART-323's link check since ART-323, not
 `remove_dir_entry` as its comment said, and the rename now reads the source entry once more.
@@ -314,7 +314,7 @@ skipped) → the node line and the loop test red, the four entries green, as pre
 writes 4 GiB; no pfs3aio-written volume with links, rollover files or extra fields was available, so the oracle
 throughout is pfs3aio's source, read. Red run on the unchanged library: `test result: FAILED. 11 passed; 7 failed`;
 green verification in STATUS. *(Corrected 2026-09-15 by the scoped re-review's follow-ups 1 and 2; libpfs3
-`0.1.3+art.11`.)* `file_size()` no longer adds `fsizex` off a largefile volume ([ART-324](#open)). The entry whose
+`0.1.3+art.11`.)* `file_size()` no longer adds `fsizex` off a largefile volume ([ART-324](ISSUES.md#open)). The entry whose
 extra fields do not fit is tested now: `a_pfs3_entry_whose_extra_fields_do_not_fit_is_listed_with_none` — a flags
 word claiming all eleven words in an entry that holds none — lists with `ExtraFields { prot: 5, .. }`, its size
 700, and the entry after it still listed; the re-review ruled the fallback not a defect. Its red is a mutation's:
@@ -668,7 +668,7 @@ than a dead end.
 - **M8** — both crash tests now compare the old chain byte for byte before S4, and after S4 every chain block against the planned write or the card's own bytes (`assert_chain_bytes`). Mutation, S2 also rewriting the old FSHD's version (chain block list unchanged): `0 passed; 1 failed` at `crash-replace-head-Header: the chain before the link, byte for byte`; restored `1 passed`.
 - **M3 — a record, not a code change.** The spec's "about 46 replaces of room" on CaffeineOS counted every block to `RDBBlocksHi` 6143; with no zero check below `RDBBlocksHi`, 14 replaces of a 62 604-byte driver land on zero blocks, the 15th reaches the stale RDB copy at 2048 and the 39th the old PFS3 blocks from 5120. Those blocks are unlinked, journalled before they are written, in the backup, and checked unchanged outside the write set by verification, so no safety gap was found and none was added. Corrected in the spec's Accepted limits.
 - **M5 — unified, item 4 of the third debt round** (`.superpowers/sdd/2026-09-15-debt-3-round/item4-brief.md`, fixed 2026-09-15 on `art-debt-3-0915`). The three readers this note used to disclose are now one: `core::amigaver::read_loose(data) -> LooseVersion { name: Option<String>, version: Option<(u16, u16)> }` in `src-tauri/src/core/amigaver.rs`, sharing one marker search and one 200-byte window. `rdb::version_from_ver_string` and `rdbedit::program_name_from_ver_string` are now thin calls into it (`.version` and `.name`), keeping their own signatures so neither caller has to learn `AmigaVersion`. **The strict reader, `amigaver::read`, is untouched** — its `is_plausible_name` control-byte rejection is exactly what `read_loose` does not carry, kept as two separate functions (a named option, per the brief) rather than one tolerant mode, because the brief's own claim that this rejection is "what the game index depends on" does not hold: grepping every caller of `amigaver::read` (`amigaver::` outside its own file) found none in `core::gameindex` at all. The real callers are `core::osinstall::collide::read_own_marker`, `core::amigainstall::packagevol::stated_version` and `core::osinstall::apply::read_stated_version`, and it is their behaviour `read` keeps unchanged — corrected here per this project's own rule that a stale claim in a written record is fixed in place, not repeated (CLAUDE.md, "A work list decays"). Characterization tests were written against today's `rdb::version_from_ver_string` and `rdbedit::program_name_from_ver_string` first and run green before either function's body changed, for the shapes that used to differ: a NUL run before the name, control bytes in the name, a marker naming a version and no program, extra whitespace, and no marker at all — `core::rdb::tests::{a_nul_run_between_the_marker_and_the_name_does_not_block_the_version, control_bytes_in_the_name_do_not_stop_the_version_being_found, a_version_with_no_program_name_still_reads, extra_whitespace_between_the_marker_and_the_version_is_tolerated}` and `core::rdbedit::driver_tests::{control_bytes_in_the_name_are_returned_verbatim_not_rejected, extra_whitespace_between_the_marker_and_the_name_is_tolerated}`, plus a new `core::amigaver::tests::a_nul_run_before_the_name_is_rejected_by_the_strict_reader` pinning `read`'s own strictness, and `read_loose`'s own equivalent suite in `core::amigaver::tests`. All stayed green after the refactor, alongside ART-117's own `driver_tests` and `preload::embed` tests and `core::gameindex`. Mutations, both backed up by absolute path into `D:\Projeler\Amiga\scratch-0913\`, grep-confirmed, seen red and restored with `shutil.copyfile`: `read_loose`'s tokenizer made strict about NUL (dropping `|| *b == 0` from its split predicate) turned `core::rdbedit::driver_tests::the_program_name_is_the_first_token_after_ver` red (`80 passed; 1 failed`) — the DifferentDriver tests themselves stayed green, since none of their fixtures place a NUL between the marker and the name, disclosed rather than assumed; restored, `81 passed`. `is_plausible_name` made to accept everything (the strict accessor make tolerant of control bytes) turned the new `a_nul_run_before_the_name_is_rejected_by_the_strict_reader` red along with the pre-existing `binary_noise_with_a_coincidental_number_shape_is_rejected` and `reads_the_id_string_a_library_with_no_ver_marker_carries` (its own premise check) — `23 passed; 3 failed`; restored, `26 passed`. `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings` clean; `cargo test --lib`: `test result: ok. 3469 passed; 0 failed; 60 ignored; 0 measured; 0 filtered out` (406.57 s). Cost, now paid down: one reader instead of three.
-- **M11** — `docs/architecture.md` no longer lists `import_filesystem` on `VolumeFormatter`. **M12** — filed open as [ART-321](#open), found by reading.
+- **M11** — `docs/architecture.md` no longer lists `import_filesystem` on `VolumeFormatter`. **M12** — filed open as [ART-321](ISSUES.md#open), found by reading.
 
 **Scoped re-review fix, 2026-09-15 — the journal I2 leaves behind said "undo it".** The re-review of the fix wave found I2 half-done: `Journalled::close_after_sync` only removed the journal, so a journal left after a written, synced and verified edit was byte-identical to a crash's. The next run's `open_rdb` refused with `JOURNAL-PENDING` ("Undo it first in the File Manager"), and the File Manager's `PendingJournal::roll_back` would have reverted the good edit — the confident wrong sentence `JOURNAL-LEFT` existed to prevent, one run later.
 - **Fix (option (a), the controller's ruling).** After the last sync, `embed::write_journalled_with` calls `Journalled::mark_finished`: the header's `u32` version field (offset 8) is overwritten with `FINISHED_MARK` `0x444F4E45` ("DONE"), `sync_all`ed and read back. Only then is the journal removed. A mark that will not write or sync rolls the edit back (`ART-RDB-EDIT-ROLLED-BACK`, "could not mark its journal finished"); `Journalled::roll_back` first puts version 1 back when a mark may have landed, and restores no block if it cannot. Mark written and removal refused is `JOURNAL-LEFT`. So a leftover journal is either unmarked (undo it) or marked (delete it, never undo).
@@ -930,7 +930,7 @@ just freed; unlike it, pfs3aio sends the old version to the deldir. **Recorded, 
 `overwrite_file_in` sends nothing to the deldir. **Not traced:** whether pfs3aio reuses its freed blocks before the
 commit when its to-be-freed cache fills mid-write (`allocation.c:549-576`), so nothing is claimed about whether it
 fits a replacement that needs the old file's own space. **M6 (sizes of 4 GiB or more)** is filed as
-[ART-324](#open), not fixed.
+[ART-324](ISSUES.md#open), not fixed.
 
 **ART-317** 🟡 ✅ **Every Amiga date ART stamps from the host clock or a host file's modification time is UTC;
 the Amiga reads it as local time** — *found 2026-09-11 (D7, measured on the Windows run: libpfs3 entries 18:15
@@ -6217,7 +6217,7 @@ effect of a metadata pass. It is the same question G9 answers for the OS side
 ("does this Kickstart suit this volume?") arriving from the games side, and it
 belongs beside G9/G16 rather than inside a launcher-metadata round.
 
-Design: [2026-08-17-g10-launcher-metadata-design.md](superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
+Design: [2026-08-17-g10-launcher-metadata-design.md](https://github.com/tolon/Art/blob/7725afa/docs/superpowers/specs/2026-08-17-g10-launcher-metadata-design.md) §6.
 
 **Decided 2026-08-21 by the owner: yes, ART should offer it — but in its own
 round, and always as a proposal.** Never as a side effect of a metadata pass,
@@ -6636,7 +6636,7 @@ choice, not a gap.
 **The rotation matters, and that half is measured.** BoingBag 2's payload
 really does carry the suffixed file, read out of the owner's own
 `BoingBag39-2.lha` — ZipCrypto encrypts the bytes and leaves the **names** in
-clear, which is the same property [ART-166](#open) is filed on:
+clear, which is the same property [ART-166](ISSUES.md#open) is filed on:
 
 | entry in `BoingBag3.9-2/AmigaOS-Update` | size |
 |---|---|
@@ -6740,7 +6740,7 @@ before the result marker. Two things that must not be got wrong:
   fields — that is the one existing check the new path deliberately does not
   reuse, and the reason belongs in the code beside it.
 
-*The account below was found in [ART-226](#open) on 2026-09-04 and moved here, which is the other half of the mis-cut span ART-226's own last paragraph describes: that entry travelled into Fixed and was moved back, and this text travelled with it and stayed. So ART-227 sat closed with no account of how, under an open entry's heading.*
+*The account below was found in [ART-226](ISSUES.md#open) on 2026-09-04 and moved here, which is the other half of the mis-cut span ART-226's own last paragraph describes: that entry travelled into Fixed and was moved back, and this text travelled with it and stayed. So ART-227 sat closed with no account of how, under an open entry's heading.*
 
 **Fixed 2026-08-24, and verified on the owner's own material.**
 `core/amigainstall/finish.rs` — a typed vocabulary of two operations,
@@ -7167,7 +7167,7 @@ the ordering reason [ART-224](#fixed) was filed about the same day.
 the drawer `TÜRKÇE`, raw bytes `54 DC 52 4B C7 45` — Latin-1 Ü and Ç,
 uppercased the way ISO9660 uppercases every Primary name. `validate_path`
 accepts it and it matches the disc byte for byte, so nothing here rests on
-`fold_amiga_case`'s Latin-1 range. It does not reach [ART-113](#open) either:
+`fold_amiga_case`'s Latin-1 range. It does not reach [ART-113](ISSUES.md#open) either:
 every destination is ASCII, so no non-ASCII name is ever asked of a PFS3
 volume.
 
@@ -7685,7 +7685,7 @@ payloads are password-encrypted, so **not one file of either package has
 ever been placed**. The synthetic tests write into drawers the fixture tree
 already has; the one real run got as far as opening the payload.
 
-This is the same bookkeeping [ART-159](#open) does for the *previous*
+This is the same bookkeeping [ART-159](ISSUES.md#open) does for the *previous*
 round's unexercised §5 hazards, and it is filed for the same reason: a
 predicted hazard that produced no component, no test and no issue is
 indistinguishable, six months later, from one that was handled.
@@ -8048,7 +8048,7 @@ shaped like the real one, plus the opening `[all]` pinned in
 
 **ART-219** 🟠 ✅ **Twelve sentences the user reads carried a run of
 fourteen spaces in the middle** — *found 2026-08-23 by extending the
-control-byte sweep, while measuring [ART-060](#open)*
+control-byte sweep, while measuring [ART-060](ISSUES.md#open)*
 `scripts/control-byte-sweep.py` · twelve files
 
 A Rust string that wraps ends its line with `\`, and the compiler eats the
@@ -8372,7 +8372,7 @@ and name the line.
   too — it re-rendered with everything unchanged — and was rewritten to change
   an unrelated setting, which does fall when the dependencies are widened.
 
-**Still owed, and it was always the other half:** [ART-184](#open)'s sweep for
+**Still owed, and it was always the other half:** [ART-184](ISSUES.md#open)'s sweep for
 what a crash leaves behind. This makes the root a choice; it does not tidy up
 after an ART that died mid-stage.
 
@@ -9049,8 +9049,8 @@ panel next door.
 — or instead of — at the top. Scrolling the existing box into view is the
 weaker answer and should be the fallback, not the fix: a message the user has
 to be carried to is still a message they did not get where they were looking.
-Worth doing together with [ART-200](#open), which is the *content* of the same
-sentence, and with [ART-201](#open), which is why the run was ever attempted.
+Worth doing together with [ART-200](ISSUES.md#open), which is the *content* of the same
+sentence, and with [ART-201](ISSUES.md#open), which is why the run was ever attempted.
 
 **Fixed 2026-08-22.** The markup became one `Refusal` component rendered
 twice: beside the fields the refusal is about, and beside the button that
@@ -9253,7 +9253,7 @@ whether the package being chosen can go on it.
 between "ready" and "asks" — a folder that is set but does not describe as a
 tree — and the step says so at the field, in the user's own language, before
 the button. Until then the English refusal is the only thing that says it,
-which is [ART-060](#open) as well.
+which is [ART-060](ISSUES.md#open) as well.
 
 **Fixed 2026-08-22.** `core::osinstall::chain::describe_tree` answers what a
 folder is — whether it carries a `distribution.json`, which release, how many
@@ -9401,7 +9401,7 @@ BoingBag **is**. *"BoingBag'ı bütün Amiga camiası bilir, onu çevirmene gere
 yok."* The name is known across the community; the screen should use it, not
 gloss it.
 
-Fixed in wave 1 alongside [ART-197](#open), both catalogues in one commit.
+Fixed in wave 1 alongside [ART-197](ISSUES.md#open), both catalogues in one commit.
 
 **Fixed 2026-08-22**, both catalogues in one commit:
 
@@ -9609,7 +9609,7 @@ Tests: `a remembered value's identity` · `a remembered shape's identity`
 
 The English preview title and its written-out `component(s)` plural were ruled
 out of scope by the owner — *"asıl mesele bu iş çok uzun ve yavaş sürüyor"* —
-and stay with [ART-060](#open).
+and stay with [ART-060](ISSUES.md#open).
 
 
 **What was eliminated on the way, including one elimination that was itself
@@ -10206,7 +10206,7 @@ installer would fail without it has not been measured; what has is that the
 tree is now in the state its own boot puts it in. It also brought ART-190
 with it, which is the cost of the change and is recorded above.
 
-This is also the first half of [ART-159](#open)'s hazard 1 measured on a
+This is also the first half of [ART-159](ISSUES.md#open)'s hazard 1 measured on a
 running system rather than predicted.
 
 Test: `the_trees_own_rom_update_is_loaded_before_the_installer` ·
@@ -10642,7 +10642,7 @@ another, or a report saying more than it knew.
   copy half. And because a dead key satisfies every check ART had, a new one
   was added: `src/i18n/dead-keys.test.ts`. It fails on
   `files.hostDelete.confirm` the moment the render is removed, and it found
-  twenty-eight more on its first run ([ART-179](#open)).
+  twenty-eight more on its first run ([ART-179](ISSUES.md#open)).
 - **A cancelled delete reported a success it did not have** (F1). A twelve-name
   request stopped after three had three rows, all successful — so the log said
   `verified(true)` and the screen said "3 item(s) went to the Recycle Bin",
@@ -16752,7 +16752,7 @@ possible.
 Fixed by deleting the `max-height`; the flex rule further down the file was
 always the thing that should have decided the height.
 
-**Worth more than the fix:** this is the first defect [ART-062](#open) has
+**Worth more than the fix:** this is the first defect [ART-062](ISSUES.md#open) has
 actually cost. Two tasks' worth of layout work went in green on 178 frontend
 tests, and the first human look at the running screen found this in seconds.
 Nothing in a jsdom test has a viewport height.
