@@ -220,6 +220,7 @@
         "installArchivesInto_other": "Installing {{count}} archives into {{target}}",
         "installOnAmiga": "Installing {{name}} on the Amiga",
         "installRelease": "Installing {{release}} into {{target}}",
+        "measureCardOs": "Measuring {{target}}",
         "planArchives_one": "Planning {{count}} archive",
         "planArchives_other": "Planning {{count}} archives",
         "planLayout_one": "Working out what {{count}} source needs",

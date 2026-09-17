@@ -157,14 +157,15 @@ describe("the job titles Rust sets (ART-301)", () => {
   it("finds all forty-two sites", () => {
     // 40 on 2026-09-14: 33 titles that were `format!` and 7 that were fixed
     // strings, in 19 command files; 42 on 2026-09-17 with the one-button
-    // card's two jobs (`commands/cardos.rs`). A new job moves this number on purpose.
-    // A moved folder or a renamed type moves it to 0.
+    // card's two jobs (`commands/cardos.rs`); 43 on 2026-09-18 with
+    // `card_os_measure` (round 4, task 4). A new job moves this number on
+    // purpose. A moved folder or a renamed type moves it to 0.
     expect(
       RUST.sites.length,
       "The number of JobTitle::new(…) sites in src-tauri/src changed. If you added or removed a " +
-        "background job on purpose, change 42 here and in the comment above in the same commit, " +
+        "background job on purpose, change 43 here and in the comment above in the same commit, " +
         "with its key in JOB_TITLE_KEYS and both catalogues. If you did not, a site was lost."
-    ).toBe(42);
+    ).toBe(43);
   });
 
   it("leaves no listed key without a Rust site", () => {

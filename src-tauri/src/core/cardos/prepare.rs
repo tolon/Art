@@ -110,7 +110,11 @@ pub struct MeasuredCard {
 /// (ART-339), so this is where the two types meet, one variant at a time.
 /// The sentence itself now lives in `core::error` (`unusable_sentence`),
 /// unchanged, for `Display` and the operation log.
-fn to_unusable_source(why: Unusable) -> UnusableSource {
+///
+/// `pub(crate)` since round 4 task 4: `commands::cardos::card_os_classify`
+/// maps the same `content::Unusable` a dropped path classifies to, without a
+/// second copy of this table.
+pub(crate) fn to_unusable_source(why: Unusable) -> UnusableSource {
     match why {
         Unusable::Missing => UnusableSource::Missing,
         Unusable::Unreadable { detail } => UnusableSource::Unreadable { detail },

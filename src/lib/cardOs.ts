@@ -330,3 +330,89 @@ export async function onCardOsPhase(
 ): Promise<UnlistenFn> {
   return listen<CardOsPhaseEvent>(CARD_OS_PHASE_EVENT, (event) => handler(event.payload));
 }
+
+// ---------------------------------------------------------------------------
+// Measure (round 4, task 4): sizes and the sizing refusal only, without
+// staging anything or opening a session (R1) — the free-space question stays
+// in `cardOsPrepare`.
+// ---------------------------------------------------------------------------
+
+export interface CardOsMeasureRequest {
+  cardGb: number;
+  /** The tree, already built (by the OS Builder, into a session opened separately). */
+  tree: string;
+  partitions: PartitionInput[];
+  material: string[];
+  pfs3Driver?: string | null;
+  hstImagerPath?: string;
+}
+
+export const CARD_OS_MEASURE_EVENT = "card-os-measure-result";
+
+export interface CardOsMeasureResult {
+  jobId: number;
+  measured: MeasuredCard | null;
+  /** Anything `measure_card` refused — never a failed job: a preview's own
+   *  refusal is its answer. */
+  refusal: CardRefusal | null;
+}
+
+/** Measure a whole card without staging anything. Returns a job id; the
+ *  answer arrives on `CARD_OS_MEASURE_EVENT`. */
+export async function cardOsMeasure(request: CardOsMeasureRequest): Promise<number> {
+  return invoke<number>("card_os_measure", { request });
+}
+
+export async function onCardOsMeasureResult(
+  handler: (result: CardOsMeasureResult) => void
+): Promise<UnlistenFn> {
+  return listen<CardOsMeasureResult>(CARD_OS_MEASURE_EVENT, (event) => handler(event.payload));
+}
+
+// ---------------------------------------------------------------------------
+// Classify (round 4, task 4): what a dropped path is as a card source, or why
+// it cannot be one — the same call the drop pipeline makes (Q6).
+// ---------------------------------------------------------------------------
+
+/** Why a source cannot be used, each with its own next step — mirrors
+ *  `core::error::UnusableSource`. */
+export type UnusableSource =
+  | { reason: "missing" }
+  | { reason: "unreadable"; detail: string }
+  | { reason: "archive-unreadable"; detail: string }
+  | { reason: "hardfile-not-whdload"; detail: string }
+  | { reason: "not-an-amiga-source"; formatHint: string }
+  | { reason: "not-a-folder" };
+
+export interface ClassifiedSource {
+  path: string;
+  kind: SourceKind | null;
+  why: UnusableSource | null;
+}
+
+/** Classify every path as a card source. Read-only and synchronous: nothing
+ *  is written, and every path is answered whether or not an earlier one
+ *  could not be used. */
+export async function cardOsClassify(paths: string[]): Promise<ClassifiedSource[]> {
+  return invoke<ClassifiedSource[]>("card_os_classify", { paths });
+}
+
+// ---------------------------------------------------------------------------
+// Check a volume name (round 4, task 4): the core's own AmigaDOS name rule
+// (`core::volume::write::dir::check_name`), replacing `preload.ts`'s two
+// restated copies (Q7).
+// ---------------------------------------------------------------------------
+
+export type VolumeNameVerdict =
+  | { ok: true }
+  | {
+      ok: false;
+      why: "empty" | "too-long" | "reserved-character";
+      maxBytes: number;
+    };
+
+/** Check a volume name against AmigaDOS's own rule. Synchronous; never
+ *  re-derived on the screen. */
+export async function cardOsCheckVolumeName(name: string): Promise<VolumeNameVerdict> {
+  return invoke<VolumeNameVerdict>("card_os_check_volume_name", { name });
+}

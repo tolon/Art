@@ -220,6 +220,7 @@
         "installArchivesInto_other": "{{target}} içine {{count}} arşiv kuruluyor",
         "installOnAmiga": "{{name}} Amiga üzerinde kuruluyor",
         "installRelease": "{{target}} içine {{release}} kuruluyor",
+        "measureCardOs": "{{target}} ölçülüyor",
         "planArchives_one": "{{count}} arşiv planlanıyor",
         "planArchives_other": "{{count}} arşiv planlanıyor",
         "planLayout_one": "{{count}} kaynak için gerekenler hesaplanıyor",

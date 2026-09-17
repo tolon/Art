@@ -82,6 +82,7 @@ export const JOB_TITLE_KEYS = [
   "components.jobBar.title.installArchivesInto",
   "components.jobBar.title.installOnAmiga",
   "components.jobBar.title.installRelease",
+  "components.jobBar.title.measureCardOs",
   "components.jobBar.title.planArchives",
   "components.jobBar.title.planLayout",
   "components.jobBar.title.prepareCardOs",

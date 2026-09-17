@@ -44,18 +44,19 @@ use crate::core::card::manifest::{
     describe_card, manifest_path_for, render_manifest, PartitionContent,
 };
 use crate::core::card::read_card;
+use crate::core::cardos::content::{classify, Classified, SourceKind};
 use crate::core::cardos::kickstarts::{check_agreed, place_agreed, PlacedKickstart};
 use crate::core::cardos::partial::{
     finish_partial, partial_path_for, refuse_partial_destination, remove_partial, PartialRemoval,
 };
 use crate::core::cardos::prepare::{
-    check_free_space, measure_card, space_needs, stage_card, HstImagerState, PartitionInput,
-    PartitionWriter, PreparedCard,
+    check_free_space, measure_card, space_needs, stage_card, to_unusable_source, HstImagerState,
+    MeasuredCard, PartitionInput, PartitionWriter, PreparedCard,
 };
 use crate::core::cardos::readback::{count_pfs3_partition, PartitionCount};
 use crate::core::cardos::whdload::{install_whdload, WhdloadInstalled};
 use crate::core::clock::AmigaClock;
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::error::{CoreError, CoreResult, UnusableSource};
 use crate::core::jobs::{JobId, JobOutcome, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{DistributionManifest, MANIFEST_FILE_NAME};
@@ -67,6 +68,7 @@ use crate::core::preload::{plan, PreloadPartition, PreloadRequest, PreloadStep, 
 use crate::core::rom::place::PlaceOutcome;
 use crate::core::safety::{atomic_create_new, Created};
 use crate::core::scratch_guard::{LeftBehind, OwnedScratch};
+use crate::core::volume::write::dir::{check_name, MAX_NAME_LEN};
 use crate::error::AppResult;
 use crate::tools::hst_imager::HstImager;
 
@@ -1504,6 +1506,264 @@ pub fn card_os_close(
 }
 
 // ---------------------------------------------------------------------------
+// Measure (round 4, task 4): sizes and the sizing refusal only — no session,
+// no staging, no free-space question (R1; that stays in `card_os_prepare`,
+// where the staging bytes are real).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardOsMeasureRequest {
+    pub card_gb: u32,
+    /// The tree, already built (by the OS Builder, into a session opened
+    /// separately). Never a `session` id (R1): this command opens no
+    /// session and touches none.
+    pub tree: String,
+    pub partitions: Vec<PartitionInput>,
+    pub material: Vec<String>,
+    #[serde(default)]
+    pub pfs3_driver: Option<String>,
+    #[serde(default)]
+    pub hst_imager_path: String,
+}
+
+/// A card refusal's `ART-*` code, its English sentence (for the log), and the
+/// typed parameters both catalogues build a sentence from — the same shape
+/// `card_os_build`'s `Refused` and `Failed` endings carry (round 4, task 3).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardRefusal {
+    pub code: String,
+    pub message: String,
+    pub params: BTreeMap<String, String>,
+}
+
+fn card_refusal_from(error: &CoreError) -> CardRefusal {
+    CardRefusal {
+        code: error.code().to_string(),
+        message: error.to_string(),
+        params: error
+            .details()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    }
+}
+
+pub const CARD_OS_MEASURE_EVENT: &str = "card-os-measure-result";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardOsMeasureResult {
+    pub job_id: JobId,
+    pub measured: Option<MeasuredCard>,
+    /// Anything `measure_card` refused — a size that does not fit, a source
+    /// that cannot be used, a name that needs hst-imager — arrives here, not
+    /// as a failed job: a preview's own refusal is its answer (I3 applies to
+    /// a build, not to asking "would this fit").
+    pub refusal: Option<CardRefusal>,
+}
+
+/// The measurement, without Tauri: a scratch folder for the driver, made and
+/// removed here — `card_os_measure` writes nothing else.
+fn measure_card_command(
+    request: &CardOsMeasureRequest,
+    scratch_root: &Path,
+    clock: &dyn AmigaClock,
+    hst_probe: impl Fn(&Path) -> Result<(), String>,
+    progress: &dyn ProgressSink,
+) -> CoreResult<MeasuredCard> {
+    let hst_imager = match given_path(Some(&request.hst_imager_path)) {
+        None => HstImagerState::NotConfigured,
+        Some(tool) => match hst_probe(&tool) {
+            Ok(()) => HstImagerState::Usable,
+            Err(why) => HstImagerState::Unusable {
+                path: tool.display().to_string(),
+                why,
+            },
+        },
+    };
+    let scratch = OwnedScratch::create_in(scratch_root, "card-os-measure")?;
+    let driver_stage = scratch.path().join(DRIVER);
+    std::fs::create_dir_all(&driver_stage)?;
+
+    let tree = PathBuf::from(request.tree.trim());
+    let material: Vec<PathBuf> = request
+        .material
+        .iter()
+        .filter_map(|m| given_path(Some(m)))
+        .collect();
+    let explicit_driver = given_path(request.pfs3_driver.as_deref());
+
+    let result = measure_card(
+        request.card_gb,
+        &tree,
+        &request.partitions,
+        &material,
+        explicit_driver.as_deref(),
+        &driver_stage,
+        &hst_imager,
+        clock,
+        progress,
+    );
+    // Removed whatever the outcome: nothing of a measurement is kept.
+    if let Err(left) = scratch.finish() {
+        log::warn!("card_os_measure: {} not removed ({})", left.path, left.why);
+    }
+    result
+}
+
+/// Measure a whole card without staging anything. Returns a job id (reading
+/// an archive's listing can be slow); the answer arrives on
+/// [`CARD_OS_MEASURE_EVENT`], as a plan or as a typed refusal — never both,
+/// and the job itself always finishes (a refusal is this command's own
+/// legitimate answer, not a failure of the job that produced it).
+#[tauri::command]
+pub fn card_os_measure(
+    request: CardOsMeasureRequest,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<JobId> {
+    let root = crate::scratch::root()?;
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let target = request.tree.trim().to_string();
+    let title = JobTitle::new("components.jobBar.title.measureCardOs").text("target", &target);
+
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        let outcome = measure_card_command(
+            &request,
+            &root,
+            &crate::tools::local_time::LOCAL_TIME,
+            |tool: &Path| {
+                HstImager::at(tool)
+                    .probe()
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            },
+            progress,
+        );
+        let result = match outcome {
+            Ok(measured) => CardOsMeasureResult {
+                job_id,
+                measured: Some(measured),
+                refusal: None,
+            },
+            Err(err) => CardOsMeasureResult {
+                job_id,
+                measured: None,
+                refusal: Some(card_refusal_from(&err)),
+            },
+        };
+        let _ = emit_app.emit(CARD_OS_MEASURE_EVENT, result);
+        Ok(())
+    });
+
+    Ok(id)
+}
+
+// ---------------------------------------------------------------------------
+// Classify (round 4, task 4): what a dropped path is as a card source, or
+// why it cannot be one — the same call the drop pipeline makes (Q6),
+// answered synchronously and without opening a session.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifiedSource {
+    pub path: String,
+    pub kind: Option<SourceKind>,
+    pub why: Option<UnusableSource>,
+}
+
+/// Classify every path as a card source. Reads a header and a listing, never
+/// a payload — nothing is written, and every path is answered whether or not
+/// an earlier one could not be used.
+#[tauri::command]
+pub fn card_os_classify(paths: Vec<String>) -> Vec<ClassifiedSource> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let classified = classify(Path::new(&path), &crate::tools::local_time::LOCAL_TIME);
+            match classified {
+                Classified::Usable { kind } => ClassifiedSource {
+                    path,
+                    kind: Some(kind),
+                    why: None,
+                },
+                Classified::NotUsable { why } => ClassifiedSource {
+                    path,
+                    kind: None,
+                    why: Some(to_unusable_source(why)),
+                },
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Check a volume name (round 4, task 4): the core's own AmigaDOS name rule
+// (`core::volume::write::dir::check_name`), replacing `preload.ts`'s two
+// restated copies (Q7) — a third copy would be a third answer.
+// ---------------------------------------------------------------------------
+
+/// Why a name was refused, categorised for the screen's own sentence.
+/// `check_name` itself carries no more than an English message (it refuses
+/// several distinct things through one `CoreError::InvalidInput`), so this
+/// reads the same two conditions it checks first — in the same order, against
+/// the same [`MAX_NAME_LEN`] — and folds every other rule it enforces (a `:`
+/// or `/`, a control character, a character outside Latin-1) into
+/// `ReservedCharacter`: the one rule `check_name` is still solely responsible
+/// for deciding is *whether* a name is legal, never *why* one was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VolumeNameProblem {
+    Empty,
+    TooLong,
+    ReservedCharacter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeNameVerdict {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<VolumeNameProblem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_bytes: Option<u32>,
+}
+
+fn volume_name_problem(name: &str) -> VolumeNameProblem {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        VolumeNameProblem::Empty
+    } else if trimmed.chars().count() > MAX_NAME_LEN {
+        VolumeNameProblem::TooLong
+    } else {
+        VolumeNameProblem::ReservedCharacter
+    }
+}
+
+/// Check a volume name against AmigaDOS's own rule. Never re-derived on the
+/// screen (Q7): this calls `check_name` and only categorises the refusal it
+/// already made.
+#[tauri::command]
+pub fn card_os_check_volume_name(name: String) -> VolumeNameVerdict {
+    match check_name(&name) {
+        Ok(_) => VolumeNameVerdict {
+            ok: true,
+            why: None,
+            max_bytes: None,
+        },
+        Err(_) => VolumeNameVerdict {
+            ok: false,
+            why: Some(volume_name_problem(&name)),
+            max_bytes: Some(MAX_NAME_LEN as u32),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1824,6 +2084,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::*;
     use super::*;
+    use crate::core::clock::UtcClock;
     use crate::core::jobs::NoProgress;
     use crate::core::preload::{CopySummary, ToolVersion};
     use std::sync::atomic::AtomicBool;
@@ -2986,5 +3247,228 @@ mod tests {
         )
         .unwrap();
         println!("wrote {} and {}", image.display(), listing_path.display());
+    }
+
+    // -----------------------------------------------------------------------
+    // Round 4, task 4: measure, classify, check a volume name.
+    // -----------------------------------------------------------------------
+
+    /// System's tree and one small `Games` folder — a card `measure_card`
+    /// answers for at 16 GB and refuses at 1 GB, the same set both times (one
+    /// variable: `card_gb`).
+    fn small_measure_request(dir: &Path, card_gb: u32) -> CardOsMeasureRequest {
+        let tree = small_tree(dir);
+        let material = material_with_driver(dir);
+        let games = folder_with(dir, "Games", &[("Turrican/readme", b"not a slave\n")]);
+        CardOsMeasureRequest {
+            card_gb,
+            tree: tree.display().to_string(),
+            partitions: vec![PartitionInput {
+                volume_name: "Games".into(),
+                sources: vec![games],
+                floor_bytes: 0,
+            }],
+            material: vec![material.display().to_string()],
+            pfs3_driver: None,
+            hst_imager_path: String::new(),
+        }
+    }
+
+    fn usable_hst_probe(_tool: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[test]
+    fn a_measurement_answers_a_plan_for_a_small_card_that_fits() {
+        let (_guard, dir) = scratch("measure-fits");
+        let request = small_measure_request(&dir, 16);
+        let scratch_root = dir.join("scratch-root");
+        std::fs::create_dir_all(&scratch_root).unwrap();
+
+        let measured = measure_card_command(
+            &request,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(measured.system.drive_name, "SDH0");
+        assert_eq!(measured.partitions[0].volume_name, "Games");
+        assert!(
+            !measured.plan.partitions.is_empty(),
+            "a plan came back with the card"
+        );
+    }
+
+    /// The same partitions past the card's own size: `measure_card` refuses
+    /// with `ART-CARD-DOES-NOT-FIT`, typed (not a bare string), and answers
+    /// no plan.
+    #[test]
+    fn a_measurement_past_the_card_s_size_is_refused_typed_and_answers_no_plan() {
+        let (_guard, dir) = scratch("measure-too-small");
+        let request = small_measure_request(&dir, 1);
+        let scratch_root = dir.join("scratch-root");
+        std::fs::create_dir_all(&scratch_root).unwrap();
+
+        let err = measure_card_command(
+            &request,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "ART-CARD-DOES-NOT-FIT", "{err}");
+        let refusal = card_refusal_from(&err);
+        assert_eq!(refusal.code, "ART-CARD-DOES-NOT-FIT");
+        assert!(!refusal.message.is_empty());
+    }
+
+    /// `measure_card` writes only a driver-unpacking folder, and
+    /// `measure_card_command` removes it before answering — whether it
+    /// succeeded or was refused. Nothing else is created: no `staging`, no
+    /// `tree` of its own (round 4, task 4's own guard; the mutation in the
+    /// task report points it at `stage_card`'s folders instead).
+    #[test]
+    fn a_measurement_leaves_nothing_behind_on_success_or_on_refusal() {
+        let (_guard, dir) = scratch("measure-clean");
+        let scratch_root = dir.join("scratch-root");
+        std::fs::create_dir_all(&scratch_root).unwrap();
+
+        let fits = small_measure_request(&dir, 16);
+        measure_card_command(
+            &fits,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_dir(&scratch_root).unwrap().count(),
+            0,
+            "nothing was left behind by a successful measurement"
+        );
+
+        let refused = small_measure_request(&dir, 1);
+        measure_card_command(
+            &refused,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert_eq!(
+            std::fs::read_dir(&scratch_root).unwrap().count(),
+            0,
+            "nothing was left behind by a refused measurement"
+        );
+        assert!(!scratch_root.join(STAGING).exists(), "no staging folder");
+    }
+
+    /// Every path answered, whichever it is: a folder, an archive, a WHDLoad
+    /// hardfile, a floppy image, and one that is none of those — never a bare
+    /// string, always the typed `SourceKind` or `UnusableSource`.
+    #[test]
+    fn classify_answers_every_path_as_a_card_source_or_why_not() {
+        let (_guard, dir) = scratch("classify");
+        let folder = folder_with(&dir, "Stuff", &[("readme", b"x")]);
+        let archive = dir.join("pack.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[("Pack/file", b"x")]),
+        )
+        .unwrap();
+        let hdf = dir.join("Turrican.hdf");
+        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
+            "Turrican", "2026 ART", 16,
+        );
+        crate::core::cardos::content::test_support::build_hdf(
+            &hdf,
+            &["C", "S", "Turrican"],
+            &[
+                ("C/WHDLoad", &whdload_bytes("18.0")),
+                ("S/Startup-Sequence", b"WHDLoad Turrican.slave\n"),
+                ("Turrican/Turrican.slave", &slave),
+                ("Turrican.info", b"icon"),
+            ],
+        );
+        let adf = dir.join("disk.adf");
+        std::fs::write(&adf, vec![0u8; 901_120]).unwrap();
+        let text = dir.join("notes.txt");
+        std::fs::write(&text, b"just notes\n").unwrap();
+        let missing = dir.join("NotThere");
+
+        let paths = [&folder, &archive, &hdf, &adf, &text, &missing]
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>();
+
+        let answers = card_os_classify(paths.clone());
+
+        assert_eq!(answers.len(), 6, "one answer per path");
+        assert_eq!(answers[0].path, paths[0]);
+        assert_eq!(answers[0].kind, Some(SourceKind::Folder));
+        assert_eq!(answers[0].why, None);
+        assert_eq!(
+            answers[1].kind,
+            Some(SourceKind::Archive {
+                format: "lha".into()
+            })
+        );
+        assert_eq!(answers[2].kind, Some(SourceKind::WhdloadHardfile));
+        assert_eq!(answers[3].kind, Some(SourceKind::Adf));
+        assert_eq!(answers[4].kind, None);
+        assert_eq!(
+            answers[4].why,
+            Some(UnusableSource::NotAnAmigaSource {
+                format_hint: "unknown".into()
+            })
+        );
+        assert_eq!(answers[5].kind, None);
+        assert_eq!(answers[5].why, Some(UnusableSource::Missing));
+    }
+
+    /// The core's own AmigaDOS name rule, never re-derived on the screen:
+    /// `Games` is accepted; `Work:1` (a reserved character), an empty name
+    /// and a 31-character name are each refused, typed and with the bound.
+    #[test]
+    fn check_volume_name_accepts_a_good_name_and_types_every_refusal() {
+        assert_eq!(
+            card_os_check_volume_name("Games".into()),
+            VolumeNameVerdict {
+                ok: true,
+                why: None,
+                max_bytes: None,
+            }
+        );
+        assert_eq!(
+            card_os_check_volume_name("Work:1".into()),
+            VolumeNameVerdict {
+                ok: false,
+                why: Some(VolumeNameProblem::ReservedCharacter),
+                max_bytes: Some(30),
+            }
+        );
+        assert_eq!(
+            card_os_check_volume_name("".into()),
+            VolumeNameVerdict {
+                ok: false,
+                why: Some(VolumeNameProblem::Empty),
+                max_bytes: Some(30),
+            }
+        );
+        assert_eq!(
+            card_os_check_volume_name("a".repeat(31)),
+            VolumeNameVerdict {
+                ok: false,
+                why: Some(VolumeNameProblem::TooLong),
+                max_bytes: Some(30),
+            }
+        );
     }
 }
