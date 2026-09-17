@@ -28,9 +28,9 @@ where it was taken.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-17 — documentation cleanup on `docs-cleanup-0917`: this file cut back to one current statement per row, checked against the tree the same day. The last code change on `main` is card round 2's merge, `69d3a40` |
+| **Last updated** | 2026-09-17 — the documentation cleanup is merged (`c866021`), and this file's `main`/`origin` row and "Picking up next session" block were brought up to it the same day. The last code change on `main` is card round 2's merge, `69d3a40` |
 | **Version** | **0.9.4**, released 2026-09-15 — tag `v0.9.4` (annotated, on `e91f22e`), release run 34969262720 `success`, published on the owner's word with one NSIS and one MSI installer. Its notes are CHANGELOG's `[0.9.4]` section. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` — all `0.9.4`, checked 2026-09-17) and `release.yml` refuses a tag that disagrees with any of them, or a version with no CHANGELOG section |
-| **`main` / `origin`** | `origin/main` is `69d3a40` (`git ls-remote`, 2026-09-17) — `art-card-round-2` merged `--no-ff` on 2026-09-17 on the owner's word and pushed; CI run 35196578229 on it `success`. Local `main` is one docs commit ahead, `eb89093`, not pushed. `docs-cleanup-0917` branches from `eb89093`. One other local branch, `art-310-windows` (`d851174`), is not merged into `main` |
+| **`main` / `origin`** | `origin/main` is `c866021` (`git ls-remote`, 2026-09-17) — `docs-cleanup-0917` merged `--no-ff` and pushed, after `art-card-round-2` (`69d3a40`, CI run 35196578229 `success`); CI run 35203099787 on `c866021` `success`. One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
 | **Tests — Rust** | `cd src-tauri && cargo test --lib` at `952f217` (card round 2's fix wave), 2026-09-17: `test result: ok. 3626 passed; 0 failed; 64 ignored; 0 measured; 0 filtered out` (one run; the code commit before it, `33d297b`, ran green twice). The residual commit `df71f37` touched `core/archive/lzx.rs` only and ran that module; CI run 35196578229 ran the whole suite on the merge, `success` |
 | **Tests — frontend** | `pnpm test` after `3193e36` (card round 2, Task 12), 2026-09-17: `Test Files 112 passed (112)`, `Tests 1723 passed (1723)`. The only frontend change since is a doc comment in `src/lib/archive.ts` (`952f217`); CI on `69d3a40` ran `pnpm test`, `success` |
 | **Lint, format, clippy** | Clean locally at `33d297b`, 2026-09-17: `pnpm lint`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`). CI run 35196578229 on `69d3a40` ran all four, `success` |
@@ -265,9 +265,11 @@ the design is
 First boot phase 3 (the wizard and the reboot, `4b72d7b`) and the third debt
 round (`e060e76`, shipped as 0.9.4) are merged before it.
 
-**In progress.** A documentation cleanup on `docs-cleanup-0917` (closed ISSUES
-entries to `docs/ISSUES-archive.md`, executed plans and specs pruned, session
-log and CHANGELOG summarised). Nothing in it changes code.
+A documentation cleanup followed it (`c866021`, pushed, CI green): closed
+ISSUES entries moved to `docs/ISSUES-archive.md`, executed plans and specs
+pruned, session log and CHANGELOG summarised. It changed no code.
+
+**In progress.** Nothing on a branch. Card round 3's research starts next.
 
 **Next: card round 3** — the WHDLoad phase, the `card_os_prepare` /
 `card_os_build` commands, `.partial` output, `run_with_fallback` reachable from
