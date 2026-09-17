@@ -894,7 +894,7 @@ pub(crate) type NameOf<'a, O> = (&'a str, O);
 /// ([`amiga_fold`]), in iteration order — `(earlier, later)` — or `None`.
 ///
 /// One rule for every place that asks "would these land on top of each
-/// other": the card's partition check (`core::card::content`) and the copy
+/// other": the card's partition check (`core::cardos::content`) and the copy
 /// itself, so what was measured and what is copied cannot disagree (card
 /// round 2, R5). `owner` travels with each name so a caller can say *whose*
 /// names collide; it is never compared.

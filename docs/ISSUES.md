@@ -206,21 +206,6 @@ and a listing comes back short — ART-330's confident wrong sentence, from anot
 the block by name in both walks, as `Error::DamagedDirectory` does for a malformed entry, and give the fixture's late
 failure another shape.
 
-**ART-339** 🔵 **`core/card` and `core/preload` import each other, against CLAUDE.md's inward-layering rule** —
-*found 2026-09-17 by the pre-flight scan of card round 2's plan (ledger § 3, ruling R6), by reading; accepted for
-that round on `art-card-round-2`, unmerged*
-`src-tauri/src/core/preload/embed.rs` (`use crate::core::card::{is_dynamic_vhd, read_card}`),
-`src-tauri/src/core/card/content.rs` (`use crate::core::preload::{amiga_fold, first_collision}`,
-`preload::amiga_names::{write_record, AMIGA_NAMES_RECORD}`, `preload::native::…`) · CLAUDE.md: "a lower-level
-`core/` module must not import a higher-level one". `core/preload` already imported `core/card`'s card reader before
-round 2; round 2's `core/card/content.rs` imports `core/preload`'s name fold, collision rule, names record and native
-copy helpers, so the two modules now depend on each other. The round 2 plan's Global Constraints said "`core/preload`
-does not import `core/card`" — false on the day it was written; corrected in place (dated 2026-09-17). **Nothing is
-broken by it today:** `embed.rs` uses only `card/mod.rs`'s low-level readers, and nothing below imports
-`content.rs`. The cost is the one the rule exists for — neither module can be lifted into a crate alone.
-**Fix direction:** move `content.rs` out of `core/card` (for example to `core/cardcontent/`), or move the card
-reader `embed.rs` needs below both modules.
-
 **ART-340** 🟡 **A card source refused after unpacking began leaves its staging folder part-filled, and nothing owns
 removing it yet** — *found 2026-09-16 by card round 2's Task 9 (ledger), triaged by the final whole-branch review
 (2026-09-17) as acceptable for a core round and owed by round 3; on `art-card-round-2`, unmerged*
@@ -255,6 +240,14 @@ a tree built from a hostile or damaged image with a `:` name is recorded in `dis
 `:` like the record; the `Prices: 1993` fixture is replaced by a Windows-hostile name that *is* legal on the Amiga
 (`?`, `*`, `"`, `<`, `>`, `|` — e.g. `Prices? 1993`, which the collision tests already use).
 
+**ART-342** 🔵 **`core/whdload` and `core/gameindex` import each other** — *found 2026-09-17 by card round 3's research
+(`.superpowers/sdd/2026-09-17-one-button-card-round-3/research-tree.md` § 1), by reading; not fixed*
+`src-tauri/src/core/whdload/install.rs` imports `core::gameindex` (`:624`, `:713-716`, `:1238-1240`) while
+`core/gameindex/readers/drawer.rs:24`, `lhadrawer.rs:67` and `whdhdf.rs:37` import `core::whdload` — the shape ART-339
+was. **Nothing is broken by it**; neither module can be lifted into a crate alone. Card round 3 put its own WHDLoad work
+in `core/cardos/` rather than deepen it. **Fix direction:** move `install.rs` (the volume installer, which needs the
+catalogue) up out of `core/whdload`, leaving `core/whdload` the pure layout analysis both use.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -278,6 +271,7 @@ Fixed and closed entries live in full, verbatim, in
 [ISSUES-archive.md](ISSUES-archive.md). The index below lists each one, newest
 first, as `ID · title · when it was fixed` (the date as the entry states it).
 
+- [ART-339](ISSUES-archive.md) · `core/card` and `core/preload` imported each other, against CLAUDE.md's inward-layering rule — fixed: `content.rs` moved to `core/cardos/`, above both · fixed 2026-09-17
 - [ART-338](ISSUES-archive.md) · ART's own LZX reader refused a match that reaches back before a merged group's first byte, which real archives do — fixed: that part of the window reads as zeros, as the Amiga archiver's does · fixed 2026-09-17
 - [ART-337](ISSUES-archive.md) · ART's native FFS copy dropped a `.uaem` sidecar's comment, for files and drawers, without counting the loss · fixed 2026-09-17
 - [ART-336](ISSUES-archive.md) · hst-imager's fallback copy ignored every `.uaem` sidecar, silently — protection bits, dates and comments were dropped and nothing said so · fixed 2026-09-17

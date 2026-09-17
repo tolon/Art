@@ -18,6 +18,7 @@ pub mod archive;
 pub mod artwork;
 pub mod binary;
 pub mod card;
+pub mod cardos;
 pub mod cbm;
 pub mod clock;
 pub mod compatibility;
@@ -1646,5 +1647,44 @@ fn production_after() -> u32 {
              cannot read these files at all: {}",
             blind.join(", ")
         );
+    }
+
+    /// ART-339: `core/card` must not import `core/preload` — the two used to
+    /// import each other, against CLAUDE.md's inward-layering rule — and now
+    /// that `core/cardos` sits above both (`core/cardos/mod.rs`'s own module
+    /// doc), nothing below `core/cardos` may import it either, or the new
+    /// module becomes exactly the layering problem it was created to close.
+    ///
+    /// Mutate by adding a line naming `crate::core::preload` to a product file
+    /// under `core/card/`, or a line naming `crate::core::cardos` to a product
+    /// file outside `core/cardos/`; each fails.
+    #[test]
+    fn core_card_does_not_import_preload_and_nothing_below_imports_cardos() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core");
+        let mut offenders = Vec::new();
+        for path in core_files() {
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("reading {}: {err}", path.display()));
+            let lines: Vec<&str> = text.lines().collect();
+            let regions = test_regions(&rel, &lines);
+            for (n, line) in lines.iter().enumerate() {
+                if line.trim_start().starts_with("//") || is_test_line(&regions, n) {
+                    continue;
+                }
+                let card_imports_preload =
+                    rel.starts_with("card/") && line.contains("crate::core::preload");
+                let below_imports_cardos =
+                    !rel.starts_with("cardos/") && line.contains("crate::core::cardos");
+                if card_imports_preload || below_imports_cardos {
+                    offenders.push(format!("{rel}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "layering (ART-339): {offenders:#?}");
     }
 }

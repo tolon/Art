@@ -15,6 +15,27 @@ today. An ID is never reused.
 
 ## Fixed
 
+**ART-339** 🔵 ✅ **`core/card` and `core/preload` import each other, against CLAUDE.md's inward-layering rule** —
+*found 2026-09-17 by the pre-flight scan of card round 2's plan (the round-2 SDD folder is not on disk; the plan
+`docs/superpowers/plans/2026-09-16-one-button-card-round-2.md` records ruling R6), by reading; accepted for that
+round; fixed 2026-09-17 by card round 3, Task 1*
+`src-tauri/src/core/preload/embed.rs` (`use crate::core::card::{is_dynamic_vhd, read_card}`),
+`src-tauri/src/core/preload/mod.rs:57` (`use crate::core::card::read_card`) and
+`src-tauri/src/core/preload/native.rs:106` (`use crate::core::card::{read_card, AmigaArea, CardImage}`) — all three
+downward, unaffected by this fix and staying that way — and `src-tauri/src/core/card/content.rs`
+(`use crate::core::preload::{amiga_fold, first_collision}`, `preload::amiga_names::{write_record,
+AMIGA_NAMES_RECORD}`, `preload::native::…`) · CLAUDE.md: "a lower-level `core/` module must not import a
+higher-level one". `core/preload` already imported `core/card`'s card reader before round 2; round 2's
+`core/card/content.rs` imported `core/preload`'s name fold, collision rule, names record and native copy helpers,
+so the two modules depended on each other. The round 2 plan's Global Constraints said "`core/preload` does not
+import `core/card`" — false on the day it was written; corrected in place (dated 2026-09-17). **Nothing was broken
+by it:** `embed.rs` used only `card/mod.rs`'s low-level readers, and nothing below imported `content.rs`. The cost
+was the one the rule exists for — neither module could be lifted into a crate alone.
+**Fixed 2026-09-17 by card round 3, Task 1:** `content.rs` moved to `core/cardos/`, the top of the card path.
+Guard: `core::independence::core_card_does_not_import_preload_and_nothing_below_imports_cardos` (red first on the
+three imports, `card/content.rs:62,63,67`; two mutations red — `card/sizing.rs` importing `core::cardos`,
+`card/mod.rs` importing `core::preload` — both restored).
+
 **ART-338** 🟠 ✅ **ART's own LZX reader refused a match that reaches back before a merged group's first byte, which
 real archives do — fixed: that part of the window reads as zeros, as the Amiga archiver's does** — *opened and
 fixed 2026-09-17 in card round 2 on `art-card-round-2` (unmerged); introduced by the same round's Task 3

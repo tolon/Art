@@ -55,7 +55,7 @@
 //! It is deliberately not `distribution.json` under a different name —
 //! writing that filename here would let a hostile archive entry impersonate
 //! the manifest this module already trusts (see `SourceKind`/`place_archive`
-//! in `core/card/content.rs`, which never stages an entry called either name
+//! in `core/cardos/content.rs`, which never stages an entry called either name
 //! at a source's root). And it is written **only when there is something to
 //! record**: an empty map is refused rather than written, so a folder that
 //! needed no escaping never carries the file at all, and

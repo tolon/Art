@@ -175,7 +175,7 @@ fn slave_candidates(
 }
 
 /// Every drawer in `entries` holding at least one slave candidate, sorted and
-/// deduplicated — `""` for a slave at the archive root. `core::card::content`
+/// deduplicated — `""` for a slave at the archive root. `core::cardos::content`
 /// asks this to decide whether an archive is one pack or a collection, so the
 /// card and the game index cannot disagree about what a title's drawer is.
 pub(crate) fn slave_drawers(entries: &[archive::ArchiveEntry]) -> Vec<String> {

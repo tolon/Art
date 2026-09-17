@@ -785,7 +785,7 @@ fn non_ascii_entries(entries: &[CopyEntry]) -> Vec<&str> {
 
 /// Whether `name` holds a character this version of `libpfs3` cannot write
 /// (ART-113): anything outside ASCII. One rule for the copy's refusal and the
-/// card's measure (`core::card::content`), so the two cannot disagree.
+/// card's measure (`core::cardos::content`), so the two cannot disagree.
 pub(crate) fn needs_latin1(name: &str) -> bool {
     !name.is_ascii()
 }

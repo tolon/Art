@@ -36,10 +36,10 @@
 //! on a card (R7) — is listed in `left_behind`, so the user can see that ART
 //! left it on purpose.
 //!
-//! `core/card` importing `core/preload` is accepted for this round (R6):
-//! `preload/embed.rs` already imports `card`, and the name rules — the ART-113
-//! non-ASCII test, the PFS3 name limit, the case fold — must be the copy's own,
-//! not a second copy that can disagree with it.
+//! This module lives in `core/cardos`, above both `core/card` and
+//! `core/preload`, so it may use the copy's own name rules — the ART-113
+//! non-ASCII test, the PFS3 name limit, the case fold — without making those
+//! two modules import each other (ART-339, fixed 2026-09-17).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -1599,7 +1599,7 @@ mod tests {
 
     /// A bare FFS hardfile written by ART's own writer: `dirs` are made in
     /// order (a parent before its child), then `files` — `(path, bytes)`.
-    fn build_hdf(path: &Path, dirs: &[&str], files: &[(&str, &[u8])]) {
+    pub(crate) fn build_hdf(path: &Path, dirs: &[&str], files: &[(&str, &[u8])]) {
         build_hdf_with(path, dirs, files, &[]);
     }
 
@@ -2803,4 +2803,13 @@ mod tests {
             assert!(!measured.top_level.is_empty(), "{}", lha.display());
         }
     }
+}
+
+/// The bare-FFS-hardfile fixture builder [`tests::build_hdf`] already had, for
+/// the other `core/cardos/` modules Tasks 6–10 add — the same fixture, not a
+/// second copy of it that can drift out of step with what this module's own
+/// tests already build.
+#[cfg(test)]
+pub(crate) mod test_support {
+    pub(crate) use super::tests::build_hdf;
 }
