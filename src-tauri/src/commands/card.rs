@@ -651,6 +651,8 @@ fn build_requested_card(
         source_facts(request, &kernel_file)?,
         boot_files,
         request.built_at.clone(),
+        Vec::new(),
+        Vec::new(),
     )?;
     let manifest_path = manifest_path_for(image);
     atomic_write(&manifest_path, render_manifest(&manifest)?.as_bytes())?;

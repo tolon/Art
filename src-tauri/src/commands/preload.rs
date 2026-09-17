@@ -2198,7 +2198,8 @@ mod tests {
                 kernel_file,
             };
 
-            let manifest = describe_card(image, source, boot_files, None).expect("describe_card");
+            let manifest = describe_card(image, source, boot_files, None, Vec::new(), Vec::new())
+                .expect("describe_card");
             atomic_write(
                 &manifest_path_for(image),
                 render_manifest(&manifest).unwrap().as_bytes(),
