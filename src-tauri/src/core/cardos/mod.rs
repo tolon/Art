@@ -10,4 +10,5 @@
 //! exists. `core::independence` holds that (ART-339).
 
 pub mod content;
+pub mod driver;
 pub mod partial;

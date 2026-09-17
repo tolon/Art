@@ -626,6 +626,19 @@ pub enum CoreError {
          build again."
     )]
     PartialImageExists { path: String },
+
+    /// No PFS3 driver was found in any material folder — a loose `pfs3aio`,
+    /// nor an archive holding one — and the caller gave no `explicit` choice
+    /// either (`core::cardos::driver::find_pfs3_driver`, R4). `searched`
+    /// names every folder looked in, in order; `unreadable` names any file
+    /// whose name looked like the driver but which ART could not open or
+    /// read, so a refusal never reads as "nothing was there" when something
+    /// was and ART simply could not use it.
+    #[error("{}", pfs3_driver_not_found_message(searched, unreadable))]
+    Pfs3DriverNotFound {
+        searched: Vec<String>,
+        unreadable: Vec<String>,
+    },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -682,6 +695,22 @@ fn pfs3_names_too_long_message(paths: &[String], more: usize, max_bytes: usize) 
         msg.push_str(&format!(", and {more} more"));
     }
     msg.push_str(". Shorten them before copying.");
+    msg
+}
+
+/// The sentence for [`CoreError::Pfs3DriverNotFound`] — the folders searched
+/// are always said; the archives ART could not read are said only when
+/// there were any (most searches never meet one).
+fn pfs3_driver_not_found_message(searched: &[String], unreadable: &[String]) -> String {
+    let mut msg = format!(
+        "No PFS3 driver was found. ART looked for 'pfs3aio' or 'pfs3aio.lha' in: {}. Put \
+         pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the \
+         driver file yourself.",
+        searched.join(", ")
+    );
+    if !unreadable.is_empty() {
+        msg.push_str(&format!(" ART could not read: {}.", unreadable.join(", ")));
+    }
     msg
 }
 
@@ -753,6 +782,7 @@ impl CoreError {
             } => "ART-RDB-EDIT-ROLLBACK-FAILED",
             Self::RdbEditJournalLeft { .. } => "ART-RDB-EDIT-JOURNAL-LEFT",
             Self::PartialImageExists { .. } => "ART-CARD-PARTIAL-EXISTS",
+            Self::Pfs3DriverNotFound { .. } => "ART-PFS3-DRIVER-NOT-FOUND",
         }
     }
 
@@ -964,6 +994,10 @@ mod tests {
                 detail: "x".into(),
             },
             CoreError::PartialImageExists { path: "x".into() },
+            CoreError::Pfs3DriverNotFound {
+                searched: vec!["x".into()],
+                unreadable: vec![],
+            },
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();
