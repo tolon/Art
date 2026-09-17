@@ -615,6 +615,17 @@ pub enum CoreError {
         journal: PathBuf,
         detail: String,
     },
+
+    /// A `<image>.partial` was already on disk when a card build started
+    /// (P3). ART removes only a file it created in this run — a `.partial`
+    /// left from an earlier one might not have been looked at yet, and this
+    /// refusal names it rather than silently building over or deleting it.
+    #[error(
+        "'{path}' is a half-built card image from an earlier run. ART does not remove a file it \
+         did not create in this run: delete it yourself, or choose another image name, and \
+         build again."
+    )]
+    PartialImageExists { path: String },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -741,6 +752,7 @@ impl CoreError {
                 restored: false, ..
             } => "ART-RDB-EDIT-ROLLBACK-FAILED",
             Self::RdbEditJournalLeft { .. } => "ART-RDB-EDIT-JOURNAL-LEFT",
+            Self::PartialImageExists { .. } => "ART-CARD-PARTIAL-EXISTS",
         }
     }
 
@@ -951,6 +963,7 @@ mod tests {
                 journal: "j".into(),
                 detail: "x".into(),
             },
+            CoreError::PartialImageExists { path: "x".into() },
         ];
 
         let mut codes: Vec<&str> = errors.iter().map(|e| e.code()).collect();

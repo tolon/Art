@@ -120,6 +120,18 @@ pub fn build_card(
     spec: &CardSpec,
     progress: &dyn ProgressSink,
 ) -> CoreResult<BuiltCard> {
+    build_card_with_reader(dest, spec, progress, read_card)
+}
+
+/// [`build_card`]'s body, with the read-back reader passed in rather than
+/// called directly — the seam that lets a test make the read-back step fail
+/// without needing a card the real reader actually cannot read.
+fn build_card_with_reader(
+    dest: &Path,
+    spec: &CardSpec,
+    progress: &dyn ProgressSink,
+    read: impl Fn(&Path) -> CoreResult<CardImage>,
+) -> CoreResult<BuiltCard> {
     if dest.exists() {
         return Err(CoreError::SafetyRefused(format!(
             "'{}' already exists — ART will not build over a card that is already there",
@@ -183,8 +195,17 @@ pub fn build_card(
     }
 
     step("Checking what was built");
-    let verified = read_card(dest)?;
+    let verified = match read(dest) {
+        Ok(verified) => verified,
+        Err(err) => {
+            // the file is ART's own from this call — see the `lay_out` failure above
+            let _ = std::fs::remove_file(dest);
+            return Err(err);
+        }
+    };
     if verified.areas.len() != spec.areas.len() {
+        // the file is ART's own from this call — see the `lay_out` failure above
+        let _ = std::fs::remove_file(dest);
         return Err(CoreError::Malformed {
             format: "card".into(),
             detail: format!(
@@ -607,6 +628,38 @@ mod tests {
             b"somebody's afternoon",
             "and the file is exactly as it was"
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A build whose read-back fails does not leave the file it just wrote —
+    /// it is ART's own from this call, and a card ART cannot itself read back
+    /// is not a card. R7: a minimal one-area spec (the reader is injected, so
+    /// the spec only has to lay out honestly).
+    #[test]
+    fn a_card_that_does_not_read_back_is_removed_not_left() {
+        let (_guard, dir) = scratch("readback");
+        let dest = dir.join("card.img");
+
+        let spec = CardSpec::new(
+            SMALLEST,
+            vec![AreaSpec {
+                size_bytes: 0,
+                partitions: vec![work_partition("SDH0", 512)],
+                file_systems: Vec::new(),
+            }],
+        );
+
+        let err = build_card_with_reader(&dest, &spec, &NoProgress, |_| {
+            Err(CoreError::Malformed {
+                format: "card".into(),
+                detail: "injected".into(),
+            })
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("injected"), "{err}");
+        assert!(!dest.exists(), "a build that cannot be read is removed");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
