@@ -32,7 +32,7 @@ use crate::core::cardos::whdload::{
     find_whdload, read_tree_whdload, tree_has_whdload, WhdloadChoice,
 };
 use crate::core::clock::AmigaClock;
-use crate::core::error::{CoreError, CoreResult, SpacePlace};
+use crate::core::error::{CoreError, CoreResult, SpacePlace, UnusableSource};
 use crate::core::jobs::{cancelled_error, ProgressSink};
 use crate::core::preload::native::MAX_NAMED_NON_ASCII;
 use crate::core::rom::offer::Offer;
@@ -104,19 +104,21 @@ pub struct MeasuredCard {
     pub staging_bytes: u64,
 }
 
-/// The sentence for a source's [`Unusable`] reason, said inside
-/// [`CoreError::CardSourceUnusable`].
-fn unusable_sentence(why: &Unusable) -> String {
+/// Map a source's classification reason onto `core::error`'s own
+/// [`UnusableSource`] — the boundary round 4 task 3 draws: `core::error`
+/// sits below `core/cardos` and cannot import `content::Unusable`
+/// (ART-339), so this is where the two types meet, one variant at a time.
+/// The sentence itself now lives in `core::error` (`unusable_sentence`),
+/// unchanged, for `Display` and the operation log.
+fn to_unusable_source(why: Unusable) -> UnusableSource {
     match why {
-        Unusable::Missing => "it does not exist".to_string(),
-        Unusable::Unreadable { detail } => format!("ART could not read it ({detail})"),
-        Unusable::ArchiveUnreadable { detail } => {
-            format!("ART could not read the archive ({detail})")
+        Unusable::Missing => UnusableSource::Missing,
+        Unusable::Unreadable { detail } => UnusableSource::Unreadable { detail },
+        Unusable::ArchiveUnreadable { detail } => UnusableSource::ArchiveUnreadable { detail },
+        Unusable::HardfileNotWhdload { detail } => UnusableSource::HardfileNotWhdload { detail },
+        Unusable::NotAnAmigaSource { format_hint } => {
+            UnusableSource::NotAnAmigaSource { format_hint }
         }
-        Unusable::HardfileNotWhdload { detail } => detail.clone(),
-        Unusable::NotAnAmigaSource { format_hint } => format!(
-            "it is not a folder, an archive, a WHDLoad hardfile or a floppy image ({format_hint})"
-        ),
     }
 }
 
@@ -127,7 +129,7 @@ fn classify_source(partition: &str, path: &Path, clock: &dyn AmigaClock) -> Core
         Classified::NotUsable { why } => Err(CoreError::CardSourceUnusable {
             partition: partition.to_string(),
             source_path: path.display().to_string(),
-            why: unusable_sentence(&why),
+            why: to_unusable_source(why),
         }),
     }
 }
@@ -268,7 +270,7 @@ pub(crate) fn measure_card_within(
         return Err(CoreError::CardSourceUnusable {
             partition: SYSTEM.to_string(),
             source_path: tree.display().to_string(),
-            why: "the System tree must be a folder".to_string(),
+            why: UnusableSource::NotAFolder,
         });
     }
     let system_sources = vec![measure_source(tree, SourceKind::Folder, clock, progress)?];
@@ -989,6 +991,24 @@ mod tests {
                 && msg.contains(&gone.display().to_string())
                 && msg.contains("does not exist"),
             "{msg}"
+        );
+
+        // Round 4, task 3: `why` is typed, not folded into the sentence —
+        // the screen needs `UnusableSource::Missing`, not English to parse.
+        match &err {
+            CoreError::CardSourceUnusable { why, .. } => {
+                assert_eq!(*why, UnusableSource::Missing, "{err}");
+            }
+            other => panic!("expected CardSourceUnusable, got {other:?}"),
+        }
+        let details = err.details();
+        assert!(
+            details.contains(&("partition", "Games".to_string())),
+            "{details:?}"
+        );
+        assert!(
+            details.contains(&("source", gone.display().to_string())),
+            "{details:?}"
         );
     }
 

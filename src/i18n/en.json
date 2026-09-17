@@ -2947,6 +2947,7 @@
     "verbatim": "{{sentence}}\n\nError ID: {{id}}",
     "treeDestinationOccupied": "'{{path}}' already has something in it. ART never builds a distribution tree over a folder that is not empty — choose an empty folder, or make a new one.\n\nError ID: ART-SAFETY-REFUSED",
     "packageWrongArchive": "'{{archive}}' is not the archive this package's installer lives in: it carries no '{{expected}}' drawer. What it does hold: {{found}}.\n\nError ID: ART-INPUT-INVALID",
+    "cardSourceUnusable": "'{{source}}' in {{partition}} cannot be used. Remove it from {{partition}} or fix it.\n\nError ID: {{id}}",
     "verbatimNoId": "{{sentence}}"
   },
   "network": {

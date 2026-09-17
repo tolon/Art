@@ -27,7 +27,7 @@
 //! failure, and every ending says what became of `<image>.partial`
 //! ([`PartialRemoval`]): ART removes only the file this run created (P3).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -545,15 +545,22 @@ pub enum CardOsEnding {
     Succeeded,
     /// Refused before anything of the image was written: its next step is
     /// the user's (a name, a file, a setting), not "build again" (I3).
+    ///
+    /// `params` is `error.details()` (round 4, task 3): the screen's own
+    /// catalogue builds a Turkish sentence from these instead of carrying
+    /// `message`, which stays English for the log and for whatever `params`
+    /// does not yet cover a key for.
     Refused {
         phase: BuildPhase,
         code: String,
         message: String,
+        params: BTreeMap<String, String>,
     },
     Failed {
         phase: BuildPhase,
         code: String,
         message: String,
+        params: BTreeMap<String, String>,
     },
     Stopped {
         phase: BuildPhase,
@@ -1213,11 +1220,21 @@ fn ending_for(phase: BuildPhase, error: &CoreError, refused: bool) -> CardOsEndi
             phase,
             code: other.code().to_string(),
             message: other.to_string(),
+            params: other
+                .details()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
         },
         other => CardOsEnding::Failed {
             phase,
             code: other.code().to_string(),
             message: other.to_string(),
+            params: other
+                .details()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
         },
     }
 }
@@ -2065,6 +2082,7 @@ mod tests {
                 phase: BuildPhase::Card,
                 code,
                 message,
+                ..
             } => {
                 assert_eq!(code, built.error.as_ref().unwrap().code());
                 assert!(message.contains("not-there.zip"), "{message}");
@@ -2154,6 +2172,7 @@ mod tests {
                     phase: BuildPhase::Partitions,
                     code,
                     message,
+                    ..
                 } => {
                     assert_eq!(code, "ART-HST-IMAGER-UNUSABLE", "{arm}");
                     assert!(message.contains("Stuff"), "{arm}: {message}");
@@ -2216,10 +2235,14 @@ mod tests {
                 phase: BuildPhase::Whdload,
                 code,
                 message,
+                params,
             } => {
                 assert_eq!(code, "ART-KICKSTART-SOURCE-CHANGED", "{message}");
                 assert!(message.contains(&rom.display().to_string()), "{message}");
                 assert!(message.contains("prepare the card again"), "{message}");
+                // Round 4, task 3: the same facts, typed, for the screen.
+                assert_eq!(params.get("name"), Some(&"kick34005.A500".to_string()));
+                assert_eq!(params.get("path"), Some(&rom.display().to_string()));
             }
             other => panic!("expected a Whdload refusal, got {other:?}"),
         }
@@ -2461,6 +2484,7 @@ mod tests {
                     phase: BuildPhase::Card,
                     code: "ART-X".into(),
                     message: "x".into(),
+                    params: BTreeMap::new(),
                 },
                 PartialRemoval::NotCreated,
             ),

@@ -2947,6 +2947,7 @@
     "verbatim": "{{sentence}}\n\nHata kimliği: {{id}}",
     "treeDestinationOccupied": "'{{path}}' klasörünün içinde bir şeyler var. ART bir dağıtım ağacını boş olmayan bir klasörün üzerine kurmaz — boş bir klasör seçin ya da yeni bir tane oluşturun.\n\nHata kimliği: ART-SAFETY-REFUSED",
     "packageWrongArchive": "'{{archive}}' bu paketin kurucusunun bulunduğu arşiv değil: içinde '{{expected}}' çekmecesi yok. İçinde olanlar: {{found}}.\n\nHata kimliği: ART-INPUT-INVALID",
+    "cardSourceUnusable": "'{{source}}', {{partition}} bölümünde kullanılamaz. Onu {{partition}} bölümünden kaldırın ya da sorunu giderin.\n\nHata kimliği: {{id}}",
     "verbatimNoId": "{{sentence}}"
   },
   "network": {

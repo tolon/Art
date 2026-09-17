@@ -123,6 +123,7 @@ describe("the card session events", () => {
       phase: "card",
       code: "ART-SAFETY-REFUSED",
       message: "'E:\\cards\\card.img' already exists",
+      params: { path: "E:\\cards\\card.img" },
     };
     const partial: PartialRemoval = { outcome: "not-created" };
     const gone: PartialRemoval = { outcome: "already-gone", path: "E:\\cards\\card.img.partial" };

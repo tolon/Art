@@ -32,6 +32,7 @@
 // person actually met. The list grows when somebody meets something new, not
 // when somebody goes looking.
 
+import type { CardRefusal } from "@/lib/cardOs";
 import type { Phrase } from "@/lib/phrase";
 
 /** The trailer `CoreError::user_message` appends, and the only thing here that
@@ -71,6 +72,36 @@ interface Recogniser {
   /** Names for the capture groups, in order. */
   captures: string[];
   key: string;
+}
+
+/**
+ * A card refusal's `ART-*` code and the catalogue key that says it — round 4,
+ * task 3's proof of shape. Unlike [`RECOGNISERS`] below, this side needs no
+ * regex: `CardOsEnding::{Refused,Failed}` already hand over `code` and
+ * `params` typed (`error.details()`, `core/error.rs`), so there is nothing
+ * to parse back out of a sentence. Task 11 adds the rest of the card codes;
+ * this one proves the mechanism end to end.
+ */
+interface CardRecogniser {
+  code: string;
+  key: string;
+}
+
+const CARD_RECOGNISERS: CardRecogniser[] = [
+  { code: "ART-CARD-SOURCE-UNUSABLE", key: "errors.cardSourceUnusable" },
+];
+
+/** Whether `value` is a [`CardRefusal`] — the shape `CardOsEnding`'s
+ *  `refused` and `failed` carry, as opposed to a raw string or `Error`. */
+function isCardRefusal(value: unknown): value is CardRefusal {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Partial<CardRefusal>;
+  return (
+    typeof v.code === "string" &&
+    typeof v.message === "string" &&
+    typeof v.params === "object" &&
+    v.params !== null
+  );
 }
 
 /**
@@ -115,6 +146,19 @@ const RECOGNISERS: Recogniser[] = [
  * English as a parameter and does not pretend to be a translation of it.
  */
 export function errorPhrase(value: unknown): Phrase {
+  if (isCardRefusal(value)) {
+    const recogniser = CARD_RECOGNISERS.find((r) => r.code === value.code);
+    if (recogniser) {
+      return { key: recogniser.key, params: { id: value.code, ...value.params } };
+    }
+    // Not one of the card codes this recogniser knows yet (Task 11 adds the
+    // rest): the same two fallbacks as below, built from the typed fields
+    // directly rather than through `parseError`, since `message` carries no
+    // `Error ID:` trailer (`CardOsEnding.message` is `to_string()`, not
+    // `user_message()` — research-tree.md §2.6, note 2).
+    return { key: "errors.verbatim", params: { sentence: value.message, id: value.code } };
+  }
+
   const parsed = parseError(value);
 
   for (const recogniser of RECOGNISERS) {

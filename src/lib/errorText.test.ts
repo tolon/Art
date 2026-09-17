@@ -74,6 +74,46 @@ describe("the two sentences a real person actually met", () => {
   });
 });
 
+describe("a card refusal's typed parameters, not a sentence to parse (round 4, task 3)", () => {
+  // Round 3 ruled `CardSourceUnusable.why` a prose `String`; round 4 reverses
+  // that (T §2.5/§2.6). `CardOsEnding::{Refused,Failed}` now hand over
+  // `code`/`message`/`params` structured — `errorPhrase` must recognise the
+  // shape itself, not scrape `message` (which carries no `Error ID:`
+  // trailer: `to_string()`, not `user_message()`).
+  it("answers a card key with the typed params, not errors.verbatim", () => {
+    const refusal = {
+      code: "ART-CARD-SOURCE-UNUSABLE",
+      message:
+        "'E:\\amiga\\NotThere' in Games cannot be used: it does not exist. Remove it from " +
+        "Games or fix it.",
+      params: { partition: "Games", source: "E:\\amiga\\NotThere", reason: "missing" },
+    };
+    const phrase = errorPhrase(refusal);
+    expect(phrase.key).toBe("errors.cardSourceUnusable");
+    expect(phrase.key).not.toBe("errors.verbatim");
+    expect(phrase.params).toEqual({
+      id: "ART-CARD-SOURCE-UNUSABLE",
+      partition: "Games",
+      source: "E:\\amiga\\NotThere",
+      reason: "missing",
+    });
+  });
+
+  it("a card code this recogniser does not know yet falls back on the typed fields", () => {
+    const refusal = {
+      code: "ART-CARD-DOES-NOT-FIT",
+      message: "these partitions do not fit this card",
+      params: { needed: "2", available: "1" },
+    };
+    const phrase = errorPhrase(refusal);
+    expect(phrase.key).toBe("errors.verbatim");
+    expect(phrase.params).toEqual({
+      sentence: "these partitions do not fit this card",
+      id: "ART-CARD-DOES-NOT-FIT",
+    });
+  });
+});
+
 describe("everything else is Rust's own English, unchanged", () => {
   it("an unrecognised sentence under a known id falls back verbatim", () => {
     const raw = "operation refused to protect data: something else entirely\n\nError ID: ART-SAFETY-REFUSED";

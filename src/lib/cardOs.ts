@@ -222,14 +222,26 @@ export interface CardOsBuildRequest {
 export type BuildPhase = "whdload" | "card" | "partitions" | "check";
 
 /**
+ * A card refusal's `ART-*` code, its English sentence (for the log), and the
+ * typed parameters both catalogues build a sentence from (round 4, task 3 —
+ * this reverses round 3's ruling that a refusal's reason was prose). Shared
+ * by `CardOsEnding`'s `refused` and `failed` variants.
+ */
+export interface CardRefusal {
+  code: string;
+  message: string;
+  params: Record<string, string>;
+}
+
+/**
  * Four endings, kept apart: a refusal (before anything of the image was
  * written; its next step is the user's) is never a failure, and a stop is
  * never either.
  */
 export type CardOsEnding =
   | { ending: "succeeded" }
-  | { ending: "refused"; phase: BuildPhase; code: string; message: string }
-  | { ending: "failed"; phase: BuildPhase; code: string; message: string }
+  | ({ ending: "refused"; phase: BuildPhase } & CardRefusal)
+  | ({ ending: "failed"; phase: BuildPhase } & CardRefusal)
   | { ending: "stopped"; phase: BuildPhase };
 
 export type TreeWrite =
