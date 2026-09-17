@@ -45,7 +45,8 @@ any port of it. Reserved-area sizing, option flags, datestamps and everything el
 
 Everything else in the writer is 0.1.3's.
 
-**2026-09-14, the debt round** (plan `docs/superpowers/plans/2026-09-14-debt-3-pfs3.md`; pfs3aio read at
+**2026-09-14, the debt round** (`art-debt-0914`, merged as `7725afa`; its PFS3 items are ART-311,
+ART-313 … ART-316 and ART-318, planned in `8ec5392`; pfs3aio read at
 `tonioni/pfs3aio` `211f7f0`):
 
 4. **A directory block's `parent` is the directory that holds it ([ART-313](../../../docs/ISSUES.md)).** The
