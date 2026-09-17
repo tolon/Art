@@ -2809,7 +2809,17 @@ mod tests {
 /// the other `core/cardos/` modules Tasks 6–10 add — the same fixture, not a
 /// second copy of it that can drift out of step with what this module's own
 /// tests already build.
+///
+/// A real wrapper `fn`, not a `pub(crate) use` re-export: nothing in this
+/// tree calls it yet (Tasks 8, 10 and 13 are the callers), and a re-export
+/// with no user is `unused_imports`, which `-D warnings` makes a build
+/// failure — `lib.rs` allows only `dead_code`, and an unused wrapper `fn` is
+/// exactly that, not an unused import.
 #[cfg(test)]
 pub(crate) mod test_support {
-    pub(crate) use super::tests::build_hdf;
+    use std::path::Path;
+
+    pub(crate) fn build_hdf(path: &Path, dirs: &[&str], files: &[(&str, &[u8])]) {
+        super::tests::build_hdf(path, dirs, files);
+    }
 }
