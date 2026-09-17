@@ -26,8 +26,8 @@ pnpm, MSVC Build Tools).
    the shape every branch here has used since 2026-08-22. `main` is what is
    released; a phase's work lives on its own branch until the phase closes.
 4. Follow the stage plan — **do not implement future-stage features** until the
-   current one is stable. [docs/roadmap.md](docs/roadmap.md) defines what each
-   phase contains; STATUS.md defines the order.
+   current one is stable. The stage plan and its order live in
+   [docs/STATUS.md § Stage plan](docs/STATUS.md#stage-plan).
 5. Keep the build green:
 
    ```bash
