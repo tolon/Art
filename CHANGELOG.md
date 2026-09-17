@@ -27,6 +27,7 @@ wording of every entry, with what was measured, is in git history
 - The first-boot report says when a step asked for a restart and what happened, and a timed-out rehearsal names the preferences window it was waiting in.
 - The sentence for a restart the Amiga could not carry out says what may not take effect, instead of telling you to restart "to finish".
 - Applying a screen depth twice no longer keeps a backup of ART's own four-byte marker file.
+- **A note owed since 0.9.2:** an RDB partition table ART writes (a hard-disk image with partitions, or a card's Amiga area) counts whole cylinders only, rounding down. Where the size asked for is not a whole number of cylinders (16 × 63 sectors, 516 096 bytes), the table — and a new partitioned HDF's file — is one cylinder smaller than 0.9.1 made it: at or under the size asked for, never over. The old rounding let the last partition end past the disk ([ART-309](docs/ISSUES.md)).
 
 ### Fixed
 

@@ -214,20 +214,28 @@ was. **Nothing is broken by it**; neither module can be lifted into a crate alon
 in `core/cardos/` rather than deepen it. **Fix direction:** move `install.rs` (the volume installer, which needs the
 catalogue) up out of `core/whdload`, leaving `core/whdload` the pure layout analysis both use.
 
-**ART-343** 🟡 **Nothing checks that a prepared card is still what is on disk when it is built** — *found 2026-09-17
-by card round 3's final whole-branch review (`.superpowers/sdd/2026-09-17-one-button-card-round-3/final-review.md`,
-M5), by reading; filed by the fix wave as design, not built*
-`src-tauri/src/commands/cardos.rs` (`card_os_prepare` → `card_os_build`), `core/cardos/prepare.rs` (`PreparedCard`),
-`core/cardos/kickstarts.rs` (`place_agreed` → `core::rom::place`) · Between prepare and build the OS Builder may rewrite
-`tree/`, and folder sources are copied in place from the user's own folders, so System's re-check and every
-partition's size can be stale: the build then fails in its Partitions phase **after the image exists**. And
-`place` re-reads the agreed ROM's path without checking its CRC, so a ROM swapped between prepare and build lands
-under the agreed name — the proposal the user agreed to is not the file that is placed. **Why filed, not fixed:**
-it needs a design — what a fingerprint of a large tree costs, whether a folder's mtime is trustworthy on every
-filesystem ART reads, and whether a change is refused or re-prepared — and the round's rule is that a fix wave does
-not build unreviewed design. **Fix direction:** record each source's size and modification time, the tree's
-fingerprint and each proposed ROM's CRC in `PreparedCard`; refuse in the build's preflight (which already runs
-before anything is written, card round 3 I3) when any differs, naming what changed and "prepare again".
+**ART-343** 🟡 **Nothing checks that a prepared card's tree and sources are still what is on disk when it is
+built** — *found 2026-09-17 by card round 3's final whole-branch review
+(`.superpowers/sdd/2026-09-17-one-button-card-round-3/final-review.md`, M5), by reading; filed by the fix wave as
+design; narrowed 2026-09-17 by the residual fix round, which fixed the ROM half*
+`src-tauri/src/commands/cardos.rs` (`card_os_prepare` → `card_os_build`), `core/cardos/prepare.rs`
+(`PreparedCard`) · Between prepare and build the OS Builder may rewrite `tree/`, and folder sources are copied in
+place from the user's own folders, so System's re-check and every partition's size can be stale: the build then
+fails in its Partitions phase **after the image exists**. **Why filed, not fixed:** it needs a design — what a
+fingerprint of a large tree costs, whether a folder's mtime is trustworthy on every filesystem ART reads, and
+whether a change is refused or re-prepared — and the round's rule is that a fix wave does not build unreviewed
+design. **Fix direction:** record each source's size and modification time and the tree's fingerprint in
+`PreparedCard`; refuse in the build's preflight (which already runs before anything is written, card round 3 I3)
+when any differs, naming what changed and "prepare again". **The ROM half is fixed** (card round 3's residual
+round, re-review's split-out of M5): `core/cardos/kickstarts.rs::check_agreed` re-reads each agreed Kickstart's
+source through `identify_rom` and compares its WHDLoad CRC-16, and its size when the offer stated one, with the
+offer; a changed, missing or unreadable file is `CoreError::KickstartSourceChanged`
+(`ART-KICKSTART-SOURCE-CHANGED`), a `Refused { Whdload }` ending before the tree or the image is written, naming
+the file, both checksums and "prepare the card again". Tests:
+`an_agreed_kickstart_whose_file_changed_since_the_proposal_is_refused_by_name` (both arms: unchanged control,
+changed bytes, a stated size that differs, the file gone) and, through the build,
+`a_kickstart_changed_since_prepare_is_refused_before_the_tree_or_the_image`; the comparison, the size check and the
+call each mutated and seen red.
 
 **ART-344** 🔵 **A card session's scratch folder is left behind when the app exits without closing it, and a
 panicking job leaves the session busy** — *found 2026-09-17 by card round 3's final whole-branch review

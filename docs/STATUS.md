@@ -28,16 +28,16 @@ where it was taken.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-17 — card round 3's final-review fix wave (this session) recorded its runs; this file's `main`/`origin`, test, lint, sweep, open-defect and "Picking up next session" rows describe `art-card-round-3` after that wave. The last code change on `main` is still card round 2's merge, `69d3a40` — round 3 is not merged |
+| **Last updated** | 2026-09-17 — card round 3's residual round after the scoped re-review (`d344b26`) recorded its runs; this file's `main`/`origin`, test, lint, sweep, open-defect and "Picking up next session" rows describe `art-card-round-3` after that round. The last code change on `main` is still card round 2's merge, `69d3a40` — round 3 is not merged |
 | **Version** | **0.9.4**, released 2026-09-15 — tag `v0.9.4` (annotated, on `e91f22e`), release run 34969262720 `success`, published on the owner's word with one NSIS and one MSI installer. Its notes are CHANGELOG's `[0.9.4]` section. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` — all `0.9.4`, checked 2026-09-17) and `release.yml` refuses a tag that disagrees with any of them, or a version with no CHANGELOG section |
-| **`main` / `origin`** | `origin/main` is still `c866021` (unchanged since the documentation cleanup). **Card round 3 is on `art-card-round-3`, unmerged: reviewed (0 Critical, 5 Important, 18 Minor), fixed in one wave, awaiting a short scoped re-review** (fourteen tasks: `core/cardos/` above `core/card`/`core/preload` — ART-339 — the WHDLoad phase, the Kickstart proposal, `card_os_open`/`prepare`/`build`/`close`, `.partial` output, and the end-to-end card proven against `hst-imager`). One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
-| **Tests — Rust** | `cd src-tauri && cargo test --lib` on card round 3's fix-wave tree (the code its commits hold), 2026-09-17, run **once** as the wave's brief set it: `test result: ok. 3708 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 549.91s`. Before the wave, at `bca7794`, twice: 3686 passed / 66 ignored. **Owed before merging: a second whole run (ART-059)** |
+| **`main` / `origin`** | `origin/main` is still `c866021` (unchanged since the documentation cleanup). **Card round 3 is on `art-card-round-3`, unmerged: reviewed (0 Critical, 5 Important, 18 Minor), fixed in one wave, re-reviewed, its residuals (N1, N2, N5, N6, ART-343's ROM half, M18) fixed — ready to merge on the owner's word** (fourteen tasks: `core/cardos/` above `core/card`/`core/preload` — ART-339 — the WHDLoad phase, the Kickstart proposal, `card_os_open`/`prepare`/`build`/`close`, `.partial` output, and the end-to-end card proven against `hst-imager`). One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib` on card round 3's residual-round tree (`d344b26`'s code), 2026-09-17, run once: `test result: ok. 3715 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 517.14s`. The fix-wave tree, once: 3708 passed / 66 ignored; before the wave, at `bca7794`, twice: 3686 / 66. **The residual round's run is this tree's first; a second is owed before merging (ART-059)** |
 | **Tests — frontend** | `pnpm test` on the fix-wave tree, 2026-09-17: `Test Files 113 passed (113)`, `Tests 1730 passed (1730)` |
-| **Lint, format, clippy** | Clean on the fix-wave tree, 2026-09-17: `pnpm lint`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`) |
-| **Sweeps** | Card round 3's fix wave, 2026-09-17, all clean: `control-byte-sweep.py` (7 files allow-listed for AmigaDOS DosType data and 7 for deliberate alignment), `scratch-root-sweep.py` (5 named exceptions — `OwnedScratch::create_in(root, …)` in `commands/cardos.rs` goes through the root it is given, not flagged), `scratch-guard-sweep.py` (157 guard sources, 2057 call sites, 3 hand-built paths, 9 platform-root arguments, 12 exempt), `contrast-check.py --quiet` (105 pairs, both themes). `rom-table-check.py` re-run: 154 identifiable dumps, "the committed table says exactly what the database says" |
+| **Lint, format, clippy** | Clean on the residual-round tree, 2026-09-17: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`). `pnpm lint` last on the fix-wave tree (the residual round changed no TypeScript) |
+| **Sweeps** | Card round 3's residual round, 2026-09-17, all clean: `control-byte-sweep.py` (7 files allow-listed for AmigaDOS DosType data and 7 for deliberate alignment), `scratch-root-sweep.py` (5 named exceptions — `OwnedScratch::create_in(root, …)` in `commands/cardos.rs` goes through the root it is given, not flagged), `scratch-guard-sweep.py` (157 guard sources, 2064 call sites, 3 hand-built paths, 9 platform-root arguments, 12 exempt), `contrast-check.py --quiet` (105 pairs, both themes). `rom-table-check.py` re-run: 154 identifiable dumps, "the committed table says exactly what the database says" |
 | **Build** | CI runs `pnpm tauri build` on every push (last: run 35196578229 on `69d3a40`, `success`), and `release.yml` built 0.9.4's installers. The last local package is 0.9.3, `pnpm tauri build` on `main` at `62f0f81`, 2026-09-13, copied to `E:\amiga\ProjeART\build\`, not code-signed |
 | **i18n** | **2308** leaf strings in each of `src/i18n/en.json` and `tr.json`, counted 2026-09-17 on `docs-cleanup-0917` (no catalogue change since `main`). Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
-| **Open defects** | **8**, counted 2026-09-17 on `art-card-round-3`'s `docs/ISSUES.md` after the fix wave — ART-062, ART-324, ART-328, ART-329, ART-331, ART-342, ART-343, ART-344 ([ISSUES.md](ISSUES.md#open)). ART-339, ART-340 and ART-341 fixed this round (Tasks 1, 3+12 and 2); ART-343 (a prepared card not checked against the disk at build) and ART-344 (a session folder left when the app exits) filed by the fix wave as design. Method: `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` |
+| **Open defects** | **8**, counted 2026-09-17 on `art-card-round-3`'s `docs/ISSUES.md` after the fix wave — ART-062, ART-324, ART-328, ART-329, ART-331, ART-342, ART-343, ART-344 ([ISSUES.md](ISSUES.md#open)). ART-339, ART-340 and ART-341 fixed this round (Tasks 1, 3+12 and 2); ART-343 (a prepared card's tree and sources not checked against the disk at build — its ROM half fixed by the residual round) and ART-344 (a session folder left when the app exits) filed by the fix wave as design. Method: `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` |
 | **Feature rows** | **229 marked rows** in [FEATURES.md](FEATURES.md) — **173 ✅, 28 🟡, 20 ⏳, 5 🔩, 3 🅥2** — counted 2026-09-17 on `art-card-round-3` (three rows added by Task 14 for the card's WHDLoad phase, Kickstart proposal and the end-to-end build): one marker per table row, the first cell in the row that is exactly a State marker, the legend table's five rows excluded. **State the method with the number**; counting marker *cells* gives a different figure |
 | **amitools oracle** | 53 checks, both directions (`scripts/oracle-check.py`, blocking in CI; last run locally 2026-09-17 at `bca7794`, "ART and an independent implementation agree, both ways round") — including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
 | **Kickstart table** | 154 dumps (`core/rom/remus.rs::REMUS_ROMS`), generated from amitools' Remus split database and re-verified against it on every CI run (`scripts/rom-table-check.py`, [ART-104](ISSUES.md#fixed)). Licensed Amiga Forever ROMs are first-class input ([ART-128](ISSUES.md#fixed)): decoded with the `rom.key` beside them, then identified like any dump |
@@ -286,9 +286,12 @@ fixed in one wave (`fix-wave-report.md`): a fourth build ending, `refused`, for
 everything asked before anything is written; the card writer says what it did
 with a file it created; one hst-imager, probed at prepare and gated at build;
 a manifest counted off the finished card; System's two refusals with their own
-next steps. **Next: a short scoped re-review** of `commands/cardos.rs`,
-`core/card/build.rs` and `core/cardos/prepare.rs`, **a second whole-suite run**
-(the wave ran it once), then merge on the owner's word, then round 4 (every
+next steps. The scoped re-review (`fix-wave-re-review.md`) found one wave
+sentence wrong (N1) and three Minors; the residual round (`d344b26`,
+`residual-fix-report.md`) fixed them, split ART-343's ROM half out and fixed it,
+and wrote round 1's cylinder note into CHANGELOG. **Next: a second whole-suite
+run on this tree (ART-059), then merge on the owner's word** — ready to merge,
+no further review owed — then round 4 (every
 screen the card needs — it must show the four endings and ART-343/344's
 refusals — plus the owner's own card flashed and booted on a real PiStorm).
 
@@ -297,11 +300,10 @@ on a largefile PFS3 volume, which ART never formats), ART-328 and ART-329
 (unreachable), ART-331 (a PFS3 directory block without the `DB` id skipped
 silently, only on a damaged card), ART-342 (`core/whdload` ⇄ `core/gameindex`
 import each other, found by round 3's research; nothing broken by it), ART-343
-(a prepared card not checked against the disk when it is built) and ART-344 (a
-card session's scratch left when the app exits) — both filed by the fix wave as
-design. ART-339, ART-340 and ART-341 (the round's own three) are fixed on
-`art-card-round-3`, not yet on `main`. CHANGELOG still owes round 1's cylinder
-note.
+(a prepared card's tree and sources not checked against the disk when it is
+built; its ROM half fixed) and ART-344 (a card session's scratch left when the
+app exits) — both filed by the fix wave as design. ART-339, ART-340 and ART-341
+(the round's own three) are fixed on `art-card-round-3`, not yet on `main`.
 
 **First boot phase 4** (packages) is not built and is narrowed to the two
 packages still Amiga-only: `boingbags-39-3-4` (`needs-installer-script`) and
