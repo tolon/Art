@@ -221,6 +221,20 @@ broken by it today:** `embed.rs` uses only `card/mod.rs`'s low-level readers, an
 **Fix direction:** move `content.rs` out of `core/card` (for example to `core/cardcontent/`), or move the card
 reader `embed.rs` needs below both modules.
 
+**ART-340** 🟡 **A card source refused after unpacking began leaves its staging folder part-filled, and nothing owns
+removing it yet** — *found 2026-09-16 by card round 2's Task 9 (ledger), triaged by the final whole-branch review
+(2026-09-17) as acceptable for a core round and owed by round 3; on `art-card-round-2`, unmerged*
+`src-tauri/src/core/card/content.rs` (`prepare`, `prepare_archive`, `prepare_hardfile`). `prepare` refuses a hostile
+name, two escaped names that would share a host path and a hardfile's collisions before it writes anything, but a
+refusal that only the unpacking itself can find — a member that fails its CRC, a `.uaem` sidecar ART cannot read, a
+disk error — comes after files are already in `staging`. The contract is documented (`prepare`'s doc comment: "a
+refusal after unpacking began leaves `staging` for the caller to remove"), `staging` is the caller's scratch, and
+`require_empty_staging` stops the folder being reused by accident, so **nothing reaches a card today** — there is no
+caller. The cost arrives with round 3's `card_os_prepare`/`card_os_build`: a command that forgets it leaves a
+part-unpacked archive in the scratch root after every refused source. **Fix direction (round 3):** the command holds
+each source's staging folder in a `core::ScratchDir`-style guard that removes it on every ending, and when it cannot
+be removed, the refusal names the folder rather than claiming it is gone.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -313,7 +327,10 @@ comment longer than 79 bytes (`Error::CommentTooLong`). `core/card/sizing.rs::en
 `copy_in_pfs3_carries_the_comment_and_date_it_used_to_count_as_lost`, and
 `core::card::sizing::tests::large_directories_with_long_names_and_comments_fit_their_estimate`. Mutations 6/6 killed
 in the copy; in sizing, dropping the comment's bytes is killed but the comment-length byte `+1` → `+0` **survives**
-(absorbed by cylinder rounding — a weak guard, disclosed). **Not proven:** a comment written by this patched libpfs3
+(absorbed by cylinder rounding — a weak guard, disclosed). *Closed 2026-09-17 by the final review's fix wave:*
+`core::card::sizing::tests::an_entry_costs_exactly_what_libpfs3_writes_for_either_parity` pins the entry size for both
+parities against `extra_fields_offset + 2`, and the `+1` → `+0` mutation now fails it (`left: 26 right: 28`).
+**Not proven:** a comment written by this patched libpfs3
 read back by pfs3aio on a real Amiga.
 
 **ART-334** 🟡 ✅ **`ExtractReport.renamed` held leaf-only display strings, so a name escaped out of an HDF could not

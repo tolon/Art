@@ -22,7 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   against unar on two real archives (1052 files, all identical); not yet opened on the Files screen by hand.
 - **Groundwork for the one-button card's content step** (no screen yet). ART can now tell whether a folder, an
   archive, a WHDLoad hardfile or an ADF can go onto a card partition, and measure it before anything is written:
-  names an Amiga cannot hold, names Windows cannot hold, and two sources with the same drawer. A request to prepare a
+  names an Amiga cannot hold, names Windows cannot hold, comments an Amiga cannot store, and two sources with the
+  same drawer. A request to prepare a
   card's volumes can carry several folders for one partition; the screen still offers one.
 
 ### Changed
