@@ -243,7 +243,7 @@ Audited in Stage 3; see [ART-021 … ART-027](ISSUES.md#fixed) for what was
 wrong. Stage R made partition contents reachable: `BlockDevice` +
 `VolumeGeometry` let the existing FFS/OFS code read any geometry, so an HDF
 partition browses like a floppy. Cross-validated against `amitools` — which is
-how [ART-032 … ART-035](ISSUES.md#amiga-format-compatibility-stage-r-oracle)
+how [ART-032 … ART-035](ISSUES-archive.md#amiga-format-compatibility-stage-r-oracle)
 were found.
 
 Stage W added writing. Two strategies behind one API: an image of 16 MiB or
@@ -429,7 +429,7 @@ against a localhost socket, so CI never leaves the machine.
 
 The index format, the mirror defaults and the whole pipeline were verified
 against live Aminet mirrors on 2026-08-09 — which is how
-[ART-030 and ART-031](ISSUES.md#software-sources-aminet-415) were found.
+[ART-030 and ART-031](ISSUES-archive.md#software-sources-aminet-415) were found.
 
 **That verification is now a check anybody can re-run**, `net/live_aminet.rs`
 (`cargo test live_aminet -- --ignored --nocapture`), because a one-off run

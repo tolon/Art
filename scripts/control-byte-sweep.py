@@ -64,7 +64,7 @@ TEXT_SUFFIXES = {
 
 # Files whose control bytes are AmigaDOS DosType data, not corruption.
 ALLOWED = {
-    "docs/ISSUES.md":
+    "docs/ISSUES-archive.md":
         r"`DOS\3` / `PDS\3` DosTypes quoted from two real PiStorm cards, and a "
         r"`pri=1146049281` reading whose ASCII is `DOS\1`",
     "src/lib/rdbDrivers.ts":
