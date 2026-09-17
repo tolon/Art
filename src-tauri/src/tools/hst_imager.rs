@@ -277,21 +277,42 @@ impl VolumeFormatter for HstImager {
         source: &Path,
         sink: &dyn ProgressSink,
     ) -> CoreResult<CopySummary> {
+        self.copy_in_sources(image, slot, drive, &[source.to_path_buf()], sink)
+    }
+
+    /// Card round 2: one `fs copy` per source into the same partition, and
+    /// one listing afterwards — but every refusal first, for **every**
+    /// source, so a second folder that cannot be copied never leaves the
+    /// first one copied beside nothing.
+    fn copy_in_sources(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        sources: &[PathBuf],
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<CopySummary> {
+        crate::core::preload::check_source_collisions(sources)?;
         // Refused before anything is launched, never partway (ART-160). An
         // external tool copies the folder as it finds it, so a file the
         // distribution tree had to store as `_AUX` would reach the Amiga
         // under that name. `NativeFormatter` reads the tree's own manifest
         // and puts `AUX` back; this one cannot be told.
-        let names = crate::core::preload::amiga_names::AmigaNames::read(source);
-        if !names.is_empty() {
-            return Err(CoreError::EscapedNamesNeedNativeCopy {
-                pairs: names
+        let mut pairs = Vec::new();
+        for source in sources {
+            let names = crate::core::preload::amiga_names::AmigaNames::read(source);
+            pairs.extend(
+                names
                     .pairs()
-                    .map(|(host, amiga)| (host.to_string(), amiga.to_string()))
-                    .collect(),
-            });
+                    .map(|(host, amiga)| (host.to_string(), amiga.to_string())),
+            );
         }
-        self.run(&copy_args(image, slot, drive, source), sink)?;
+        if !pairs.is_empty() {
+            return Err(CoreError::EscapedNamesNeedNativeCopy { pairs });
+        }
+        for source in sources {
+            self.run(&copy_args(image, slot, drive, source), sink)?;
+        }
         // The count comes from asking the volume, not from reading the copy's
         // own log. A listing that fails leaves the copy standing: the files
         // are there either way, and a number ART could not get is a number,
@@ -312,6 +333,36 @@ mod tests {
 
     fn img() -> PathBuf {
         PathBuf::from("E:").join("cards").join("card.img")
+    }
+
+    /// Card round 2: the escaped-names refusal is asked of **every** source
+    /// before the first `fs copy` runs. The plain folder comes first on
+    /// purpose: a check made inside the copy loop would try to launch the
+    /// missing exe for it and fail with "could not run" instead.
+    #[test]
+    fn every_source_is_checked_for_escaped_names_before_the_first_copy_runs() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-hst-escaped", "sources");
+        let plain = dir.join("plain");
+        let with_record = dir.join("with-record");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("Plain"), b"x").unwrap();
+        std::fs::create_dir_all(&with_record).unwrap();
+        let names = std::collections::BTreeMap::from([("_AUX".to_string(), "AUX".to_string())]);
+        crate::core::preload::amiga_names::write_record(&with_record, &names).unwrap();
+
+        let tool = HstImager::at(dir.join("nothing-here.exe"));
+        let err = tool
+            .copy_in_sources(
+                &img(),
+                None,
+                "DH0",
+                &[plain, with_record],
+                &crate::core::jobs::NoProgress,
+            )
+            .unwrap_err();
+
+        assert_eq!(err.code(), "ART-ESCAPED-NAME-NEEDS-NATIVE", "{err}");
+        assert!(format!("{err}").contains("_AUX"), "{err}");
     }
 
     /// **ART-160.** A distribution tree that had to escape a name is refused

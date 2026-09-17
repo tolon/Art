@@ -984,7 +984,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         rdb_blocks_hi_raised: null,
       },
       { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
-      { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
+      { step: "copy-in", slot: 2, drive_name: "DH0", sources: ["E:\\tree"] },
     ];
     for (const step of steps) {
       expect(resolvesAtRuntime(stepPhrase(step).key), step.step).toBe(true);
@@ -1016,7 +1016,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
         rdb_blocks_hi_raised: null,
       },
       { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
-      { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
+      { step: "copy-in", slot: 2, drive_name: "DH0", sources: ["E:\\tree"] },
     ];
     // This plan fills the volume it formats, so the format resolves through
     // ART-122's conditional branch.

@@ -52,7 +52,7 @@ pub mod pfs3dev;
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::core::card::read_card;
 use crate::core::error::{CoreError, CoreResult, RdbEditRefusal};
@@ -182,6 +182,118 @@ pub trait VolumeFormatter {
         source: &Path,
         sink: &dyn ProgressSink,
     ) -> CoreResult<CopySummary>;
+
+    /// [`can_copy_in`](Self::can_copy_in) for a partition filled from
+    /// several folders — **every** source asked, so a gap in the second one
+    /// sends the whole partition to the fallback before it is formatted, not
+    /// halfway through its copy (card round 2).
+    fn can_copy_in_sources(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        sources: &[PathBuf],
+    ) -> CoreResult<()> {
+        for source in sources {
+            self.can_copy_in(image, slot, drive, source)?;
+        }
+        Ok(())
+    }
+
+    /// Copy several folders' trees into one partition, as **one** step.
+    ///
+    /// One step rather than one per source because a volume that has been
+    /// filled once is no longer empty, and `NativeFormatter` refuses to fill
+    /// a volume that is not (PFS3 has no journal). Two sources that put the
+    /// same AmigaDOS name at the top are refused before anything is copied
+    /// ([`check_source_collisions`]).
+    fn copy_in_sources(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        sources: &[PathBuf],
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<CopySummary> {
+        check_source_collisions(sources)?;
+        let mut total = CopySummary::default();
+        for source in sources {
+            total.absorb(&self.copy_in(image, slot, drive, source, sink)?);
+        }
+        Ok(total)
+    }
+}
+
+/// A list of folders, read from either a list or — a request saved before a
+/// partition took several sources — one folder or `null` (card round 2).
+fn one_or_many_paths<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<PathBuf>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Shape {
+        Many(Vec<PathBuf>),
+        One(PathBuf),
+    }
+    Ok(match Option::<Shape>::deserialize(d)? {
+        None => Vec::new(),
+        Some(Shape::One(path)) => vec![path],
+        Some(Shape::Many(paths)) => paths,
+    })
+}
+
+/// Refuse sources that would put one AmigaDOS name twice at the top of a
+/// partition — `Demos` from one folder and `DEMOS` from another are the same
+/// drawer to the Amiga, and copying both would merge or replace one silently.
+///
+/// Reads each source's root only, under the names the copy itself would use
+/// ([`AmigaNames`](amiga_names::AmigaNames), skipping `.uaem` sidecars,
+/// `BACKUP_DIR` and the names record), and compares them with the one rule
+/// [`first_collision`] the card's partition check uses too (R5). A source's
+/// own names are de-duplicated first, the way that check does, so the two
+/// cannot disagree.
+pub fn check_source_collisions(sources: &[PathBuf]) -> CoreResult<()> {
+    use crate::core::safety::backup::BACKUP_DIR;
+    use crate::core::volume::write::uaem::UAEM_EXTENSION;
+
+    // One source cannot collide with itself — its own names are
+    // de-duplicated below — so a single folder costs no directory read.
+    if sources.len() < 2 {
+        return Ok(());
+    }
+    let mut names: Vec<(String, usize)> = Vec::new();
+    for (index, source) in sources.iter().enumerate() {
+        let record = amiga_names::AmigaNames::read(source);
+        let mut entries: Vec<_> = std::fs::read_dir(source)?.collect::<std::io::Result<_>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        let mut folds = std::collections::HashSet::new();
+        for entry in entries {
+            let path = entry.path();
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case(UAEM_EXTENSION))
+            {
+                continue;
+            }
+            let host = entry.file_name();
+            let host = host.to_str().ok_or(CoreError::NonUtf8Path)?;
+            if host == BACKUP_DIR || host == amiga_names::AMIGA_NAMES_RECORD {
+                continue;
+            }
+            let name = record.name_for(host).unwrap_or(host).to_string();
+            if folds.insert(amiga_fold(&name)) {
+                names.push((name, index));
+            }
+        }
+    }
+    if let Some(((_, first), (name, second))) =
+        first_collision(names.iter().map(|(name, index)| (name.as_str(), *index)))
+    {
+        return Err(CoreError::SourceNamesCollide {
+            name: name.to_string(),
+            first: sources[first].display().to_string(),
+            second: sources[second].display().to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// One partition to prepare.
@@ -199,8 +311,11 @@ pub struct PreloadPartition {
     pub index: usize,
     /// The volume name it gets. `Work`, `Games`.
     pub volume_name: String,
-    /// A folder on the PC whose tree goes in. `None` formats and stops.
-    pub content: Option<PathBuf>,
+    /// Folders on the PC whose trees go in, side by side, as one copy. Empty
+    /// formats and stops. A request saved when this was one folder or `null`
+    /// still reads (card round 2).
+    #[serde(default, deserialize_with = "one_or_many_paths")]
+    pub content: Vec<PathBuf>,
 }
 
 /// What a screen asks for.
@@ -259,10 +374,12 @@ pub enum PreloadStep {
         drive_name: String,
         volume_name: String,
     },
+    /// Every source of one partition, copied as one step (card round 2).
     CopyIn {
         slot: Option<usize>,
         drive_name: String,
-        source: PathBuf,
+        #[serde(alias = "source", deserialize_with = "one_or_many_paths")]
+        sources: Vec<PathBuf>,
     },
 }
 
@@ -419,7 +536,7 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
             )));
         };
 
-        if let Some(content) = &wanted.content {
+        for content in &wanted.content {
             if !content.is_dir() {
                 return Err(CoreError::InvalidInput(format!(
                     "'{}' is not a folder",
@@ -427,6 +544,9 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
                 )));
             }
         }
+        // Card round 2: refused while planning, before any step — an RDB
+        // edit or a format — could run.
+        check_source_collisions(&wanted.content)?;
 
         // Which MBR slot the disk sits in, so a tool can be pointed at the
         // RDB *inside* the card rather than at byte zero. Carried on the area
@@ -569,11 +689,13 @@ pub fn plan(request: &PreloadRequest) -> CoreResult<PreloadPlan> {
             drive_name: part.drive_name.clone(),
             volume_name: wanted.volume_name.clone(),
         });
-        if let Some(content) = &wanted.content {
+        // One step for all of a partition's sources: a second step would
+        // meet a volume the first had already filled (card round 2).
+        if !wanted.content.is_empty() {
             steps.push(PreloadStep::CopyIn {
                 slot: *slot,
                 drive_name: part.drive_name.clone(),
-                source: content.clone(),
+                sources: wanted.content.clone(),
             });
         }
     }
@@ -721,9 +843,10 @@ fn run_steps(
             PreloadStep::CopyIn {
                 slot,
                 drive_name,
-                source,
+                sources,
             } => {
-                let summary = formatter.copy_in(&plan.image, *slot, drive_name, source, sink)?;
+                let summary =
+                    formatter.copy_in_sources(&plan.image, *slot, drive_name, sources, sink)?;
                 outcome.copied.absorb(&summary);
             }
         }
@@ -895,7 +1018,7 @@ mod tests {
         let made = plan(&PreloadRequest {
             image,
             driver: None,
-            partitions: one(1, "Work", None),
+            partitions: one(1, "Work", Vec::new()),
             rdb_backup: None,
         })
         .unwrap();
@@ -932,7 +1055,7 @@ mod tests {
         path
     }
 
-    fn one(index: usize, volume: &str, content: Option<PathBuf>) -> Vec<PreloadPartition> {
+    fn one(index: usize, volume: &str, content: Vec<PathBuf>) -> Vec<PreloadPartition> {
         vec![PreloadPartition {
             area: 1,
             index,
@@ -986,7 +1109,7 @@ mod tests {
         PreloadRequest {
             image,
             driver,
-            partitions: one(1, "Work", None),
+            partitions: one(1, "Work", Vec::new()),
             rdb_backup: None,
         }
     }
@@ -1180,13 +1303,13 @@ mod tests {
                 area: 1,
                 index: 1,
                 volume_name: "Work".into(),
-                content: None,
+                content: Vec::new(),
             },
             PreloadPartition {
                 area: 1,
                 index: 2,
                 volume_name: "Games".into(),
-                content: None,
+                content: Vec::new(),
             },
         ];
         let err = plan(&asked).unwrap_err();
@@ -1240,7 +1363,7 @@ mod tests {
                 area: 1,
                 index,
                 volume_name: format!("V{index}"),
-                content: None,
+                content: Vec::new(),
             })
             .collect()
     }
@@ -1312,7 +1435,7 @@ mod tests {
         std::fs::create_dir_all(&tree).unwrap();
         let mut asked = request(image, Some(driver(&dir, "19.3")));
         asked.partitions = both([1, 2]);
-        asked.partitions[0].content = Some(tree);
+        asked.partitions[0].content = vec![tree];
         let made = plan(&asked).unwrap();
         assert_eq!(
             step_kinds(&made),
@@ -1500,7 +1623,7 @@ mod tests {
         let made = plan(&PreloadRequest {
             image: image.clone(),
             driver: None,
-            partitions: one(1, "Work", None),
+            partitions: one(1, "Work", Vec::new()),
             rdb_backup: None,
         })
         .unwrap();
@@ -1531,7 +1654,7 @@ mod tests {
         let err = plan(&PreloadRequest {
             image,
             driver: None,
-            partitions: one(1, "Work", None),
+            partitions: one(1, "Work", Vec::new()),
             rdb_backup: None,
         })
         .unwrap_err();
@@ -1558,7 +1681,7 @@ mod tests {
         let made = plan(&PreloadRequest {
             image,
             driver: Some(driver.clone()),
-            partitions: one(1, "Work", None),
+            partitions: one(1, "Work", Vec::new()),
             rdb_backup: None,
         })
         .unwrap();
@@ -1627,13 +1750,13 @@ mod tests {
                     area: 1,
                     index: 1,
                     volume_name: "Work".into(),
-                    content: None,
+                    content: Vec::new(),
                 },
                 PreloadPartition {
                     area: 1,
                     index: 2,
                     volume_name: "Games".into(),
-                    content: None,
+                    content: Vec::new(),
                 },
             ],
             rdb_backup: None,
@@ -1665,7 +1788,7 @@ mod tests {
         let made = plan(&PreloadRequest {
             image,
             driver: None,
-            partitions: one(1, "Work", Some(tree.clone())),
+            partitions: one(1, "Work", vec![tree.clone()]),
             rdb_backup: None,
         })
         .unwrap();
@@ -1682,12 +1805,94 @@ mod tests {
                 PreloadStep::CopyIn {
                     slot: None,
                     drive_name: "DH0".into(),
-                    source: tree,
+                    sources: vec![tree],
                 },
             ]
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Card round 2: a request saved when `content` was one folder, or
+    /// `null`, still reads — as a one-element list and an empty one.
+    #[test]
+    fn a_request_saved_with_one_folder_or_none_still_reads() {
+        let one: PreloadPartition = serde_json::from_str(
+            r#"{"area":1,"index":1,"volume_name":"Work","content":"E:\\tree"}"#,
+        )
+        .unwrap();
+        assert_eq!(one.content, vec![PathBuf::from(r"E:\tree")]);
+        let none: PreloadPartition =
+            serde_json::from_str(r#"{"area":1,"index":1,"volume_name":"Work","content":null}"#)
+                .unwrap();
+        assert!(none.content.is_empty());
+        let many: PreloadPartition = serde_json::from_str(
+            r#"{"area":1,"index":1,"volume_name":"Work","content":["E:\\a","E:\\b"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            many.content,
+            vec![PathBuf::from(r"E:\a"), PathBuf::from(r"E:\b")]
+        );
+    }
+
+    /// R1-7: one copy step carrying the list — two steps would meet a volume
+    /// that is no longer empty (`native.rs`'s "already has files" refusal).
+    #[test]
+    fn a_partition_with_two_sources_plans_one_copy_step() {
+        let (_guard, dir) = scratch("two-sources");
+        let image = card(&dir, AmigaHardDiskFs::FfsStandard);
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir_all(a.join("Demos")).unwrap();
+        std::fs::create_dir_all(b.join("Games")).unwrap();
+
+        let made = plan(&PreloadRequest {
+            image,
+            driver: None,
+            partitions: one(1, "Work", vec![a.clone(), b.clone()]),
+            rdb_backup: None,
+        })
+        .unwrap();
+
+        let copies: Vec<&PreloadStep> = made
+            .steps
+            .iter()
+            .filter(|step| matches!(step, PreloadStep::CopyIn { .. }))
+            .collect();
+        assert_eq!(
+            copies,
+            vec![&PreloadStep::CopyIn {
+                slot: None,
+                drive_name: "DH0".into(),
+                sources: vec![a, b],
+            }]
+        );
+    }
+
+    /// R1-8: refused at planning — before any format runs.
+    #[test]
+    fn sources_that_collide_are_refused_before_the_plan_formats_anything() {
+        let (_guard, dir) = scratch("sources-collide");
+        let image = card(&dir, AmigaHardDiskFs::FfsStandard);
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir_all(a.join("Demos")).unwrap();
+        std::fs::create_dir_all(b.join("DEMOS")).unwrap();
+
+        let err = plan(&PreloadRequest {
+            image,
+            driver: None,
+            partitions: one(1, "Work", vec![a.clone(), b.clone()]),
+            rdb_backup: None,
+        })
+        .unwrap_err();
+
+        assert_eq!(err.code(), "ART-CARD-SOURCE-COLLISION", "{err}");
+        let msg = err.to_string();
+        assert!(msg.contains(&a.display().to_string()), "{msg}");
+        assert!(msg.contains(&b.display().to_string()), "{msg}");
+        assert!(msg.contains("DEMOS"), "{msg}");
     }
 
     /// A partition number the card does not have is refused with the count,
@@ -1701,7 +1906,7 @@ mod tests {
             let err = plan(&PreloadRequest {
                 image: image.clone(),
                 driver: None,
-                partitions: one(index, "Work", None),
+                partitions: one(index, "Work", Vec::new()),
                 rdb_backup: None,
             })
             .unwrap_err();
@@ -1800,7 +2005,7 @@ mod tests {
             PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH0".into(),
-                source: PathBuf::from("staging"),
+                sources: vec![PathBuf::from("staging")],
             },
         ]);
 
@@ -1836,7 +2041,7 @@ mod tests {
             PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH1".into(),
-                source: PathBuf::from("staging"),
+                sources: vec![PathBuf::from("staging")],
             },
         ]);
 
@@ -1862,7 +2067,7 @@ mod tests {
         let err = plan(&PreloadRequest {
             image,
             driver: None,
-            partitions: one(1, "Work", Some(file)),
+            partitions: one(1, "Work", vec![file]),
             rdb_backup: None,
         })
         .unwrap_err();

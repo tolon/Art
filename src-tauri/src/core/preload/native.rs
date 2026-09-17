@@ -109,7 +109,7 @@ use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
 use crate::core::preload::amiga_names::{AmigaNames, AMIGA_NAMES_RECORD};
 use crate::core::preload::pfs3dev::ArtBlockDevice;
-use crate::core::preload::{CopySummary, ToolVersion, VolumeFormatter};
+use crate::core::preload::{check_source_collisions, CopySummary, ToolVersion, VolumeFormatter};
 use crate::core::rdb::ParsedPartition;
 use crate::core::safety::backup::BACKUP_DIR;
 use crate::core::volume::device::FileRegionMut;
@@ -258,7 +258,31 @@ impl VolumeFormatter for NativeFormatter {
         drive: &str,
         source: &Path,
     ) -> CoreResult<()> {
-        let planned = plan_copy(image, slot, drive, source)?;
+        self.can_copy_in_sources(image, slot, drive, &[source.to_path_buf()])
+    }
+
+    fn copy_in(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        source: &Path,
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<CopySummary> {
+        self.copy_in_sources(image, slot, drive, &[source.to_path_buf()], sink)
+    }
+
+    /// Card round 2: every source's entries, together — a non-ASCII name in
+    /// the second folder sends the whole partition to the fallback, because
+    /// one partition is formatted and filled by one tool (ART-122).
+    fn can_copy_in_sources(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        sources: &[PathBuf],
+    ) -> CoreResult<()> {
+        let planned = plan_copy(image, slot, drive, sources)?;
         match family_of(planned.dos) {
             DosFamily::Pfs3 => match non_ascii_refusal(&planned.entries).or_else(|| {
                 // ART-314: against the volume `format_partition` is about to write.
@@ -275,12 +299,14 @@ impl VolumeFormatter for NativeFormatter {
         }
     }
 
-    fn copy_in(
+    /// One pass over the volume for every source (card round 2): the volume
+    /// is filled once, so its "already has files" guard still holds.
+    fn copy_in_sources(
         &self,
         image: &Path,
         slot: Option<usize>,
         drive: &str,
-        source: &Path,
+        sources: &[PathBuf],
         sink: &dyn ProgressSink,
     ) -> CoreResult<CopySummary> {
         let PlannedCopy {
@@ -290,14 +316,14 @@ impl VolumeFormatter for NativeFormatter {
             dos,
             reserved,
             entries,
-        } = plan_copy(image, slot, drive, source)?;
+        } = plan_copy(image, slot, drive, sources)?;
 
         match family_of(dos) {
             DosFamily::Pfs3 => copy_in_pfs3(
-                image, offset, length, block_size, drive, source, &entries, sink, self.clock,
+                image, offset, length, block_size, drive, sources, &entries, sink, self.clock,
             ),
             DosFamily::Ffs => copy_in_ffs(
-                image, offset, length, block_size, dos, reserved, drive, source, &entries, sink,
+                image, offset, length, block_size, dos, reserved, drive, sources, &entries, sink,
                 self.clock,
             ),
             DosFamily::Other => Err(unsupported_family(dos)),
@@ -319,23 +345,35 @@ struct PlannedCopy {
     entries: Vec<CopyEntry>,
 }
 
+/// One card read, then every source's entries in the order given — after
+/// the sources are known to be folders whose top-level names do not collide
+/// ([`check_source_collisions`]), so concatenating them cannot put one name
+/// on the volume twice.
 fn plan_copy(
     image: &Path,
     slot: Option<usize>,
     drive: &str,
-    source: &Path,
+    sources: &[PathBuf],
 ) -> CoreResult<PlannedCopy> {
-    if !source.is_dir() {
-        return Err(CoreError::InvalidInput(format!(
-            "'{}' is not a folder",
-            source.display()
-        )));
+    for source in sources {
+        if !source.is_dir() {
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' is not a folder",
+                source.display()
+            )));
+        }
     }
+    check_source_collisions(sources)?;
 
     let card = read_card(image)?;
     let area = area_for_slot(&card, slot)?;
     let part = partition_by_drive(area, drive)?;
     let (offset, length, block_size) = partition_region(area, part)?;
+
+    let mut entries = Vec::new();
+    for source in sources {
+        entries.extend(collect_entries(source)?);
+    }
 
     Ok(PlannedCopy {
         offset,
@@ -343,8 +381,18 @@ fn plan_copy(
         block_size,
         dos: DosType::new(part.dostype.to_be_bytes()),
         reserved: part.reserved,
-        entries: collect_entries(source)?,
+        entries,
     })
+}
+
+/// Every source, quoted and comma-separated — `'E:\a', 'E:\b'` — for a
+/// sentence about a copy that may have come from more than one folder.
+fn quoted_sources(sources: &[PathBuf]) -> String {
+    sources
+        .iter()
+        .map(|source| format!("'{}'", source.display()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn unsupported_family(dos: DosType) -> CoreError {
@@ -809,7 +857,7 @@ fn too_large_refusal(
     writer: &libpfs3::writer::Writer,
     entries: &[CopyEntry],
     volume_label: &str,
-    source: &Path,
+    sources: &[PathBuf],
 ) -> Option<CoreError> {
     let offending: Vec<&CopyEntry> = entries
         .iter()
@@ -834,11 +882,11 @@ fn too_large_refusal(
         ("each ", "those files")
     };
     Some(CoreError::InvalidInput(format!(
-        "{named} in '{src}' cannot {each}be copied to '{volume_label}': a file on it can be \
+        "{named} in {src} cannot {each}be copied to '{volume_label}': a file on it can be \
          at most 4294967295 bytes, because this PFS3 partition is not formatted for large files, \
          and ART's own PFS3 format does not make large-file partitions. Nothing was copied. Leave \
-         {that} out of '{src}' and run the copy again.",
-        src = source.display()
+         {that} out of {src} and run the copy again.",
+        src = quoted_sources(sources)
     )))
 }
 
@@ -959,7 +1007,7 @@ fn copy_in_pfs3(
     length: u64,
     block_size: usize,
     volume_label: &str,
-    source: &Path,
+    sources: &[PathBuf],
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
     clock: &'static dyn AmigaClock,
@@ -1002,7 +1050,7 @@ fn copy_in_pfs3(
     // would otherwise answer with a byte count, and before the loop below
     // reads any host file whole into memory. `write_file_in` asks the same
     // `check_file_size`, but only after that read.
-    if let Some(refusal) = too_large_refusal(&writer, entries, volume_label, source) {
+    if let Some(refusal) = too_large_refusal(&writer, entries, volume_label, sources) {
         return Err(refusal);
     }
 
@@ -1027,18 +1075,18 @@ fn copy_in_pfs3(
     let free_bytes = u64::from(writer.vol.free_blocks()) * bs;
     if data_bytes_needed > free_bytes {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs {data_bytes_needed} bytes but '{volume_label}' only has {free_bytes} \
+            "{} needs {data_bytes_needed} bytes but '{volume_label}' only has {free_bytes} \
              bytes free",
-            source.display()
+            quoted_sources(sources)
         )));
     }
     let reserved_needed = entries.len() as u64;
     let reserved_free = u64::from(writer.vol.rootblock.reserved_free);
     if reserved_needed > reserved_free {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs room for {reserved_needed} new file(s) and folder(s), but \
+            "{} needs room for {reserved_needed} new file(s) and folder(s), but \
              '{volume_label}' only has {reserved_free} reserved block(s) free",
-            source.display()
+            quoted_sources(sources)
         )));
     }
 
@@ -1165,7 +1213,7 @@ fn copy_in_ffs(
     dos: DosType,
     reserved: u32,
     volume_label: &str,
-    source: &Path,
+    sources: &[PathBuf],
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
     clock: &'static dyn AmigaClock,
@@ -1206,9 +1254,9 @@ fn copy_in_ffs(
     let free_bytes = writer.free_bytes()?;
     if bytes_needed > free_bytes {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs {bytes_needed} bytes but '{volume_label}' only has {free_bytes} bytes \
+            "{} needs {bytes_needed} bytes but '{volume_label}' only has {free_bytes} bytes \
              free",
-            source.display()
+            quoted_sources(sources)
         )));
     }
 
@@ -2041,6 +2089,54 @@ mod tests {
             .unwrap();
         assert_eq!(summary.files, 1);
         assert_eq!(summary.directories, 1);
+    }
+
+    /// Card round 2: two folders fill one partition in one pass — a second
+    /// `copy_in` would meet a volume that already has files and be refused.
+    #[test]
+    fn two_sources_fill_one_pfs3_partition() {
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard_a, a) = fixtures::scratch("two-sources-a");
+        let (_guard_b, b) = fixtures::scratch("two-sources-b");
+        std::fs::create_dir_all(a.join("A")).unwrap();
+        std::fs::write(a.join("A/One"), b"one").unwrap();
+        std::fs::create_dir_all(b.join("B")).unwrap();
+        std::fs::write(b.join("B/Two"), b"two").unwrap();
+
+        let summary = NativeFormatter::UTC
+            .copy_in_sources(&image, None, "DH0", &[a, b], &NoProgress)
+            .unwrap();
+
+        let mut root: Vec<String> = libpfs3::volume::Volume::open(&image, partition_offset(&image))
+            .unwrap()
+            .list_dir("")
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        root.sort();
+        assert_eq!(root, ["A", "B"]);
+        assert_eq!(summary.files, 2);
+        assert_eq!(summary.directories, 2);
+    }
+
+    /// Card round 2: the pre-flight asks every source, so a non-ASCII name in
+    /// the second folder sends the whole partition to the fallback before it
+    /// is formatted.
+    #[test]
+    fn a_non_ascii_name_in_the_second_source_makes_the_whole_partition_fall_back() {
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard_a, plain) = fixtures::scratch("fallback-plain");
+        let (_guard_b, accented) = fixtures::scratch("fallback-accented");
+        std::fs::write(plain.join("Plain"), b"x").unwrap();
+        std::fs::write(accented.join("français"), b"x").unwrap();
+
+        let err = NativeFormatter::UTC
+            .can_copy_in_sources(&image, None, "DH0", &[plain, accented])
+            .unwrap_err();
+
+        assert!(matches!(err, CoreError::NonAsciiPfs3Names { .. }), "{err}");
+        assert!(format!("{err}").contains("français"), "{err}");
     }
 
     // ---- ART-310: the format writes what pfs3aio writes ----
@@ -5856,7 +5952,7 @@ mod tests {
         let (_guard, large) = formatted_large_pds3_image();
         let (_guard, tree) = fixtures::scratch("copy-in-too-large");
         let copy = |image: &Path, sizes: &[u64]| -> String {
-            let planned = plan_copy(image, None, "DH0", &tree).unwrap();
+            let planned = plan_copy(image, None, "DH0", std::slice::from_ref(&tree)).unwrap();
             let names = ["Huge.hdf", "Bigger.hdf"];
             let entries: Vec<CopyEntry> = sizes
                 .iter()
@@ -5874,7 +5970,7 @@ mod tests {
                 planned.length,
                 planned.block_size,
                 "DH0",
-                &tree,
+                std::slice::from_ref(&tree),
                 &entries,
                 &NoProgress,
                 NativeFormatter::UTC.clock,
