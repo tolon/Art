@@ -70,7 +70,10 @@ opened with `share_mode(0)`, the working Windows pattern here — a bare `File::
 `FILE_SHARE_DELETE` is in Rust's default sharing flags on this toolchain), `two_guards_in_one_process_never_share_a_folder`; `commands::cardos`'s close test. Mutations M3a (`finish` skips the exists check) and M3b (the counter
 dropped) killed, no survivors; M12a (`Written::Partial => remove_partial(image, false)`), M12b (`Cancelled` reported
 as a generic failure) and M12e (`close` forgets the session instead of removing its folder) killed in
-`commands::cardos`.
+`commands::cardos`. **The round's fix wave (2026-09-17, final review I3)** added a fourth ending, `Refused`, for
+everything a build can refuse before it writes — so "every ending" is now succeeded, refused, failed, stopped — and
+`OwnedScratch::create_at` creates its folder atomically and names a leftover one with its next step (M15). A session
+folder left when the app exits without closing it is still owed: ART-344.
 
 **ART-339** 🔵 ✅ **`core/card` and `core/preload` import each other, against CLAUDE.md's inward-layering rule** —
 *found 2026-09-17 by the pre-flight scan of card round 2's plan (the round-2 SDD folder is not on disk; the plan
@@ -91,7 +94,11 @@ was the one the rule exists for — neither module could be lifted into a crate 
 **Fixed 2026-09-17 by card round 3, Task 1:** `content.rs` moved to `core/cardos/`, the top of the card path.
 Guard: `core::independence::core_card_does_not_import_preload_and_nothing_below_imports_cardos` (red first on the
 three imports, `card/content.rs:62,63,67`; two mutations red — `card/sizing.rs` importing `core::cardos`,
-`card/mod.rs` importing `core::preload` — both restored).
+`card/mod.rs` importing `core::preload` — both restored). **Widened 2026-09-17 by the round's fix wave (final
+review M10):** the guard matched one spelling, so `use crate::core::{card, cardos::x}` and `use super::super::cardos`
+passed unseen; it now reads each `use` statement whole and names the module in every spelling
+(`core::independence::a_layering_import_is_seen_in_every_spelling`), and a grouped multi-line import into
+`card/sizing.rs` was seen red (the fix wave's mutation M10a).
 
 **ART-338** 🟠 ✅ **ART's own LZX reader refused a match that reaches back before a merged group's first byte, which
 real archives do — fixed: that part of the window reads as zeros, as the Amiga archiver's does** — *opened and

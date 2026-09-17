@@ -214,6 +214,35 @@ was. **Nothing is broken by it**; neither module can be lifted into a crate alon
 in `core/cardos/` rather than deepen it. **Fix direction:** move `install.rs` (the volume installer, which needs the
 catalogue) up out of `core/whdload`, leaving `core/whdload` the pure layout analysis both use.
 
+**ART-343** 🟡 **Nothing checks that a prepared card is still what is on disk when it is built** — *found 2026-09-17
+by card round 3's final whole-branch review (`.superpowers/sdd/2026-09-17-one-button-card-round-3/final-review.md`,
+M5), by reading; filed by the fix wave as design, not built*
+`src-tauri/src/commands/cardos.rs` (`card_os_prepare` → `card_os_build`), `core/cardos/prepare.rs` (`PreparedCard`),
+`core/cardos/kickstarts.rs` (`place_agreed` → `core::rom::place`) · Between prepare and build the OS Builder may rewrite
+`tree/`, and folder sources are copied in place from the user's own folders, so System's re-check and every
+partition's size can be stale: the build then fails in its Partitions phase **after the image exists**. And
+`place` re-reads the agreed ROM's path without checking its CRC, so a ROM swapped between prepare and build lands
+under the agreed name — the proposal the user agreed to is not the file that is placed. **Why filed, not fixed:**
+it needs a design — what a fingerprint of a large tree costs, whether a folder's mtime is trustworthy on every
+filesystem ART reads, and whether a change is refused or re-prepared — and the round's rule is that a fix wave does
+not build unreviewed design. **Fix direction:** record each source's size and modification time, the tree's
+fingerprint and each proposed ROM's CRC in `PreparedCard`; refuse in the build's preflight (which already runs
+before anything is written, card round 3 I3) when any differs, naming what changed and "prepare again".
+
+**ART-344** 🔵 **A card session's scratch folder is left behind when the app exits without closing it, and a
+panicking job leaves the session busy** — *found 2026-09-17 by card round 3's final whole-branch review
+(`final-review.md`, M6), by reading; filed by the fix wave as design, not built*
+`src-tauri/src/commands/cardos.rs` (`CardOsSessions`), `src-tauri/src/lib.rs` · A session folder under the scratch
+root (staging can be several GB) is removed by `card_os_close` or by the build's every ending. If the app exits
+without either, nothing removes it: Tauri does not drop managed state on exit, and `OwnedScratch`'s `Drop` backstop
+therefore never runs. With `panic = "abort"` a panic in a job does the same; in a dev build a panic leaves the
+session `busy` forever, so it cannot be closed. `OwnedScratch::create_in` names a leftover folder when a later run
+reuses its name (card round 3, M15), but nothing finds and offers to remove the rest. **Why filed, not fixed:** an
+exit hook that deletes several GB while the window closes, and a startup sweep of `card-os-*` folders from earlier
+processes, are both design choices (what to remove without asking, what to show). **Fix direction:** drain
+`CardOsSessions` on `RunEvent::Exit` and report what could not be removed to the log; list leftover `card-os-*`
+folders under the scratch root at startup and offer them for removal, never removing one silently.
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
