@@ -29,6 +29,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
+import { cardImageBytes } from "@/lib/cardBuild";
 import {
   distroCheckCard,
   distroMeasureImage,
@@ -287,15 +288,36 @@ export function StepHedef() {
       .catch(() => setRomMatches(null));
   }, [selected, rom]);
 
+  // ART-308's last site: this used to multiply `cardGb * 1024³` itself — GiB
+  // arithmetic for a card sold in decimal GB — while `cardImageBytes` has
+  // been the single source of truth for what a label's bytes really are
+  // since the card builder's own fix. `null` until Rust answers, so the
+  // card check is asked with a size nobody invented.
+  const [cardBytes, setCardBytes] = useState<number | null>(null);
   useEffect(() => {
-    if (!selected) {
+    let current = true;
+    setCardBytes(null);
+    void cardImageBytes(cardGb)
+      .then((bytes) => {
+        if (current) setCardBytes(bytes);
+      })
+      .catch(() => {
+        if (current) setCardBytes(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [cardGb]);
+
+  useEffect(() => {
+    if (!selected || cardBytes === null) {
       setCardProblem(null);
       return;
     }
-    distroCheckCard(selected.id, cardGb * 1024 * 1024 * 1024)
+    distroCheckCard(selected.id, cardBytes)
       .then(setCardProblem)
       .catch(() => setCardProblem(null));
-  }, [selected, cardGb]);
+  }, [selected, cardBytes]);
 
   async function chooseImage() {
     const picked = await open({

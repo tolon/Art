@@ -2555,6 +2555,14 @@
       "tree": "Bu klasörde ART'ın kurduğu bir ağaç var: {{release}}, {{count}} dosya.",
       "fresh": "ART buraya yazabilir: yeni bir ağaç oluşturulur."
     },
+    "destinationKind": {
+      "label": "Yapı nereye gitsin",
+      "folder": "Klasör",
+      "card": "Kart imajı",
+      "cardSize": "Kart boyutu",
+      "cardSizeSummary": "{{gb}} GB kart — {{billions}} milyar bayt",
+      "cardPlaceholder": "Kartın bölümleri ve kaynakları burada olacak."
+    },
     "layer": {
       "base32": "AmigaOS 3.2 temel ortamı",
       "update322": "AmigaOS 3.2.2 güncelleme ortamı",

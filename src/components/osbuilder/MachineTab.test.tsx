@@ -35,6 +35,10 @@ const componentsMock = vi.hoisted(() => vi.fn());
 const layersForMock = vi.hoisted(() => vi.fn());
 const planMock = vi.hoisted(() => vi.fn());
 const componentCollisionsMock = vi.hoisted(() => vi.fn());
+// Round 4 task 7: the card size row's own "prints both" sentence (Q1) asks
+// Rust for the label's real bytes — the same call `CardBuilder.tsx` makes,
+// mocked at the same boundary (`CardBuilder.test.tsx`'s own pattern).
+const imageBytesMock = vi.hoisted(() => vi.fn());
 
 // Only the two the destination asks — everything else in `@/lib/osinstall`
 // this tab uses (`rememberedComponentKey`) is pure and stays real.
@@ -46,6 +50,11 @@ vi.mock("@/lib/osinstall", async (importOriginal) => ({
   layersFor: layersForMock,
   osinstallPlan: planMock,
   osinstallComponentCollisions: componentCollisionsMock,
+}));
+
+vi.mock("@/lib/cardBuild", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cardBuild")>()),
+  cardImageBytes: imageBytesMock,
 }));
 
 vi.mock("@/lib/pistorm", async (importOriginal) => ({
@@ -212,6 +221,7 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation((req: InstallRequest) => Promise.resolve(planResultFor(req)));
   componentCollisionsMock.mockReset().mockResolvedValue({ reports: [], placed: 0, contested: 0 });
+  imageBytesMock.mockReset().mockResolvedValue(60_800_000_000);
 });
 
 afterEach(async () => {
@@ -560,5 +570,116 @@ describe("choosing the keyboard the system boots with", () => {
         (screen.getByRole("combobox", { name: /keyboard layout/i }) as HTMLSelectElement).value
       ).toBe("")
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 4 task 7: Folder or Card image (ART-308's last site, and R2)
+// ---------------------------------------------------------------------------
+//
+// **Card image is a new choice sitting beside `osinstall.destination`, never
+// a replacement for it** (owner decision 2; pre-flight ruling R2). This
+// section only proves the choice and its plumbing: it hides the folder row,
+// leaves the remembered destination exactly as it was, restores it on the
+// way back, and shows the card's own size row (Q1) instead. The partitions
+// and sources under it are Task 8's `CardSection.tsx` — the placeholder
+// tested below is what that task replaces.
+
+describe("Folder or Card image (round 4 task 7)", () => {
+  it("defaults to Folder, exactly as the tab has always rendered", () => {
+    seedRemembered({
+      "buildSession.release": "AmigaOS 3.9",
+      "osinstall.destination.AmigaOS 3.9": "E:\\out\\dist",
+    });
+    render(<MachineTab />);
+    expect(
+      (screen.getByTestId("osinstall-destinationKind-folder") as HTMLInputElement).checked
+    ).toBe(true);
+    expect(screen.getByTestId("osinstall-destination-field")).toBeTruthy();
+    expect(screen.queryByTestId("card-section-placeholder")).toBeNull();
+  });
+
+  it("hides the folder row and shows the card section when Card image is chosen", async () => {
+    seedRemembered({
+      "buildSession.release": "AmigaOS 3.9",
+      "osinstall.destination.AmigaOS 3.9": "E:\\out\\dist",
+    });
+    render(<MachineTab />);
+    await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
+
+    expect(screen.queryByTestId("osinstall-destination-field")).toBeNull();
+    expect(screen.queryByTestId("osinstall-destination-taken")).toBeNull();
+    expect(screen.queryByTestId("osinstall-destination-tree")).toBeNull();
+    expect(screen.queryByTestId("osinstall-destination-fresh")).toBeNull();
+    expect(await screen.findByTestId("card-section-placeholder")).toBeTruthy();
+  });
+
+  it("writes nothing to the remembered destination on a card-mode switch (R2)", async () => {
+    seedRemembered({
+      "buildSession.release": "AmigaOS 3.9",
+      "osinstall.destination.AmigaOS 3.9": "E:\\out\\dist",
+    });
+    render(<MachineTab />);
+    await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
+    await screen.findByTestId("card-section-placeholder");
+
+    // Read back the very key the folder row writes — untouched by the switch.
+    expect(rememberedBag()["osinstall.destination.AmigaOS 3.9"]).toBe("E:\\out\\dist");
+  });
+
+  it("restores the folder row with its value on switching back", async () => {
+    seedRemembered({
+      "buildSession.release": "AmigaOS 3.9",
+      "osinstall.destination.AmigaOS 3.9": "E:\\out\\dist",
+    });
+    render(<MachineTab />);
+    await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
+    await screen.findByTestId("card-section-placeholder");
+
+    await userEvent.click(screen.getByTestId("osinstall-destinationKind-folder"));
+    expect(screen.getByTestId("osinstall-destination-field").textContent).toContain(
+      "E:\\out\\dist"
+    );
+  });
+
+  it("prints the card's size and its real bytes once Rust answers (Q1)", async () => {
+    seedRemembered({ "buildSession.release": "AmigaOS 3.9" });
+    render(<MachineTab />);
+    expect(screen.queryByTestId("osinstall-destinationKind-summary")).toBeNull();
+
+    await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
+    const summary = await screen.findByTestId("osinstall-destinationKind-summary");
+    expect(summary.textContent).toContain("64");
+    expect(summary.textContent).toContain("60.8");
+    expect(imageBytesMock).toHaveBeenCalledWith(64);
+  });
+
+  it("moves the summary to the new size once a different one is chosen (ART-308's last site)", async () => {
+    seedRemembered({ "buildSession.release": "AmigaOS 3.9" });
+    render(<MachineTab />);
+    await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
+    await screen.findByTestId("osinstall-destinationKind-summary");
+
+    imageBytesMock.mockResolvedValue(121_600_000_000);
+    await userEvent.selectOptions(screen.getByTestId("card-size-select"), "128");
+
+    await waitFor(() => expect(imageBytesMock).toHaveBeenCalledWith(128));
+    const summary = await screen.findByTestId("osinstall-destinationKind-summary");
+    await waitFor(() => expect(summary.textContent).toContain("121.6"));
+  });
+
+  it("disables nothing in beginner mode — Card image is the default flow, not the advanced one", async () => {
+    seedRemembered({ "buildSession.release": "AmigaOS 3.9" });
+    render(<MachineTab />);
+    expect((screen.getByTestId("osinstall-destinationKind-folder") as HTMLInputElement).disabled).toBe(
+      false
+    );
+    expect((screen.getByTestId("osinstall-destinationKind-card") as HTMLInputElement).disabled).toBe(
+      false
+    );
+
+    await userEvent.click(screen.getByTestId("osinstall-destinationKind-card"));
+    const select = await screen.findByTestId("card-size-select");
+    expect((select as HTMLSelectElement).disabled).toBe(false);
   });
 });
