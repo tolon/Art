@@ -263,9 +263,10 @@ check + THIRD_PARTY_LICENSES entry as usual.
 > [FEATURES.md](FEATURES.md#emulation--hardware)). `core/preload/native.rs`
 > wraps it behind the same `VolumeFormatter` trait `hst-imager` already
 > implements, launches nothing, and is now the **default** writer —
-> `hst-imager` is a named fallback for two specific, typed gaps
-> ([ART-113](ISSUES.md)'s non-ASCII AmigaDOS names, [ART-117](ISSUES.md)'s
-> foreign-RDB driver embed), not the primary path any more. This is the
+> `hst-imager` is a named fallback for one specific, typed gap
+> ([ART-113](ISSUES-archive.md)'s non-ASCII AmigaDOS names), not the primary
+> path any more. The second gap, [ART-117](ISSUES-archive.md)'s foreign-RDB
+> driver embed, has been native since 2026-09-14. This is the
 > differentiator G0's own positioning section named as the long-term goal:
 > ART owns native PFS3 write, not just an imager wrapper.
 >
