@@ -139,10 +139,13 @@ export interface WhdloadChoice {
   passedOver: string[];
 }
 
+/** Where a missing `.RTB` can be had: not every one is in `skick346`. */
+export type RtbPackage = "aminet-skick346" | "whdload-seven-cities-of-gold";
+
 export type RtbSource =
   | { kind: "loose"; path: string }
   | { kind: "in-archive"; archive: string; member: string }
-  | { kind: "missing" };
+  | { kind: "missing"; getFrom: RtbPackage };
 
 export interface ProposedKickstart {
   /** The name WHDLoad looks for — the key `agreedKickstarts` passes back. */
@@ -156,8 +159,17 @@ export interface ProposedKickstart {
 export interface KickstartProposal {
   items: ProposedKickstart[];
   unreadableSlaves: string[];
-  /** Some item's `.RTB` was found nowhere: name Aminet `util/boot/skick346`. */
+  /** Some item's `.RTB` was found nowhere; each such item's `getFrom` names its package. */
   rtbMissing: boolean;
+}
+
+/** The tree's own `C/WHDLoad`, which the build keeps, beside the best one found elsewhere. */
+export interface TreeWhdload {
+  path: string;
+  /** As it states itself (`WHDLoad 18.9`); null when it states nothing. */
+  name: string | null;
+  bestElsewhere: string | null;
+  newerElsewhere: boolean;
 }
 
 export interface PreparedCard {
@@ -165,6 +177,7 @@ export interface PreparedCard {
   roots: string[][];
   leftBehind: string[];
   whdload: WhdloadChoice | null;
+  treeWhdload: TreeWhdload | null;
   kickstarts: KickstartProposal;
 }
 
@@ -203,14 +216,19 @@ export interface CardOsBuildRequest {
   firmware?: FirmwareConfig;
   options?: Emu68Options;
   builtAt?: string | null;
-  hstImagerPath?: string;
+  // No hstImagerPath: the build uses the hst-imager its preparation asked.
 }
 
 export type BuildPhase = "whdload" | "card" | "partitions" | "check";
 
-/** Three endings, kept apart: a stop is never a failure. */
+/**
+ * Four endings, kept apart: a refusal (before anything of the image was
+ * written; its next step is the user's) is never a failure, and a stop is
+ * never either.
+ */
 export type CardOsEnding =
   | { ending: "succeeded" }
+  | { ending: "refused"; phase: BuildPhase; code: string; message: string }
   | { ending: "failed"; phase: BuildPhase; code: string; message: string }
   | { ending: "stopped"; phase: BuildPhase };
 
@@ -234,6 +252,8 @@ export interface PlacedKickstart {
 export type PartialRemoval =
   | { outcome: "not-created" }
   | { outcome: "removed"; path: string }
+  /** This run created it, and it was already gone when the run went to remove it. */
+  | { outcome: "already-gone"; path: string }
   | { outcome: "not-removed"; path: string; why: string };
 
 export const CARD_OS_BUILD_EVENT = "card-os-build-result";
@@ -244,6 +264,7 @@ export interface CardOsBuildResult {
   image: string;
   ending: CardOsEnding;
   whdload: WhdloadInstalled | null;
+  /** On any ending but success these went only into the session tree, which the ending removes. */
   kickstarts: PlacedKickstart[];
   steps: StepReport[];
   manifestPath: string | null;

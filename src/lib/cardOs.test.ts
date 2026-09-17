@@ -27,7 +27,9 @@ import {
   onCardOsPrepareResult,
   type CardOsBuildRequest,
   type CardOsBuildResult,
+  type CardOsEnding,
   type CardOsPrepareRequest,
+  type PartialRemoval,
 } from "@/lib/cardOs";
 
 beforeEach(() => {
@@ -97,6 +99,35 @@ describe("the card session events", () => {
     const stopped = { ending: { ending: "stopped", phase: "partitions" } };
     deliver?.({ payload: stopped });
     expect(seen).toEqual([stopped]);
+  });
+
+  // Card round 3, I3: a refusal is its own ending, beside succeeded, failed
+  // and stopped — the screen must be able to tell "choose another name" from
+  // "build again". The literal is typed against the Rust mirror, so a shape
+  // the type does not carry fails `pnpm lint` (tsconfig.test.json).
+  it("delivers a refusal as its own ending, with the partial not created", async () => {
+    let deliver: ((event: { payload: unknown }) => void) | undefined;
+    listenMock.mockImplementationOnce(async (_name: string, cb: typeof deliver) => {
+      deliver = cb;
+      return () => {};
+    });
+    const seen: CardOsBuildResult[] = [];
+    await onCardOsBuildResult((result) => seen.push(result));
+
+    const ending: CardOsEnding = {
+      ending: "refused",
+      phase: "card",
+      code: "ART-SAFETY-REFUSED",
+      message: "'E:\\cards\\card.img' already exists",
+    };
+    const partial: PartialRemoval = { outcome: "not-created" };
+    const gone: PartialRemoval = { outcome: "already-gone", path: "E:\\cards\\card.img.partial" };
+    const endings: CardOsEnding["ending"][] = ["succeeded", "refused", "failed", "stopped"];
+    deliver?.({ payload: { ending, partial } });
+
+    expect(seen).toEqual([{ ending, partial }]);
+    expect(new Set(endings).size).toBe(4);
+    expect(gone.outcome).toBe("already-gone");
   });
 
   it("listens for a preparation on card-os-prepare-result", async () => {
