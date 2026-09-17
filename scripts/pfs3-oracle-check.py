@@ -41,6 +41,14 @@ hand when the PFS3 writer or reader changes.
 Usage:
 
     python scripts/pfs3-oracle-check.py
+    python scripts/pfs3-oracle-check.py --card IMAGE ART_JSON
+
+`--card` (card round 3) checks a whole card ART built: IMAGE and its listing
+ART_JSON come from `writes_a_small_card_for_the_hst_imager_oracle`
+(`ART_CARD_OS_OUT`, and `ART_HST` for the run whose Stuff hst-imager writes).
+Each partition is listed (`fs dir -r <image>\\mbr\\<slot>\\rdb\\<drive>`) and
+extracted (`fs copy`) by hst-imager; the path sets, sizes and SHA-256 per file
+must equal ART's. Exit 0 all equal, 1 a difference, 2 a tool or file missing.
 
 Environment:
 
@@ -138,13 +146,20 @@ def find_pfs3_driver() -> Path:
     sys.exit(2)
 
 
+# hst-imager writes its output in the console's OEM code page when redirected,
+# not UTF-8: measured 2026-09-17, `fs dir` printed the name `Café` as the
+# bytes `Caf\x82` under code page 857. Only a non-ASCII name shows it (the
+# card round 3 run through `--card`); decoding as UTF-8 turned `é` into U+FFFD.
+HST_ENCODING = "oem" if os.name == "nt" else "utf-8"
+
+
 def run_hst(exe: str, args: list[str], cwd: Path) -> subprocess.CompletedProcess:
     return subprocess.run(
         [exe, *args],
         cwd=cwd,
         capture_output=True,
         text=True,
-        encoding="utf-8",
+        encoding=HST_ENCODING,
         errors="replace",
     )
 
@@ -573,7 +588,184 @@ def check_hst_writes_art_reads(
     return checks
 
 
+def card_partition(image: Path, slot: int | None, drive: str) -> str:
+    """`tools/hst_imager.rs::partition_target`'s address, with the bare image
+    name (this script's `cwd` rule): `<image>\\mbr\\<slot>\\rdb\\<drive>`."""
+    disk = image.name if slot is None else f"{image.name}{SEP}mbr{SEP}{slot}"
+    return f"{disk}{SEP}rdb{SEP}{drive.lower()}"
+
+
+def size_agrees(listed: int, exact: int) -> bool:
+    """`fs dir` prints `2.93 KB`, not bytes, above 1023 — so a listed size is
+    only as precise as its unit. Exact bytes are the hash's job, below."""
+    if listed == exact:
+        return True
+    return exact >= 1024 and abs(listed - exact) <= exact * 0.01
+
+
+# WinUAE's `_UAEFSDB.___`: one 600-byte record per host name the extractor had
+# to invent — valid (1 byte), mode (4), the Amiga name (257, Latin-1), the
+# host name (257), the comment (81).
+_FSDB_NAME = "_UAEFSDB.___"
+_FSDB_RECORD = 600
+
+
+def fsdb_names(folder: Path) -> dict[str, str]:
+    """Host name → Amiga name, from `folder`'s `_UAEFSDB.___` if it has one.
+
+    `hst-imager fs copy` to an NTFS folder stores a non-ASCII Amiga name under
+    an invented host name and records the real one here: measured 2026-09-17,
+    `Café` came out as the folder `__uae___Caf_`, with a record whose Amiga
+    name is `Caf\\xe9`."""
+    path = folder / _FSDB_NAME
+    if not path.is_file():
+        return {}
+    data = path.read_bytes()
+    names = {}
+    for start in range(0, len(data) - _FSDB_RECORD + 1, _FSDB_RECORD):
+        record = data[start : start + _FSDB_RECORD]
+        if record[0] == 0:
+            continue
+        amiga = record[5:262].split(b"\0", 1)[0].decode("latin-1")
+        host = record[262:519].split(b"\0", 1)[0].decode("latin-1")
+        names[host] = amiga
+    return names
+
+
+def extracted_files(root: Path) -> dict[str, Path]:
+    """Every file `fs copy` extracted under `root`, by its Amiga path."""
+    found: dict[str, Path] = {}
+    stack = [(root, "")]
+    while stack:
+        folder, prefix = stack.pop()
+        names = fsdb_names(folder)
+        for child in folder.iterdir():
+            if child.name == _FSDB_NAME:
+                continue
+            amiga = names.get(child.name, child.name)
+            path = f"{prefix}{amiga}"
+            if child.is_dir():
+                stack.append((child, f"{path}/"))
+            else:
+                found[path] = child
+    return found
+
+
+def check_card(hst: str, image: Path, art_json: Path) -> tuple[list[tuple[bool, str]], dict]:
+    """Card round 3: every PFS3 partition of a whole card ART built, listed and
+    extracted by hst-imager, and compared with ART's own listing of it
+    (`writes_a_small_card_for_the_hst_imager_oracle`'s `.art.json`): the path
+    set, each file's size, and each file's SHA-256 from `fs copy`."""
+    checks: list[tuple[bool, str]] = []
+    counts: dict[str, dict] = {}
+    listing = json.loads(art_json.read_text(encoding="utf-8"))
+    work = image.parent
+    scratch = require_scratch_dir()
+
+    with tempfile.TemporaryDirectory(prefix="art-pfs3-card-", dir=scratch) as tmp:
+        for partition in listing["partitions"]:
+            drive = partition["drive"]
+            target = card_partition(image, partition["slot"], drive)
+            entries = partition["entries"]
+            want_files = {e["path"]: e for e in entries if not e.get("dir")}
+            want_dirs = {e["path"] for e in entries if e.get("dir")}
+            count = counts.setdefault(
+                drive, {"art_files": len(want_files), "art_dirs": len(want_dirs),
+                        "hst_files": 0, "hst_dirs": 0, "hashed": 0}
+            )
+
+            listed = run_hst(hst, ["fs", "dir", target, "-r"], work)
+            if listed.returncode != 0:
+                checks.append((False, f"{drive}: hst-imager listed {target}"))
+                print(listed.stdout[-2000:])
+                print(listed.stderr[-1000:])
+                continue
+            if not want_files and not want_dirs and "Name" not in listed.stdout:
+                # An empty volume prints no table at all.
+                got = {}
+            else:
+                try:
+                    got = parse_dir_listing(listed.stdout)
+                except RuntimeError as err:
+                    checks.append((False, f"{drive}: {err}"))
+                    continue
+            got_files = {p: e for p, e in got.items() if e["kind"] == "file"}
+            got_dirs = {p for p, e in got.items() if e["kind"] == "dir"}
+            count["hst_files"] = len(got_files)
+            count["hst_dirs"] = len(got_dirs)
+
+            checks.append((
+                set(got_files) == set(want_files),
+                f"{drive}: the same files (only ART: {sorted(set(want_files) - set(got_files))}, "
+                f"only hst-imager: {sorted(set(got_files) - set(want_files))})",
+            ))
+            checks.append((
+                got_dirs == want_dirs,
+                f"{drive}: the same directories (only ART: {sorted(want_dirs - got_dirs)}, "
+                f"only hst-imager: {sorted(got_dirs - want_dirs)})",
+            ))
+            for path, want in want_files.items():
+                if path in got_files and not size_agrees(got_files[path]["size"], want["size"]):
+                    checks.append((False, f"{drive}: {path} is {want['size']} bytes "
+                                          f"(hst-imager lists {got_files[path]['size']})"))
+
+            if not want_files:
+                continue
+            out = Path(tmp) / drive.lower()
+            out.mkdir()
+            copied = run_hst(hst, ["fs", "copy", target, str(out), "-r"], work)
+            if copied.returncode != 0:
+                checks.append((False, f"{drive}: hst-imager extracted the partition"))
+                print(copied.stdout[-2000:])
+                print(copied.stderr[-1000:])
+                continue
+            on_disk = extracted_files(out)
+            for path, want in want_files.items():
+                if path_has_reserved_component(path):
+                    continue
+                local = on_disk.get(path)
+                if local is None:
+                    checks.append((False, f"{drive}: {path} was extracted"))
+                    continue
+                digest = hashlib.sha256(local.read_bytes()).hexdigest()
+                ok = digest == want["sha256"]
+                count["hashed"] += ok
+                if not ok:
+                    checks.append((False, f"{drive}: {path}'s bytes hash to ART's listing"))
+    return checks, counts
+
+
+def main_card(image: Path, art_json: Path) -> int:
+    hst = find_hst_imager()
+    if not image.is_file() or not art_json.is_file():
+        print(f"'{image}' or '{art_json}' does not exist; run "
+              "writes_a_small_card_for_the_hst_imager_oracle first.")
+        return 2
+    print(f"hst-imager: {hst}\ncard: {image}\nART's listing: {art_json}\n")
+    checks, counts = check_card(hst, image, art_json)
+    for drive, count in counts.items():
+        print(f"  {drive}: ART {count['art_files']} files / {count['art_dirs']} dirs; "
+              f"hst-imager {count['hst_files']} files / {count['hst_dirs']} dirs; "
+              f"{count['hashed']} hashes equal")
+    failures = [what for ok, what in checks if not ok]
+    if failures:
+        print(f"\n{len(failures)} difference(s):")
+        for item in failures:
+            print(f"  - {item}")
+        return 1
+    print("\nART and hst-imager agree on every partition of the card: paths, sizes, bytes.")
+    return 0
+
+
 def main() -> int:
+    # A difference names a path, and a path can be non-ASCII: never let the
+    # console's code page turn a report into a traceback.
+    sys.stdout.reconfigure(errors="replace")
+    if len(sys.argv) >= 2 and sys.argv[1] == "--card":
+        if len(sys.argv) != 4:
+            print("usage: pfs3-oracle-check.py --card IMAGE ART_JSON")
+            return 2
+        return main_card(Path(sys.argv[2]), Path(sys.argv[3]))
     hst = find_hst_imager()
     driver = find_pfs3_driver()
     scratch = require_scratch_dir()

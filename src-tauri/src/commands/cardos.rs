@@ -1102,7 +1102,8 @@ pub(crate) mod test_support {
         }
     }
 
-    /// System's tree: `C/Dir` and `S/Startup-Sequence`.
+    /// System's tree: `C/Dir`, `S/Startup-Sequence` and a `distribution.json`
+    /// stating its release.
     pub(crate) fn small_tree(dir: &Path) -> PathBuf {
         folder_with(
             dir,
@@ -1110,21 +1111,91 @@ pub(crate) mod test_support {
             &[
                 ("C/Dir", &[0u8; 3000][..]),
                 ("S/Startup-Sequence", b"Echo hello\n"),
+                (
+                    MANIFEST_FILE_NAME,
+                    br#"{"release":"AmigaOS 3.2.2","builtFrom":[],"files":[]}"#,
+                ),
             ],
         )
     }
 
-    /// The smallest prepared card: System, `Games` (one folder, no titles),
-    /// Work — measured and staged for real, on the hand-built 2 GiB plan.
+    /// The material a card round needs beside the driver: `WHDLoad_usr.lha`
+    /// (WHDLoad 20.0 and its prefs) and `skick346.lha` (the 1.3 `.RTB`).
+    fn material_with_whdload_and_skick(dir: &Path) -> PathBuf {
+        let material = material_with_driver(dir);
+        let lha = crate::core::lha::tests::make_lha_with;
+        std::fs::write(
+            material.join("WHDLoad_usr.lha"),
+            lha(&[
+                ("WHDLoad/C/WHDLoad", &whdload_bytes("20.0")),
+                ("WHDLoad/S/WHDLoad.prefs", b";prefs\n"),
+            ]),
+        )
+        .unwrap();
+        std::fs::write(
+            material.join("skick346.lha"),
+            lha(&[("Kickstarts/kick34005.A500.RTB", &[1u8; 4000][..])]),
+        )
+        .unwrap();
+        material
+    }
+
+    /// The smallest whole card: System (the tree); `Games`, one WHDLoad
+    /// hardfile whose `Turrican` slave names `kick34005.A500`; `Stuff`, a
+    /// folder; Work — with the driver, WHDLoad and skick in the material and
+    /// the 1.3 ROM in a Kickstart folder. Measured and staged for real, on the
+    /// hand-built 2 GiB plan (R2).
     pub(crate) fn small_prepared_card(dir: &Path) -> (PreparedCard, PathBuf) {
+        small_prepared_card_with(dir, "Notes")
+    }
+
+    /// [`small_prepared_card`], with Stuff's one drawer named `stuff_drawer`
+    /// (a non-ASCII name sends Stuff to hst-imager).
+    pub(crate) fn small_prepared_card_with(
+        dir: &Path,
+        stuff_drawer: &str,
+    ) -> (PreparedCard, PathBuf) {
+        use crate::core::gameindex::readers::slave::tests_support::slave_needing;
+
         let tree = small_tree(dir);
-        let games = folder_with(dir, "Games", &[("Readme", b"hello\n")]);
-        let material = [material_with_driver(dir)];
-        let parts = [PartitionInput {
-            volume_name: "Games".into(),
-            sources: vec![games],
-            floor_bytes: 0,
-        }];
+        let rom = rom_13();
+        let roms = dir.join("roms");
+        std::fs::create_dir_all(&roms).unwrap();
+        std::fs::write(roms.join("my-13.rom"), &rom).unwrap();
+        let slave = slave_needing(
+            "kick34005.A500",
+            crate::core::hashing::crc16_arc(&rom),
+            rom.len() as u32,
+        );
+        let hdf = dir.join("Turrican.hdf");
+        crate::core::cardos::content::test_support::build_hdf(
+            &hdf,
+            &["C", "S", "Turrican"],
+            &[
+                ("C/WHDLoad", &whdload_bytes("18.0")),
+                ("S/Startup-Sequence", b"WHDLoad Turrican.slave\n"),
+                ("Turrican/Turrican.slave", &slave),
+                ("Turrican.info", b"icon"),
+            ],
+        );
+        let stuff = folder_with(
+            dir,
+            "Stuff",
+            &[(&format!("{stuff_drawer}/readme"), b"stuff\n")],
+        );
+        let material = [material_with_whdload_and_skick(dir)];
+        let parts = [
+            PartitionInput {
+                volume_name: "Games".into(),
+                sources: vec![hdf],
+                floor_bytes: 0,
+            },
+            PartitionInput {
+                volume_name: "Stuff".into(),
+                sources: vec![stuff],
+                floor_bytes: 0,
+            },
+        ];
         let mut measured = measure_card(
             16,
             &tree,
@@ -1137,7 +1208,7 @@ pub(crate) mod test_support {
             &NoProgress,
         )
         .unwrap();
-        let plan = two_gib_plan(&["System", "Games", "Work"]);
+        let plan = two_gib_plan(&["System", "Games", "Stuff", "Work"]);
         let names = |plan: &CardImagePlan| {
             plan.partitions
                 .iter()
@@ -1156,7 +1227,7 @@ pub(crate) mod test_support {
             &tree,
             &dir.join("staging"),
             &material,
-            &[],
+            std::slice::from_ref(&roms),
             &UtcClock,
             &NoProgress,
         )
@@ -1183,6 +1254,64 @@ pub(crate) mod test_support {
         }
         zip.finish().unwrap();
         path
+    }
+
+    /// WHDLoad's binary as far as ART reads it: bytes that state a version.
+    pub(crate) fn whdload_bytes(version: &str) -> Vec<u8> {
+        let mut bytes = vec![0u8; 286];
+        bytes.extend_from_slice(
+            format!("$VER: WHDLoad {version} [build 7051] (27.03.2026)\0").as_bytes(),
+        );
+        bytes
+    }
+
+    /// The fixture's "Kickstart 1.3": arbitrary bytes of a 256 KB ROM's size,
+    /// whose CRC-16/ARC the slave names.
+    pub(crate) fn rom_13() -> Vec<u8> {
+        vec![0x11u8; 262_144]
+    }
+
+    /// Every file on PFS3 partition `index` of the card's first Amiga area,
+    /// by its `/`-separated path, read through libpfs3 at the partition's
+    /// file-absolute offset. Directories are listed with an empty value under
+    /// `<path>/`.
+    pub(crate) fn read_pfs3_files(
+        image: &Path,
+        card: &crate::core::card::CardImage,
+        index: usize,
+    ) -> std::collections::BTreeMap<String, Vec<u8>> {
+        let area = &card.areas[0];
+        let part = &area.rdb.partitions[index];
+        let (offset, _, _) = crate::core::preload::native::partition_region(area, part).unwrap();
+        let mut vol = libpfs3::volume::Volume::open(image, offset).unwrap();
+        let mut out = std::collections::BTreeMap::new();
+        let mut stack = vec![String::new()];
+        let mut nodes = 0usize;
+        while let Some(dir) = stack.pop() {
+            for entry in vol.list_dir(&dir).unwrap() {
+                nodes += 1;
+                assert!(nodes < 100_000, "a bounded walk");
+                let path = if dir.is_empty() {
+                    entry.name.clone()
+                } else {
+                    format!("{dir}/{}", entry.name)
+                };
+                if entry.is_dir() {
+                    out.insert(format!("{path}/"), Vec::new());
+                    stack.push(path);
+                } else {
+                    let bytes = vol.read_file_data(entry.anode, entry.file_size()).unwrap();
+                    out.insert(path, bytes);
+                }
+            }
+        }
+        out
+    }
+
+    pub(crate) fn request_agreeing(dir: &Path, agreed: &[&str]) -> CardOsBuildRequest {
+        let mut request = request_for(dir);
+        request.agreed_kickstarts = agreed.iter().map(|name| name.to_string()).collect();
+        request
     }
 
     pub(crate) fn request_for(dir: &Path) -> CardOsBuildRequest {
@@ -1495,5 +1624,238 @@ mod tests {
         assert!(sessions.close(id).unwrap_err().to_string().contains("busy"));
 
         assert_eq!(sessions.end_build(id), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Task 13: the end-to-end card
+    // -----------------------------------------------------------------------
+
+    /// The whole card, built by the real path from the plan on, and read back
+    /// by ART's own readers: the RDB, System and Games through libpfs3, the
+    /// manifest from its file beside the image.
+    #[test]
+    fn a_small_card_is_built_whole_and_reads_back_as_it_was_asked() {
+        use crate::core::card::health::ManualStep;
+        use crate::core::card::manifest::read_manifest;
+
+        let (_guard, dir) = scratch("e2e");
+        let (prepared, tree) = small_prepared_card(&dir);
+        let image = dir.join("card.img");
+
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_agreeing(&dir, &["kick34005.A500"]),
+            &NativeFormatter::UTC,
+            None,
+            &NoProgress,
+        );
+        assert!(
+            matches!(built.ending, CardOsEnding::Succeeded),
+            "{:?} {:?}",
+            built.ending,
+            built.error
+        );
+        assert!(image.exists() && !partial_path_for(&image).exists());
+
+        let card = crate::core::card::read_card(&image).unwrap();
+        let parts: Vec<_> = card.areas[0]
+            .rdb
+            .partitions
+            .iter()
+            .map(|p| p.drive_name.clone())
+            .collect();
+        assert_eq!(parts, ["SDH0", "SDH1", "SDH2", "SDH3"]);
+
+        let system = read_pfs3_files(&image, &card, 0);
+        assert_eq!(
+            system.get("C/WHDLoad"),
+            Some(&whdload_bytes("20.0")),
+            "{:?}",
+            system.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            system.get("S/WHDLoad.prefs").map(Vec::as_slice),
+            Some(&b";prefs\n"[..])
+        );
+        assert_eq!(
+            system.get("Devs/Kickstarts/kick34005.A500"),
+            Some(&rom_13())
+        );
+        assert_eq!(
+            system.get("Devs/Kickstarts/kick34005.A500.RTB"),
+            Some(&vec![1u8; 4000])
+        );
+        assert_eq!(system.get("C/Dir"), Some(&vec![0u8; 3000]));
+
+        let games = read_pfs3_files(&image, &card, 1);
+        assert!(
+            games.keys().any(|k| k == "Turrican/Turrican.slave"),
+            "{:?}",
+            games.keys().collect::<Vec<_>>()
+        );
+        let stuff = read_pfs3_files(&image, &card, 2);
+        assert_eq!(
+            stuff.get("Notes/readme").map(Vec::as_slice),
+            Some(&b"stuff\n"[..])
+        );
+        assert!(
+            read_pfs3_files(&image, &card, 3).is_empty(),
+            "Work is empty"
+        );
+
+        let manifest = read_manifest(&manifest_path_for(&image)).unwrap();
+        assert_eq!(manifest.os, vec!["AmigaOS 3.2.2".to_string()]);
+        let volumes: Vec<_> = manifest
+            .partitions
+            .iter()
+            .map(|p| p.volume_name.as_str())
+            .collect();
+        assert_eq!(volumes, ["System", "Games", "Stuff", "Work"], "R3");
+        let health = built.health.expect("a health report");
+        assert!(
+            !health
+                .by_hand
+                .iter()
+                .any(|s| matches!(s, ManualStep::VolumesNeedFormatting { .. })),
+            "{:?}",
+            health.by_hand
+        );
+    }
+
+    /// Decision 1, the other direction: a Kickstart the proposal supplies but
+    /// the user did not agree to never reaches the card.
+    #[test]
+    fn only_agreed_kickstarts_reach_the_tree() {
+        let (_guard, dir) = scratch("only-agreed");
+        let (prepared, tree) = small_prepared_card(&dir);
+        assert!(
+            prepared
+                .kickstarts
+                .items
+                .iter()
+                .any(|item| item.name == "kick34005.A500"
+                    && matches!(item.offer, crate::core::rom::offer::Offer::Supplied { .. })),
+            "the fixture must offer the image, or this proves nothing: {:?}",
+            prepared.kickstarts.items
+        );
+        let image = dir.join("card.img");
+
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_agreeing(&dir, &[]),
+            &NativeFormatter::UTC,
+            None,
+            &NoProgress,
+        );
+        assert!(
+            matches!(built.ending, CardOsEnding::Succeeded),
+            "{:?} {:?}",
+            built.ending,
+            built.error
+        );
+        assert!(built.kickstarts.is_empty(), "{:?}", built.kickstarts);
+
+        let card = crate::core::card::read_card(&image).unwrap();
+        let system = read_pfs3_files(&image, &card, 0);
+        assert!(
+            !system.keys().any(|k| k.starts_with("Devs/Kickstarts/")),
+            "{:?}",
+            system.keys().collect::<Vec<_>>()
+        );
+        assert!(!tree.join("Devs").join("Kickstarts").exists());
+        // The rest of the card is still there: this is not a card that failed.
+        assert_eq!(system.get("C/WHDLoad"), Some(&whdload_bytes("20.0")));
+    }
+
+    /// Writes a card for `scripts/pfs3-oracle-check.py --card`, and ART's own
+    /// listing of every partition beside it. With `ART_HST` naming
+    /// `hst.imager.exe`, Stuff holds a non-ASCII name, so Stuff is formatted
+    /// and filled by hst-imager — under the `.partial` name (P2's write half).
+    #[test]
+    #[ignore = "writes a card for scripts/pfs3-oracle-check.py --card; set ART_CARD_OS_OUT to an existing folder on E: (and ART_HST for the hst-imager run)"]
+    fn writes_a_small_card_for_the_hst_imager_oracle() {
+        use sha2::Digest as _;
+
+        let out = PathBuf::from(std::env::var("ART_CARD_OS_OUT").expect("ART_CARD_OS_OUT"));
+        assert!(out.is_dir(), "ART_CARD_OS_OUT must be an existing folder");
+        let hst = std::env::var("ART_HST")
+            .ok()
+            .filter(|p| !p.trim().is_empty());
+        let (stem, stuff_drawer) = match hst {
+            Some(_) => ("card-os-e2e-hst", "Café"),
+            None => ("card-os-e2e", "Notes"),
+        };
+        let image = out.join(format!("{stem}.img"));
+        let listing_path = out.join(format!("{stem}.art.json"));
+        assert!(
+            !image.exists() && !partial_path_for(&image).exists(),
+            "'{}' (or its .partial) already exists — ART does not replace it",
+            image.display()
+        );
+
+        let (_guard, dir) = scratch("oracle-hook");
+        let (prepared, tree) = small_prepared_card_with(&dir, stuff_drawer);
+        let fallback = hst.as_ref().map(HstImager::at);
+        let started = std::time::Instant::now();
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_agreeing(&dir, &["kick34005.A500"]),
+            &NativeFormatter::UTC,
+            fallback.as_ref().map(|h| h as &dyn VolumeFormatter),
+            &NoProgress,
+        );
+        assert!(
+            matches!(built.ending, CardOsEnding::Succeeded),
+            "{:?} {:?}",
+            built.ending,
+            built.error
+        );
+        println!("built in {:.1} s", started.elapsed().as_secs_f64());
+        for step in &built.steps {
+            println!("step {:?} by {}", step.step, step.tool);
+        }
+
+        let card = crate::core::card::read_card(&image).unwrap();
+        let area = &card.areas[0];
+        let mut partitions = Vec::new();
+        for (index, part) in area.rdb.partitions.iter().enumerate() {
+            let files = read_pfs3_files(&image, &card, index);
+            let entries: Vec<serde_json::Value> = files
+                .iter()
+                .map(|(path, bytes)| match path.strip_suffix('/') {
+                    Some(dir) => serde_json::json!({ "path": dir, "dir": true }),
+                    None => serde_json::json!({
+                        "path": path,
+                        "size": bytes.len(),
+                        "sha256": format!("{:x}", sha2::Sha256::digest(bytes)),
+                    }),
+                })
+                .collect();
+            println!(
+                "{}: {} files, {} dirs",
+                part.drive_name,
+                files.keys().filter(|k| !k.ends_with('/')).count(),
+                files.keys().filter(|k| k.ends_with('/')).count()
+            );
+            partitions.push(serde_json::json!({
+                "slot": area.mbr_slot,
+                "drive": part.drive_name,
+                "entries": entries,
+            }));
+        }
+        let listing =
+            serde_json::json!({ "image": image.display().to_string(), "partitions": partitions });
+        std::fs::write(
+            &listing_path,
+            serde_json::to_string_pretty(&listing).unwrap(),
+        )
+        .unwrap();
+        println!("wrote {} and {}", image.display(), listing_path.display());
     }
 }
