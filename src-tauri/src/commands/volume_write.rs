@@ -1652,7 +1652,7 @@ pub(crate) fn install_into_folder(
 ///    the folder the user picked is refused outright and said so, not quietly
 ///    renamed into something that looks harmless.
 /// 2. **Host legality**, of the escaped name: what NTFS will actually accept
-///    (`AUX`, `Prices: 1993`, a trailing dot).
+///    (`AUX`, `Prices? 1993`, a trailing dot).
 pub(crate) fn folder_destination(dest_dir: &Path, name: &str) -> CoreResult<PathBuf> {
     let refuse = |err: crate::core::security::PathTraversalError| {
         CoreError::SafetyRefused(format!(
@@ -3684,8 +3684,8 @@ mod tests {
             dir.join("Tools")
         );
         assert_eq!(
-            folder_destination(&dir, "Prices: 1993").unwrap(),
-            dir.join(windows_safe_name("Prices: 1993"))
+            folder_destination(&dir, "Prices? 1993").unwrap(),
+            dir.join(windows_safe_name("Prices? 1993"))
         );
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -4209,7 +4209,7 @@ mod tests {
         let picks = vec![
             SelectedEntry {
                 header_block: 100,
-                name: "Prices: 1993".into(),
+                name: "Prices* 1993".into(),
                 is_dir: false,
             },
             SelectedEntry {
@@ -4231,7 +4231,7 @@ mod tests {
         .unwrap_err();
 
         let message = err.to_string();
-        assert!(message.contains("Prices: 1993"), "{message}");
+        assert!(message.contains("Prices* 1993"), "{message}");
         assert!(message.contains("Prices? 1993"), "{message}");
         assert!(
             !dest.exists(),

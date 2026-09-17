@@ -277,6 +277,25 @@ pub enum CoreError {
     #[error("operation refused to protect data: {0}")]
     SafetyRefused(String),
 
+    /// A distribution tree destination used `:` or `/` inside one of its own
+    /// segments (ART-341). Both are reserved in AmigaDOS since DOS — `:`
+    /// separates a device or volume name from the path that follows it, and
+    /// `/` means "parent directory" rather than a path separator — so
+    /// neither can appear *inside* a file or drawer name; a distribution
+    /// tree that carried one only worked by accident, escaped for whatever
+    /// host filesystem happened to receive it
+    /// (AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
+    /// Conventions). Raised in `core::osinstall::apply` before a single byte
+    /// is written, the same "before anything is written" shape as
+    /// [`SafetyRefused`](Self::SafetyRefused) but its own variant so a
+    /// caller can tell "the name itself is illegal" from "the escaped host
+    /// names collide".
+    #[error(
+        "'{path}' cannot be an AmigaDOS name: a colon (:) or a slash (/) is reserved in \
+         AmigaDOS file and drawer names. Rename it in the source and run again."
+    )]
+    AmigaNameReserved { path: String },
+
     #[error("not yet implemented: {0}")]
     NotImplemented(String),
 
@@ -695,6 +714,7 @@ impl CoreError {
             Self::Malformed { .. } => "ART-FORMAT-MALFORMED",
             Self::InvalidInput(_) => "ART-INPUT-INVALID",
             Self::SafetyRefused(_) => "ART-SAFETY-REFUSED",
+            Self::AmigaNameReserved { .. } => "ART-AMIGA-NAME-RESERVED",
             Self::NotImplemented(_) => "ART-NOT-IMPLEMENTED",
             Self::MirrorUnreachable(_) => "ART-MIRROR-UNREACHABLE",
             Self::IntegrityMismatch(_) => "ART-INTEGRITY-MISMATCH",
@@ -830,6 +850,7 @@ mod tests {
             },
             CoreError::InvalidInput("x".into()),
             CoreError::SafetyRefused("x".into()),
+            CoreError::AmigaNameReserved { path: "x".into() },
             CoreError::NotImplemented("x".into()),
             CoreError::MirrorUnreachable("x".into()),
             CoreError::IntegrityMismatch("x".into()),
