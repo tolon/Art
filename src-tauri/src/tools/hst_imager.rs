@@ -421,8 +421,6 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("_AUX"), "{msg}");
         assert!(msg.contains("AUX"), "{msg}");
-
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// The arguments SD-0 ran, in the order it ran them. Pinned because a

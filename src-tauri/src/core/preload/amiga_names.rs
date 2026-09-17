@@ -209,9 +209,13 @@ impl AmigaNames {
         let Ok(record) = serde_json::from_str::<NamesRecord>(&text) else {
             return Vec::new();
         };
+        // Final review I3: each value is used as one node's name, so one that
+        // is not a single AmigaDOS name is dropped, as a malformed manifest
+        // row is.
         record
             .names
             .into_iter()
+            .filter(|node| is_one_segment(&node.amiga) && !node.amiga.contains(':'))
             .map(|node| (node.host, node.amiga))
             .collect()
     }
@@ -227,7 +231,9 @@ impl AmigaNames {
         for (host, amiga) in pairs {
             let host_parts: Vec<&str> = host.split('/').collect();
             let amiga_parts: Vec<&str> = amiga.split('/').collect();
-            if host_parts.len() != amiga_parts.len() {
+            if host_parts.len() != amiga_parts.len()
+                || !amiga_parts.iter().all(|part| is_one_segment(part))
+            {
                 continue;
             }
             for depth in 0..host_parts.len() {
@@ -260,6 +266,13 @@ impl AmigaNames {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+}
+
+/// A value that can be one node's name: not empty, not `.` or `..`, and no
+/// `/`. The record also refuses `:`; the manifest keeps it, because
+/// `core/osinstall` records a name such as `Prices: 1993` on purpose.
+fn is_one_segment(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }
 
 #[cfg(test)]
@@ -348,6 +361,31 @@ mod tests {
             write_record(&dir, &names).is_err(),
             "SAFE_CREATE: an existing record is not replaced"
         );
+    }
+
+    /// Final review I3: a record value is one AmigaDOS name. One that is
+    /// empty, `.`, `..`, or holds `/` or `:` would become a path on the card
+    /// (`a/b` writes `b` into a sibling drawer), so the pair is dropped as a
+    /// malformed manifest row is.
+    #[test]
+    fn a_record_value_that_is_not_one_amigados_name_is_dropped() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-amiga-names", "bad-values");
+        let names = BTreeMap::from([
+            ("a_b".to_string(), "a/b".to_string()),
+            ("c_d".to_string(), "c:d".to_string()),
+            ("e".to_string(), String::new()),
+            ("f".to_string(), ".".to_string()),
+            ("g".to_string(), "..".to_string()),
+            ("_AUX".to_string(), "AUX".to_string()),
+        ]);
+        write_record(&dir, &names).unwrap();
+        let read = AmigaNames::read(&dir);
+        assert_eq!(read.pairs().collect::<Vec<_>>(), [("_AUX", "AUX")]);
+
+        // The manifest's segments get the same empty / `.` / `..` rule.
+        let from_manifest =
+            AmigaNames::from_records([("x/_y", "x/.."), ("_z", ""), ("_AUX", "AUX")].into_iter());
+        assert_eq!(from_manifest.pairs().collect::<Vec<_>>(), [("_AUX", "AUX")]);
     }
 
     /// The module doc comment's rule: a folder that needed no escaping never

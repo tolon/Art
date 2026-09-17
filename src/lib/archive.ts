@@ -18,7 +18,7 @@ import type { CopyOptions } from "@/lib/volumeWrite";
 
 /** What opening an archive reports — including what it cannot show. */
 export interface ArchiveInfo {
-  /** `"lha"`, `"zip"` or `"7z"`, from the file's own bytes. */
+  /** `"lha"`, `"lzx"`, `"zip"` or `"7z"`, from the file's own bytes. */
   format: string;
   entry_count: number;
   total_bytes: number;

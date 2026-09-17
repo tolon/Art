@@ -174,6 +174,14 @@ pub fn extract_with_backend(
     extract_selection(backend, &entries, &selection, dest, overwrite, progress)
 }
 
+/// The gate's entry cap as a sentence, or `None` under it. One place, so a
+/// caller that refuses early (the card's `measure`) says what the gate says.
+pub(crate) fn too_many_entries(format: &str, count: usize) -> Option<String> {
+    (count > MAX_ENTRIES).then(|| {
+        format!("this {format} archive declares {count} entries; ART reads at most {MAX_ENTRIES}")
+    })
+}
+
 /// Extract the entries `selection` names, under the names it gives them.
 ///
 /// Two phases, and the split is not cosmetic:
@@ -207,12 +215,9 @@ pub fn extract_selection(
 
     let mut outcome = ExtractOutcome::new();
 
-    if entries.len() > MAX_ENTRIES {
+    if let Some(reason) = too_many_entries(format, entries.len()) {
         outcome.aborted = true;
-        outcome.abort_reason = Some(format!(
-            "this {format} archive declares {} entries; ART reads at most {MAX_ENTRIES}",
-            entries.len()
-        ));
+        outcome.abort_reason = Some(reason);
         return Ok(outcome);
     }
 

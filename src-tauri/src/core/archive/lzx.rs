@@ -157,6 +157,10 @@ fn for_member(name: &str, error: &CoreError) -> CoreError {
             CoreError::UnsupportedFormat(format!("'{name}': {detail}"))
         }
         CoreError::Malformed { detail, .. } => malformed(format!("'{name}': {detail}")),
+        // A read error is the disk's, not the archive's (final review M1).
+        CoreError::Io(io) => {
+            CoreError::Io(std::io::Error::new(io.kind(), format!("'{name}': {io}")))
+        }
         other => malformed(format!("'{name}': {other}")),
     }
 }
@@ -584,7 +588,25 @@ impl ArchiveBackend for LzxBackend {
         let is_wanted = |i: usize| wanted.get(i).copied().unwrap_or(false);
         let mut reader = BufReader::new(File::open(&self.path)?);
         for group in &self.groups {
-            let Some(last_wanted) = group.members.clone().rev().find(|i| is_wanted(*i)) else {
+            // Final review M2: a wanted member past `limit` is refused from its
+            // declared size before the group is decoded, and does not make the
+            // decode run on to reach it.
+            let mut fits = Vec::new();
+            for i in group.members.clone().filter(|i| is_wanted(*i)) {
+                let entry = &self.records[i].entry;
+                if entry.declared_bytes > limit {
+                    sink(
+                        i,
+                        Err(CoreError::InvalidInput(format!(
+                            "'{}' is {} bytes, past the {limit} bytes asked for",
+                            entry.name, entry.declared_bytes
+                        ))),
+                    )?;
+                } else {
+                    fits.push(i);
+                }
+            }
+            let Some(&last_wanted) = fits.last() else {
                 continue;
             };
             // ≤ 100 001 × u32::MAX: no overflow in u64.
@@ -621,26 +643,32 @@ impl ArchiveBackend for LzxBackend {
                     "LZX pack mode {other} is not one ART reads"
                 ))),
             };
+            let mut decoded = decoded;
             let mut offset = 0u64;
             for i in group.members.clone() {
                 let size = self.records[i].entry.declared_bytes;
-                let range = offset..offset + size;
+                let range = offset as usize..(offset + size) as usize;
                 offset += size;
-                if !is_wanted(i) {
+                if !fits.contains(&i) {
                     continue;
                 }
                 let name = &self.records[i].entry.name;
-                let result = match &decoded {
+                let result = match &mut decoded {
                     Err(e) => Err(for_member(name, e)),
-                    Ok(_) if size > limit => Err(CoreError::InvalidInput(format!(
-                        "'{name}' is {size} bytes, past the {limit} bytes asked for"
-                    ))),
-                    Ok(bytes) => match bytes.get(range.start as usize..range.end as usize) {
+                    Ok(bytes) => match bytes.get(range.clone()) {
                         None => Err(malformed(format!(
                             "'{name}' lies past the data its group decoded"
                         ))),
                         Some(slice) if crc32_ieee(slice) != self.records[i].data_crc => {
                             Err(malformed(format!("'{name}' fails its data CRC")))
+                        }
+                        // The last member moves out of the buffer rather than
+                        // being copied beside it.
+                        Some(_) if i == last_wanted => {
+                            let mut owned = std::mem::take(bytes);
+                            owned.truncate(range.end);
+                            owned.drain(..range.start);
+                            Ok(owned)
                         }
                         Some(slice) => Ok(slice.to_vec()),
                     },
@@ -986,6 +1014,50 @@ pub(crate) mod tests {
         let mut backend = LzxBackend::open(&path).unwrap();
         assert!(backend.read(0, 2).is_err());
         assert_eq!(backend.read(0, 3).unwrap(), b"abc");
+    }
+
+    /// Final review M2: a member past the limit asked is refused from its
+    /// declared size, before its group is decoded — a pack mode ART does not
+    /// read would otherwise answer first.
+    #[test]
+    fn a_member_past_the_limit_is_refused_before_its_group_is_decoded() {
+        let (_guard, dir) = scratch("limit-first");
+        let path = dir.join("l.lzx");
+        std::fs::write(
+            &path,
+            archive(&[Rec {
+                name: "F",
+                comment: "",
+                attrs: 0x0F,
+                unpacked: 3,
+                method: 7,
+                data_crc: 0,
+                packed: b"abc",
+            }]),
+        )
+        .unwrap();
+        let mut backend = LzxBackend::open(&path).unwrap();
+        let err = backend.read(0, 2).unwrap_err();
+        assert!(matches!(err, CoreError::InvalidInput(_)), "{err:?}");
+        assert!(
+            err.to_string()
+                .contains("'F' is 3 bytes, past the 2 bytes asked for"),
+            "{err}"
+        );
+    }
+
+    /// Final review M1: a read error while decoding is still a read error —
+    /// a failing disk is not a damaged archive — and it names the member.
+    #[test]
+    fn an_io_error_for_a_member_stays_an_io_error() {
+        let io = CoreError::Io(std::io::Error::other("the device is not ready"));
+        let restated = for_member("C/Assign", &io);
+        assert!(matches!(restated, CoreError::Io(_)), "{restated:?}");
+        let text = restated.to_string();
+        assert!(
+            text.contains("'C/Assign'") && text.contains("the device is not ready"),
+            "{text}"
+        );
     }
 
     #[test]

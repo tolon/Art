@@ -430,10 +430,6 @@ pub enum CoreError {
     /// Two Amiga names inside one source that Windows would stage under the
     /// same escaped host name (`windows_safe_name`), so neither could be
     /// copied as itself (card round 2).
-    #[error(
-        "'{first}' and '{second}' in '{source_path}' would both be staged as '{host}' on Windows, so \
-         neither could be copied as itself. Rename one on the Amiga side first."
-    )]
     ///
     /// `source_path`, not `source`: `thiserror` takes a field called `source`
     /// to be the error's cause and requires it to be an error type.
@@ -441,6 +437,10 @@ pub enum CoreError {
     /// `Box<str>` rather than `String`: four `String`s made this the largest
     /// variant and grew every `CoreError` by a word (clippy's
     /// `result_large_err` on `gameindex::igame`); the text is never edited.
+    #[error(
+        "'{first}' and '{second}' in '{source_path}' would both be staged as '{host}' on Windows, so \
+         neither could be copied as itself. Rename one on the Amiga side first."
+    )]
     EscapedNamesCollide {
         source_path: Box<str>,
         first: Box<str>,
@@ -452,10 +452,17 @@ pub enum CoreError {
     /// (non-ASCII, ART-113) and escaped names only ART's own writer can put
     /// back (ART-160) — so neither writer can copy the whole partition, and
     /// the refusal names both lists (card round 2).
-    #[error("{}", names_no_writer_message(non_ascii, escaped))]
+    #[error(
+        "{}",
+        names_no_writer_message(non_ascii, *non_ascii_more, escaped, *escaped_more)
+    )]
     NamesNoWriterCanCopy {
         non_ascii: Vec<String>,
+        /// Non-ASCII names past those listed.
+        non_ascii_more: usize,
         escaped: Vec<String>,
+        /// Escaped names past those listed.
+        escaped_more: usize,
     },
 
     /// The tree's own `S/Startup-Sequence` never runs `S:User-Startup`, so the
@@ -610,14 +617,26 @@ fn non_ascii_pfs3_message(paths: &[String], more: usize) -> String {
 }
 
 /// The sentence for [`CoreError::NamesNoWriterCanCopy`].
-fn names_no_writer_message(non_ascii: &[String], escaped: &[String]) -> String {
+fn names_no_writer_message(
+    non_ascii: &[String],
+    non_ascii_more: usize,
+    escaped: &[String],
+    escaped_more: usize,
+) -> String {
+    let listed = |names: &[String], more: usize| {
+        let mut text = names.join(", ");
+        if more > 0 {
+            text.push_str(&format!(", and {more} more"));
+        }
+        text
+    };
     format!(
         "This partition holds names the native PFS3 writer cannot write, because they are not \
          ASCII ({}; ART-113), and names Windows forced ART to change, which hst-imager cannot \
          put back ({}; ART-160) — so neither writer can copy all of it. Rename the first set to \
          ASCII, or put the sources holding them on a different partition from the second.",
-        non_ascii.join(", "),
-        escaped.join(", ")
+        listed(non_ascii, non_ascii_more),
+        listed(escaped, escaped_more)
     )
 }
 
@@ -841,7 +860,9 @@ mod tests {
             },
             CoreError::NamesNoWriterCanCopy {
                 non_ascii: vec!["français".into()],
+                non_ascii_more: 0,
                 escaped: vec!["AUX".into()],
+                escaped_more: 0,
             },
             CoreError::FirstBootHookUnreachable {
                 file: "S/Startup-Sequence".into(),

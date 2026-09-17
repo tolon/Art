@@ -50,7 +50,7 @@ use crate::core::adf::bcpl::{AmigaDate, TICKS_PER_SEC};
 use crate::core::adf::blocks::EntryKind;
 use crate::core::adf::extract::extract_file_on;
 use crate::core::adf::fs::{list_directory_on, read_header_on, FileEntry};
-use crate::core::archive::extract::{extract_selection, OverwritePolicy, Wanted};
+use crate::core::archive::extract::{extract_selection, too_many_entries, OverwritePolicy, Wanted};
 use crate::core::archive::{self, ArchiveEntry, EntryDate};
 use crate::core::card::sizing::ContentMeasure;
 use crate::core::clock::AmigaClock;
@@ -61,7 +61,8 @@ use crate::core::gameindex::readers::whdhdf::{fs_type_of, read_whdload_hardfile,
 use crate::core::jobs::{cancelled_error, ProgressSink};
 use crate::core::preload::amiga_names::{write_record, AMIGA_NAMES_RECORD};
 use crate::core::preload::native::{
-    collect_entries, needs_latin1, pfs3_name_limit, read_sidecar, MAX_NAMED_NON_ASCII,
+    collect_entries, latin1_comment, needs_latin1, pfs3_name_limit, read_sidecar,
+    MAX_NAMED_NON_ASCII,
 };
 use crate::core::preload::{amiga_fold, first_collision};
 use crate::core::safety::atomic::atomic_write;
@@ -212,9 +213,34 @@ fn is_art_record(root_name: &str) -> bool {
 }
 
 /// An archive name as a placement path: `\` read as a drawer separator (a
-/// level-0 LhA header's, R3 § 1) and a trailing separator dropped.
+/// level-0 LhA header's, R3 § 1), and every empty and `.` segment dropped, so
+/// `./x`, `/x`, `x/` and `x//y` are `x` and `x/y` (final review I1: a
+/// `./.art-amiga-names.json` must meet R7's check as the record it is, and
+/// `/Demos` must be the same top-level name as `Demos`). `..` is kept so the
+/// extraction gate still refuses it.
 fn normalise(name: &str) -> String {
-    name.replace('\\', "/").trim_end_matches('/').to_string()
+    name.replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Refuse a name no AmigaDOS node can have (final review I3): `/` and `:`
+/// separate paths on the Amiga, so a node called `a/b` would be copied as `b`
+/// inside a drawer `a` — possibly a sibling's. An archive or a hardfile can
+/// store any byte in a name; the user hears which one before anything is
+/// staged.
+fn refuse_unholdable_name(source: &Path, amiga_path: &str, name: &str) -> CoreResult<()> {
+    match name.chars().find(|c| *c == '/' || *c == ':') {
+        None => Ok(()),
+        Some(bad) => Err(CoreError::InvalidInput(format!(
+            "'{amiga_path}' in '{}' holds '{bad}', which separates paths on the Amiga, so \
+             AmigaDOS cannot hold it as one name and it could not be copied as itself. Rename \
+             it on the Amiga side first.",
+            source.display()
+        ))),
+    }
 }
 
 fn first_component(path: &str) -> &str {
@@ -489,20 +515,57 @@ pub fn measure(
                 if progress.is_cancelled() {
                     return Err(cancelled_error());
                 }
-                let comment = read_sidecar(&entry.host_path)?
-                    .map_or(0, |sidecar| comment_bytes(&sidecar.comment));
+                // Final review M3: a comment an Amiga cannot store is refused
+                // here, by name, not mid-copy after the format.
+                let comment = match read_sidecar(&entry.host_path)? {
+                    Some(sidecar) => {
+                        latin1_comment(&sidecar.comment, &entry.relative)?;
+                        comment_bytes(&sidecar.comment)
+                    }
+                    None => 0,
+                };
                 tally.add(&entry.relative, entry.is_dir, entry.size, comment);
             }
             Vec::new()
         }
         SourceKind::Archive { .. } => {
-            let entries = archive::open(path)?.entries()?;
+            let mut backend = archive::open(path)?;
+            let entries = backend.entries()?;
+            // Final review M9: the gate's own entry cap, asked before the
+            // source is reported measurable.
+            if let Some(reason) = too_many_entries(backend.format(), entries.len()) {
+                return Err(CoreError::LimitExceeded {
+                    subject: "archive entries".into(),
+                    detail: format!("'{}': {reason}", path.display()),
+                });
+            }
             let placement = place_archive(&entries)?;
+            // Final review M5: an archive's own sidecar beside the entry it
+            // describes is consumed by the copy, never copied as a file.
+            let placed_paths: HashSet<&str> = placement
+                .placed
+                .iter()
+                .map(|placed| placed.amiga_path.as_str())
+                .collect();
             for placed in &placement.placed {
                 if progress.is_cancelled() {
                     return Err(cancelled_error());
                 }
+                let amiga_path = placed.amiga_path.as_str();
+                if is_uaem_name(amiga_path)
+                    && amiga_path
+                        .get(..amiga_path.len() - uaem::UAEM_EXTENSION.len() - 1)
+                        .is_some_and(|base| placed_paths.contains(base))
+                {
+                    continue;
+                }
+                for segment in amiga_path.split('/') {
+                    refuse_unholdable_name(path, amiga_path, segment)?;
+                }
                 let entry = &entries[placed.index];
+                if let Some(comment) = &entry.amiga.comment {
+                    latin1_comment(comment, amiga_path)?;
+                }
                 let comment = entry.amiga.comment.as_deref().map_or(0, comment_bytes);
                 tally.add(
                     &placed.amiga_path,
@@ -669,22 +732,57 @@ fn walk_drawer<D: BlockDevice>(
     Ok(())
 }
 
-/// What a hardfile holds at its volume root besides the game drawer (and its
-/// icon, when the drawer is at the root): the boot scaffold, left behind.
+/// What a hardfile holds besides the game drawer and its icon: the boot
+/// scaffold at the volume root and, when the drawer is nested (`Games/Foo`),
+/// every sibling along the way (`Games/Bar`) — left behind, and said so
+/// (final review M6: nothing is dropped silently).
 fn hardfile_left_behind<D: BlockDevice>(
     found: &HardfileDrawer<D>,
     clock: &dyn AmigaClock,
 ) -> CoreResult<Vec<String>> {
-    let drawer_top = first_component(&found.path);
-    let at_root = !found.path.contains('/');
-    let mut left_behind: Vec<String> = list_directory_on(&found.device, found.root_block, clock)?
-        .into_iter()
-        .map(|entry| entry.name)
-        .filter(|name| name != drawer_top)
-        .filter(|name| !(at_root && found.icon.as_ref().is_some_and(|i| i.name == *name)))
-        .collect();
+    let parts: Vec<&str> = found.path.split('/').collect();
+    let mut left_behind = Vec::new();
+    let mut block = found.root_block;
+    for depth in 0..parts.len() {
+        let is_parent = depth + 1 == parts.len();
+        let prefix = parts[..depth].join("/");
+        let mut next = None;
+        for entry in list_directory_on(&found.device, block, clock)? {
+            let on_the_way = if is_parent {
+                entry.header_block == found.block
+            } else {
+                entry.kind == EntryKind::Directory && entry.name == parts[depth]
+            };
+            if on_the_way {
+                next = Some(entry.header_block);
+                continue;
+            }
+            if is_parent && found.icon.as_ref().is_some_and(|i| i.name == entry.name) {
+                continue;
+            }
+            left_behind.push(if prefix.is_empty() {
+                entry.name
+            } else {
+                format!("{prefix}/{}", entry.name)
+            });
+        }
+        block = next.ok_or_else(|| CoreError::Malformed {
+            format: "whdload-hardfile".into(),
+            detail: format!("'{}' is no longer on the volume", parts[..=depth].join("/")),
+        })?;
+    }
     left_behind.sort();
     Ok(left_behind)
+}
+
+/// The two names a hardfile's game puts at the partition's top — the drawer
+/// and its icon — held to [`refuse_unholdable_name`]; the walk asks the rest.
+fn refuse_hardfile_names<D: BlockDevice>(path: &Path, found: &HardfileDrawer<D>) -> CoreResult<()> {
+    refuse_unholdable_name(path, &found.path, &found.game.drawer)?;
+    if let Some(icon) = &found.icon {
+        refuse_unholdable_name(path, &icon.name, &icon.name)?;
+    }
+    Ok(())
 }
 
 fn measure_hardfile(
@@ -694,14 +792,17 @@ fn measure_hardfile(
     tally: &mut Tally,
 ) -> CoreResult<Vec<String>> {
     let found = open_hardfile_game(path, clock)?;
+    refuse_hardfile_names(path, &found)?;
     let leaf = found.game.drawer.clone();
     let header = read_header_on(&found.device, found.block)?;
     tally.add(&leaf, true, 0, comment_bytes(&header.comment));
 
     walk_drawer(path, &found, clock, progress, |amiga_path, listing| {
         for entry in listing {
+            let node = format!("{amiga_path}/{}", entry.name);
+            refuse_unholdable_name(path, &node, &entry.name)?;
             tally.add(
-                &format!("{amiga_path}/{}", entry.name),
+                &node,
                 entry.kind == EntryKind::Directory,
                 entry.byte_size,
                 comment_bytes(&entry.comment),
@@ -766,16 +867,27 @@ pub fn check_partition(sources: &[(PathBuf, SourceMeasure)]) -> CoreResult<()> {
         });
     }
 
-    let non_ascii: Vec<String> = sources
-        .iter()
-        .flat_map(|(_, m)| m.non_ascii.iter().cloned())
-        .collect();
-    let escaped: Vec<String> = sources
-        .iter()
-        .flat_map(|(_, m)| m.escaped.iter().cloned())
-        .collect();
+    // Final review M8: what each list does not name is counted, so the
+    // refusal never reads as complete when it is not.
+    let (mut non_ascii, mut non_ascii_more) = (Vec::new(), 0usize);
+    let (mut escaped, mut escaped_more) = (Vec::new(), 0usize);
+    for (_, measured) in sources {
+        for path in &measured.non_ascii {
+            bounded(&mut non_ascii, &mut non_ascii_more, path);
+        }
+        non_ascii_more += measured.non_ascii_more;
+        for path in &measured.escaped {
+            bounded(&mut escaped, &mut escaped_more, path);
+        }
+        escaped_more += measured.escaped_more;
+    }
     if !non_ascii.is_empty() && !escaped.is_empty() {
-        return Err(CoreError::NamesNoWriterCanCopy { non_ascii, escaped });
+        return Err(CoreError::NamesNoWriterCanCopy {
+            non_ascii,
+            non_ascii_more,
+            escaped,
+            escaped_more,
+        });
     }
     Ok(())
 }
@@ -976,15 +1088,17 @@ fn prepare_archive(
     // Escape every segment, record every one that changed, and refuse two
     // Amiga paths that would share one host path (NTFS ignores case).
     let mut names: BTreeMap<String, String> = BTreeMap::new();
-    let mut hosts: BTreeMap<String, String> = BTreeMap::new();
     let mut wanted = Vec::with_capacity(placement.placed.len());
     // Keyed by where the gate will write each entry: its report names a file
     // by the archive's own spelling, not by the host name it was given.
     let mut amiga_of: BTreeMap<PathBuf, (usize, String)> = BTreeMap::new();
+    // Folded host path → (the host spelling Windows keeps, the Amiga path).
+    let mut hosts: BTreeMap<String, (String, String)> = BTreeMap::new();
     for placed in &placement.placed {
         let mut host = String::new();
         let mut amiga = String::new();
         for segment in placed.amiga_path.split('/').filter(|s| !s.is_empty()) {
+            refuse_unholdable_name(path, &placed.amiga_path, segment)?;
             if !host.is_empty() {
                 host.push('/');
                 amiga.push('/');
@@ -992,14 +1106,11 @@ fn prepare_archive(
             let safe = host_segment(segment);
             host.push_str(&safe);
             amiga.push_str(segment);
-            if safe != segment {
-                names.insert(host.clone(), segment.to_string());
-            }
             match hosts.get(&host.to_lowercase()) {
                 None => {
-                    hosts.insert(host.to_lowercase(), amiga.clone());
+                    hosts.insert(host.to_lowercase(), (host.clone(), amiga.clone()));
                 }
-                Some(first) if amiga_fold(first) != amiga_fold(&amiga) => {
+                Some((_, first)) if amiga_fold(first) != amiga_fold(&amiga) => {
                     return Err(CoreError::EscapedNamesCollide {
                         source_path: path.display().to_string().into(),
                         first: first.as_str().into(),
@@ -1007,7 +1118,15 @@ fn prepare_archive(
                         host: host.as_str().into(),
                     });
                 }
-                Some(_) => {}
+                // Final review M4: `con/PRN` after `CON/AUX` lands in the
+                // folder NTFS already made, `_CON`, so the record is keyed by
+                // that spelling — the one the copy will read back.
+                Some((first_host, _)) => host = first_host.clone(),
+            }
+            if safe != segment {
+                names
+                    .entry(host.clone())
+                    .or_insert_with(|| segment.to_string());
             }
         }
         if let Ok(target) = safe_join(staging, &host) {
@@ -1093,11 +1212,21 @@ fn prepare_archive(
             Some(EntryDate::Unix(seconds)) => Some(clock.amiga_from_unix(seconds)),
             None => None,
         };
+        // Final review I2: whether a sidecar is needed is decided without a
+        // date the archive never stated; one written for bits or a comment
+        // alone is dated the clock's now — what every writer gives an entry
+        // with no sidecar — and never the 1978 epoch.
         let sidecar = sidecar_for(
             entry.amiga.protection.unwrap_or(default_protection()),
             date.unwrap_or_default(),
             entry.amiga.comment.as_deref().unwrap_or(""),
-        );
+        )
+        .map(|mut sidecar| {
+            if date.is_none() {
+                sidecar.date = clock.amiga_now();
+            }
+            sidecar
+        });
         if let Some(sidecar) = sidecar {
             atomic_write(&sidecar_path, uaem::render(&sidecar).as_bytes())?;
             sidecars += 1;
@@ -1108,14 +1237,19 @@ fn prepare_archive(
     Ok(staged(sidecars, &names, placement.left_behind))
 }
 
-/// Refuse a hardfile's drawer holding two names Windows would stage as one.
+/// Refuse a hardfile's drawer holding a name AmigaDOS cannot hold, or two
+/// names Windows would stage as one.
 fn refuse_hardfile_collisions<D: BlockDevice>(
     path: &Path,
     found: &HardfileDrawer<D>,
     clock: &dyn AmigaClock,
     progress: &dyn ProgressSink,
 ) -> CoreResult<()> {
+    refuse_hardfile_names(path, found)?;
     walk_drawer(path, found, clock, progress, |amiga_dir, listing| {
+        for entry in listing {
+            refuse_unholdable_name(path, &format!("{amiga_dir}/{}", entry.name), &entry.name)?;
+        }
         let selected: Vec<SelectedEntry> = listing
             .iter()
             .map(|entry| SelectedEntry {
@@ -1860,8 +1994,12 @@ mod tests {
         let lzx = dir.join("aux.lzx");
         aux_lzx(&lzx, "Drawer");
         let staging = staging_in(&dir);
+        let clock = crate::core::clock::FixedClock {
+            now: 1_800_000_000,
+            offset: 0,
+        };
 
-        let prepared = prepare(&lzx, &lzx_kind(), &staging, &UtcClock, &NoProgress).unwrap();
+        let prepared = prepare(&lzx, &lzx_kind(), &staging, &clock, &NoProgress).unwrap();
         assert_eq!(prepared.root, staging);
         assert!(prepared.staged);
         assert_eq!(prepared.escaped, 1);
@@ -1886,6 +2024,9 @@ mod tests {
                 .unwrap();
         assert_eq!(sidecar.protection, 0x40);
         assert_eq!(sidecar.comment, "note");
+        // Final review I2: an LZX member states no date, so the sidecar its
+        // bits need carries the clock's now — never the 1978 epoch.
+        assert_eq!(sidecar.date, clock.amiga_now());
         assert!(
             !staging.join("Drawer/Plain.uaem").exists(),
             "default bits, no comment, no date: no sidecar"
@@ -2122,6 +2263,318 @@ mod tests {
         let text = err.to_string();
         assert!(
             text.contains("'Bad.uaem'") && text.contains("bad.zip"),
+            "{text}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Final review fix wave
+    // -----------------------------------------------------------------------
+
+    fn zip_kind() -> SourceKind {
+        SourceKind::Archive {
+            format: "zip".into(),
+        }
+    }
+
+    /// Final review I1: a `./` or `/` prefix does not hide ART's own records
+    /// from R7. Both land in `left_behind`, neither is staged, and the prefix
+    /// does not reach `top_level` as a name of its own.
+    #[test]
+    fn a_dot_or_slash_prefixed_art_record_is_left_behind_and_never_staged() {
+        let entries = [
+            file("./.art-amiga-names.json", 10),
+            file("/distribution.json", 10),
+            file("./Tools/Tool", 10),
+            file("/Demos//x", 10),
+        ];
+        let placed = place_archive(&entries).unwrap();
+        assert_eq!(paths(&placed), ["Tools/Tool", "Demos/x"]);
+        assert_eq!(
+            placed.left_behind,
+            [".art-amiga-names.json", "distribution.json"]
+        );
+
+        let (_guard, dir) = scratch("prepare-dot-record");
+        let path = dir.join("hostile.zip");
+        let record = br#"{"version":1,"names":[{"host":"Tool","amiga":"Other"}]}"#;
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("./.art-amiga-names.json", record),
+                ("/distribution.json", b"{}"),
+                ("./Tool", b"tool"),
+            ]),
+        )
+        .unwrap();
+        let measured = measure(&path, &zip_kind(), &UtcClock, &NoProgress).unwrap();
+        assert_eq!(measured.top_level, ["Tool"]);
+        assert_eq!(
+            measured.left_behind,
+            [".art-amiga-names.json", "distribution.json"]
+        );
+
+        let staging = staging_in(&dir);
+        let prepared = prepare(&path, &zip_kind(), &staging, &UtcClock, &NoProgress).unwrap();
+        assert_eq!(prepared.left_behind, measured.left_behind);
+        assert!(!staging.join(AMIGA_NAMES_RECORD).exists());
+        assert!(!staging.join("distribution.json").exists());
+        let relatives: Vec<String> = collect_entries(&staging)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.relative)
+            .collect();
+        assert_eq!(relatives, ["Tool"]);
+    }
+
+    /// Patch a node's name in a bare FFS hardfile past `check_name`, the way a
+    /// hostile or damaged image can store any byte, and fix the checksum.
+    fn patch_hdf_name(path: &Path, node: &str, new_name: &str) {
+        let block = {
+            let geometry =
+                VolumeGeometry::new(512, HDF_BLOCKS, 2, DosType::new(*b"DOS\x01")).unwrap();
+            let mut device = FileRegionMut::open(path, 0, HDF_BLOCKS as u64 * 512, 512).unwrap();
+            let writer = VolumeWriter::open(&mut device, geometry, path, 0).unwrap();
+            let mut block = writer.geometry().root_block;
+            for part in node.split('/') {
+                block = writer.find(block, part).unwrap().unwrap().block;
+            }
+            block
+        };
+        let mut image = std::fs::read(path).unwrap();
+        let header = &mut image[block as usize * 512..(block as usize + 1) * 512];
+        header[432..432 + 31].fill(0);
+        header[432] = new_name.len() as u8;
+        header[433..433 + new_name.len()].copy_from_slice(new_name.as_bytes());
+        header[20..24].fill(0);
+        let sum = header.chunks(4).fold(0u32, |sum, long| {
+            sum.wrapping_add(u32::from_be_bytes(long.try_into().unwrap()))
+        });
+        header[20..24].copy_from_slice(&0u32.wrapping_sub(sum).to_be_bytes());
+        std::fs::write(path, image).unwrap();
+    }
+
+    /// Final review I3: a hardfile name holding `/` would become a path on the
+    /// card. Refused by name when measured and when prepared, before anything
+    /// is staged.
+    #[test]
+    fn a_hardfile_name_amigados_cannot_hold_is_refused_by_name() {
+        let (_guard, dir) = scratch("prepare-hdf-slash");
+        let path = dir.join("Game.hdf");
+        let slave = build_slave("Game", "1990 Somebody", 16);
+        build_hdf(
+            &path,
+            &["Game", "Game/a"],
+            &[("Game/Game.slave", &slave), ("Game/a_b", b"one")],
+        );
+        patch_hdf_name(&path, "Game/a_b", "a/b");
+
+        let err = measure(&path, &SourceKind::WhdloadHardfile, &UtcClock, &NoProgress)
+            .expect_err("measured");
+        let text = err.to_string();
+        assert!(
+            text.contains("'Game/a/b'") && text.contains("Game.hdf") && text.contains("AmigaDOS"),
+            "{text}"
+        );
+
+        let staging = staging_in(&dir);
+        let err = prepare(
+            &path,
+            &SourceKind::WhdloadHardfile,
+            &staging,
+            &UtcClock,
+            &NoProgress,
+        )
+        .expect_err("prepared");
+        let text = err.to_string();
+        assert!(
+            text.contains("'Game/a/b'") && text.contains("Game.hdf") && text.contains("AmigaDOS"),
+            "{text}"
+        );
+        assert!(listed(&staging).is_empty(), "nothing is staged");
+    }
+
+    /// Final review I3, the archive half: a `:` in an entry name is refused by
+    /// name before the archive is unpacked.
+    #[test]
+    fn an_archive_name_holding_a_colon_is_refused_by_name() {
+        let (_guard, dir) = scratch("prepare-zip-colon");
+        let path = dir.join("colon.zip");
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("Tool/ok", b"ok"),
+                ("Tool/a:b", b"x"),
+            ]),
+        )
+        .unwrap();
+        let err = measure(&path, &zip_kind(), &UtcClock, &NoProgress).expect_err("measured");
+        let text = err.to_string();
+        assert!(
+            text.contains("'Tool/a:b'") && text.contains("colon.zip"),
+            "{text}"
+        );
+        let staging = staging_in(&dir);
+        let err =
+            prepare(&path, &zip_kind(), &staging, &UtcClock, &NoProgress).expect_err("prepared");
+        let text = err.to_string();
+        assert!(
+            text.contains("'Tool/a:b'") && text.contains("colon.zip"),
+            "{text}"
+        );
+        assert!(listed(&staging).is_empty(), "nothing is staged");
+    }
+
+    /// Final review M3: a comment outside Latin-1 is refused by name when the
+    /// source is measured, not mid-copy after the format.
+    #[test]
+    fn a_comment_an_amiga_cannot_store_is_refused_when_measured() {
+        let (_guard, dir) = scratch("measure-comment-not-latin1");
+        let src = dir.join("src");
+        std::fs::create_dir_all(src.join("C")).unwrap();
+        std::fs::write(src.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            src.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 日本\n",
+        )
+        .unwrap();
+        let err = measure(&src, &SourceKind::Folder, &UtcClock, &NoProgress).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("C/Assign") && text.contains("an Amiga cannot store"),
+            "{text}"
+        );
+    }
+
+    /// Final review M4: `CON/AUX` and `con/PRN` share one NTFS folder, `_CON`;
+    /// the record is keyed by the spelling Windows kept, so the copy finds it.
+    #[test]
+    fn names_sharing_one_ntfs_folder_are_recorded_under_the_folder_windows_kept() {
+        use crate::core::preload::amiga_names::AmigaNames;
+        let (_guard, dir) = scratch("prepare-con-case");
+        let path = dir.join("con.zip");
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("CON/AUX", b"aux"),
+                ("con/PRN", b"prn"),
+            ]),
+        )
+        .unwrap();
+        let staging = staging_in(&dir);
+        prepare(&path, &zip_kind(), &staging, &UtcClock, &NoProgress).unwrap();
+        assert_eq!(listed(&staging), [AMIGA_NAMES_RECORD, "_CON"]);
+        let names = AmigaNames::read(&staging);
+        assert_eq!(names.name_for("_CON/_PRN"), Some("PRN"));
+        let mut relatives: Vec<String> = collect_entries(&staging)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.relative)
+            .collect();
+        relatives.sort();
+        assert_eq!(relatives, ["CON", "CON/AUX", "CON/PRN"]);
+    }
+
+    /// Final review M5: an archive's own `.uaem` beside the entry it describes
+    /// is consumed by the copy, so it is not measured as a card file.
+    #[test]
+    fn an_archive_s_own_sidecars_are_not_measured_as_card_files() {
+        let (_guard, dir) = scratch("measure-zip-sidecar");
+        let path = dir.join("tool.zip");
+        std::fs::write(
+            &path,
+            crate::core::archive::zip::tests::make_zip_with(&[
+                ("Tool", b"tool"),
+                ("Tool.uaem", b"--p-rwed 2021-04-13 02:43:13.68 x\n"),
+            ]),
+        )
+        .unwrap();
+        let m = measure(&path, &zip_kind(), &UtcClock, &NoProgress).unwrap();
+        assert_eq!(m.content.files, 1);
+        assert_eq!(m.top_level, ["Tool"]);
+    }
+
+    /// Final review M6: a game drawer nested in `Games` leaves its siblings
+    /// behind on purpose, and says so.
+    #[test]
+    fn a_nested_game_drawer_s_siblings_are_listed_as_left_behind() {
+        let (_guard, dir) = scratch("prepare-hdf-nested");
+        let path = dir.join("Foo.hdf");
+        let slave = build_slave("Foo", "1990 Somebody", 16);
+        build_hdf(
+            &path,
+            &["Games", "Games/Foo", "Games/Bar"],
+            &[
+                ("Disk.info", b"disk"),
+                ("Games/ReadMe", b"readme"),
+                ("Games/Foo.info", b"icon"),
+                ("Games/Foo/Foo.slave", &slave),
+            ],
+        );
+        let expected = ["Disk.info", "Games/Bar", "Games/ReadMe"];
+        let m = measure(&path, &SourceKind::WhdloadHardfile, &UtcClock, &NoProgress).unwrap();
+        assert_eq!(m.top_level, ["Foo", "Foo.info"]);
+        assert_eq!(m.left_behind, expected);
+        let staging = staging_in(&dir);
+        let prepared = prepare(
+            &path,
+            &SourceKind::WhdloadHardfile,
+            &staging,
+            &UtcClock,
+            &NoProgress,
+        )
+        .unwrap();
+        assert_eq!(prepared.left_behind, expected);
+    }
+
+    /// Final review M8: the names refusal says how many names it did not list.
+    #[test]
+    fn a_names_refusal_says_how_many_it_did_not_name() {
+        let a = SourceMeasure {
+            non_ascii: vec!["français".into()],
+            non_ascii_more: 3,
+            top_level: vec!["x".into()],
+            ..Default::default()
+        };
+        let b = SourceMeasure {
+            escaped: vec!["AUX".into()],
+            escaped_more: 7,
+            top_level: vec!["y".into()],
+            ..Default::default()
+        };
+        let err = check_partition(&[(PathBuf::from("a"), a), (PathBuf::from("b"), b)]).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("français, and 3 more") && text.contains("AUX, and 7 more"),
+            "{text}"
+        );
+    }
+
+    /// Final review M9: an archive past the extraction gate's entry cap is
+    /// refused when measured, not reported usable and refused at `prepare`.
+    #[test]
+    fn an_archive_past_the_entry_cap_is_refused_when_measured() {
+        use crate::core::archive::extract::MAX_ENTRIES;
+        let (_guard, dir) = scratch("measure-lzx-cap");
+        let path = dir.join("many.lzx");
+        let names: Vec<String> = (0..=MAX_ENTRIES).map(|i| format!("F{i}")).collect();
+        let records: Vec<Rec> = names
+            .iter()
+            .map(|name| Rec {
+                name,
+                comment: "",
+                attrs: 0x0F,
+                unpacked: 0,
+                method: 0,
+                data_crc: 0,
+                packed: b"",
+            })
+            .collect();
+        std::fs::write(&path, lzx_archive(&records)).unwrap();
+        let err = measure(&path, &lzx_kind(), &UtcClock, &NoProgress).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("many.lzx") && text.contains(&format!("at most {MAX_ENTRIES}")),
             "{text}"
         );
     }

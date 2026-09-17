@@ -600,6 +600,27 @@ mod tests {
         (128, 127_865_454_592),
     ];
 
+    /// The T6 survivor, closed: an entry's size exactly, for both parities of
+    /// name plus comment, pinned as literals and against libpfs3's own
+    /// `extra_fields_offset` + the 2-byte flags field.
+    #[test]
+    fn an_entry_costs_exactly_what_libpfs3_writes_for_either_parity() {
+        let cases: [(&str, u64, u64); 6] = [
+            ("Assign", 0, 28), // 6 + 0 even
+            ("Assign", 1, 28), // 6 + 1 odd
+            ("Tool", 5, 30),   // 4 + 5 odd
+            ("Tool", 4, 30),   // 4 + 4 even
+            ("ab", 0, 24),     // 2 + 0 even
+            ("abc", 79, 104),  // 3 + 79 even, the longest comment
+        ];
+        for (name, comment, expected) in cases {
+            assert_eq!(entry_bytes(name, comment), expected, "{name} + {comment}");
+            let written =
+                libpfs3::ondisk::extra_fields_offset(name.len(), comment as usize) as u64 + 2;
+            assert_eq!(entry_bytes(name, comment), written, "{name} + {comment}");
+        }
+    }
+
     #[test]
     fn a_card_image_is_ninety_five_percent_of_the_decimal_label() {
         assert_eq!(image_bytes_for_label(16), 15_200_000_000);

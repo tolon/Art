@@ -153,6 +153,52 @@ pub(crate) fn zip_amiga_protection(external: u32) -> u32 {
     (((tmp >> 16) & 0xFF) & !0x10) ^ 0x0F
 }
 
+/// CP437's upper half, 0x80..=0xFF, as the zip crate decodes it (`cp437.rs`,
+/// zip 8.6.0). `an_amiga_host_s_comment_is_read_as_latin1` round-trips every
+/// byte through the crate itself, so a crate that changed its table fails it.
+const CP437_HIGH: [char; 128] = [
+    '\u{00c7}', '\u{00fc}', '\u{00e9}', '\u{00e2}', '\u{00e4}', '\u{00e0}', '\u{00e5}', '\u{00e7}',
+    '\u{00ea}', '\u{00eb}', '\u{00e8}', '\u{00ef}', '\u{00ee}', '\u{00ec}', '\u{00c4}', '\u{00c5}',
+    '\u{00c9}', '\u{00e6}', '\u{00c6}', '\u{00f4}', '\u{00f6}', '\u{00f2}', '\u{00fb}', '\u{00f9}',
+    '\u{00ff}', '\u{00d6}', '\u{00dc}', '\u{00a2}', '\u{00a3}', '\u{00a5}', '\u{20a7}', '\u{0192}',
+    '\u{00e1}', '\u{00ed}', '\u{00f3}', '\u{00fa}', '\u{00f1}', '\u{00d1}', '\u{00aa}', '\u{00ba}',
+    '\u{00bf}', '\u{2310}', '\u{00ac}', '\u{00bd}', '\u{00bc}', '\u{00a1}', '\u{00ab}', '\u{00bb}',
+    '\u{2591}', '\u{2592}', '\u{2593}', '\u{2502}', '\u{2524}', '\u{2561}', '\u{2562}', '\u{2556}',
+    '\u{2555}', '\u{2563}', '\u{2551}', '\u{2557}', '\u{255d}', '\u{255c}', '\u{255b}', '\u{2510}',
+    '\u{2514}', '\u{2534}', '\u{252c}', '\u{251c}', '\u{2500}', '\u{253c}', '\u{255e}', '\u{255f}',
+    '\u{255a}', '\u{2554}', '\u{2569}', '\u{2566}', '\u{2560}', '\u{2550}', '\u{256c}', '\u{2567}',
+    '\u{2568}', '\u{2564}', '\u{2565}', '\u{2559}', '\u{2558}', '\u{2552}', '\u{2553}', '\u{256b}',
+    '\u{256a}', '\u{2518}', '\u{250c}', '\u{2588}', '\u{2584}', '\u{258c}', '\u{2590}', '\u{2580}',
+    '\u{03b1}', '\u{00df}', '\u{0393}', '\u{03c0}', '\u{03a3}', '\u{03c3}', '\u{00b5}', '\u{03c4}',
+    '\u{03a6}', '\u{0398}', '\u{03a9}', '\u{03b4}', '\u{221e}', '\u{03c6}', '\u{03b5}', '\u{2229}',
+    '\u{2261}', '\u{00b1}', '\u{2265}', '\u{2264}', '\u{2320}', '\u{2321}', '\u{00f7}', '\u{2248}',
+    '\u{00b0}', '\u{2219}', '\u{00b7}', '\u{221a}', '\u{207f}', '\u{00b2}', '\u{25a0}', '\u{00a0}',
+];
+
+/// An Amiga-made entry's comment as the bytes it stored, read as Latin-1
+/// (final review M3). The zip crate keeps no raw comment and decodes one
+/// without the UTF-8 flag as CP437, which maps each byte to one character, so
+/// the byte comes back by inverting that table. A UTF-8-flagged comment is
+/// already what it claims.
+fn comment_as_stored(decoded: &str, is_utf8: bool) -> String {
+    if is_utf8 {
+        return decoded.to_string();
+    }
+    decoded
+        .chars()
+        .map(|c| {
+            if c.is_ascii() {
+                c
+            } else {
+                CP437_HIGH
+                    .iter()
+                    .position(|high| *high == c)
+                    .map_or(c, |index| char::from(0x80 + index as u8))
+            }
+        })
+        .collect()
+}
+
 impl ArchiveBackend for ZipBackend {
     fn format(&self) -> &'static str {
         "zip"
@@ -178,7 +224,8 @@ impl ArchiveBackend for ZipBackend {
                 declared_bytes: entry.size(),
                 amiga: AmigaAttributes {
                     protection: amiga_host.then(|| zip_amiga_protection(data.external_attributes)),
-                    comment: (amiga_host && !comment.is_empty()).then(|| comment.to_string()),
+                    comment: (amiga_host && !comment.is_empty())
+                        .then(|| comment_as_stored(comment, data.is_utf8)),
                     date: entry.last_modified().map(|dt| {
                         EntryDate::MsDos(
                             (u32::from(dt.datepart()) << 16) | u32::from(dt.timepart()),
@@ -600,9 +647,6 @@ pub mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A directory entry is a directory, not a zero-byte file — get this
-    /// wrong and an archive's folders arrive as empty files with the folder's
-    /// name, and every path under them is refused.
     #[test]
     fn an_amiga_host_s_attributes_become_fib_protection_bits() {
         // Info-ZIP: `----rwed` stored set-means-granted, read-only bit clear.
@@ -615,6 +659,69 @@ pub mod tests {
         assert_eq!(zip_amiga_protection(0x000D_0000), 0x02);
         // The archive bit is cleared on the way out, as UnZip does.
         assert_eq!(zip_amiga_protection(0x001F_0000), 0x00);
+    }
+
+    /// Final review M3: an Amiga-made ZIP's comment is Latin-1 bytes, which
+    /// the zip crate decodes as CP437 (`é` would arrive as `Θ`). Every byte
+    /// from 0x80 to 0xFF comes back as the Latin-1 character it is.
+    #[test]
+    fn an_amiga_host_s_comment_is_read_as_latin1() {
+        let (_guard, dir) = scratch("zip-amiga-comment");
+        let path = dir.join("amiga.zip");
+        let mut comment = b"caf\xE9 ".to_vec();
+        comment.extend(0x80u8..=0xFF);
+        let name = b"Tool";
+        let data = b"tool";
+        let crc = crc32(data);
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x0403_4B50u32.to_le_bytes());
+        out.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        out.extend_from_slice(&0u16.to_le_bytes()); // flags: not UTF-8
+        out.extend_from_slice(&0u16.to_le_bytes()); // stored
+        out.extend_from_slice(&0u16.to_le_bytes()); // time
+        out.extend_from_slice(&0u16.to_le_bytes()); // date
+        out.extend_from_slice(&crc.to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // extra length
+        out.extend_from_slice(name);
+        out.extend_from_slice(data);
+        let directory_offset = out.len() as u32;
+        let mut directory = Vec::new();
+        directory.extend_from_slice(&0x0201_4B50u32.to_le_bytes());
+        directory.extend_from_slice(&0x0114u16.to_le_bytes()); // made by: host 1, Amiga
+        directory.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        directory.extend_from_slice(&0u16.to_le_bytes()); // flags
+        directory.extend_from_slice(&0u16.to_le_bytes()); // stored
+        directory.extend_from_slice(&0u16.to_le_bytes()); // time
+        directory.extend_from_slice(&0u16.to_le_bytes()); // date
+        directory.extend_from_slice(&crc.to_le_bytes());
+        directory.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        directory.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        directory.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes()); // extra
+        directory.extend_from_slice(&(comment.len() as u16).to_le_bytes());
+        directory.extend_from_slice(&0u16.to_le_bytes()); // disk
+        directory.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+        directory.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+        directory.extend_from_slice(&0u32.to_le_bytes()); // local header offset
+        directory.extend_from_slice(name);
+        directory.extend_from_slice(&comment);
+        out.extend_from_slice(&directory);
+        out.extend_from_slice(&0x0605_4B50u32.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&1u16.to_le_bytes());
+        out.extend_from_slice(&(directory.len() as u32).to_le_bytes());
+        out.extend_from_slice(&directory_offset.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        std::fs::write(&path, out).unwrap();
+
+        let entries = ZipBackend::open(&path).unwrap().entries().unwrap();
+        let expected: String = comment.iter().map(|&b| b as char).collect();
+        assert_eq!(entries[0].amiga.comment.as_deref(), Some(expected.as_str()));
     }
 
     /// A ZIP made on a PC carries no Amiga bits and no comment claim, only its date.
@@ -637,6 +744,9 @@ pub mod tests {
         assert!(matches!(entries[0].amiga.date, Some(EntryDate::MsDos(_))));
     }
 
+    /// A directory entry is a directory, not a zero-byte file — get this
+    /// wrong and an archive's folders arrive as empty files with the folder's
+    /// name, and every path under them is refused.
     #[test]
     fn a_directory_entry_is_reported_as_one() {
         let (_guard, dir) = scratch("dirs");

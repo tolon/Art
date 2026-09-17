@@ -954,7 +954,10 @@ fn collect_into(
         // Root-only, the way the record itself is only ever written at a
         // staging folder's root: a real file happening to share the name one
         // level down is an ordinary file, not this module's business.
-        if host_prefix.is_empty() && host_name == AMIGA_NAMES_RECORD {
+        // Any case (final review M7): NTFS opens `.ART-AMIGA-NAMES.JSON` as
+        // the record, so that spelling is read as the record and must not
+        // also be copied.
+        if host_prefix.is_empty() && host_name.eq_ignore_ascii_case(AMIGA_NAMES_RECORD) {
             continue;
         }
         let host_relative = if host_prefix.is_empty() {
@@ -1186,7 +1189,7 @@ pub(crate) fn read_sidecar(host: &Path) -> CoreResult<Option<uaem::Sidecar>> {
 /// [`uaem::MAX_COMMENT_LEN`] characters (what `uaem::parse` itself keeps). A
 /// character above U+00FF is refused naming the entry, since an Amiga cannot
 /// store it and nothing may quietly replace it.
-fn latin1_comment(comment: &str, relative: &str) -> CoreResult<Vec<u8>> {
+pub(crate) fn latin1_comment(comment: &str, relative: &str) -> CoreResult<Vec<u8>> {
     comment
         .chars()
         .take(uaem::MAX_COMMENT_LEN)
@@ -1203,6 +1206,14 @@ fn latin1_comment(comment: &str, relative: &str) -> CoreResult<Vec<u8>> {
 // ---------------------------------------------------------------------------
 // Copying into an FFS/OFS volume
 // ---------------------------------------------------------------------------
+
+/// A sidecar's date, or `None` when it is the Amiga epoch: `sidecar_for`'s
+/// "no date", which the writer turns into the clock's now. The PFS3 copy
+/// applies the same rule, so the writers cannot disagree about a date the
+/// source never stated (final review I2).
+fn sidecar_date(sidecar: &uaem::Sidecar) -> Option<AmigaDate> {
+    Some(sidecar.date).filter(|date| *date != AmigaDate::default())
+}
 
 #[allow(clippy::too_many_arguments)]
 fn copy_in_ffs(
@@ -1298,11 +1309,13 @@ fn copy_in_ffs(
             if sidecar.is_file() {
                 let text = std::fs::read_to_string(&sidecar)?;
                 let parsed = uaem::parse(&text)?;
+                // T5 (card round 2): refused naming the entry, as PFS3's is.
+                latin1_comment(&parsed.comment, &entry.relative)?;
                 writer.set_attributes(
                     block,
                     Some(parsed.protection),
                     (!parsed.comment.is_empty()).then_some(parsed.comment.as_str()),
-                    Some(parsed.date),
+                    sidecar_date(&parsed),
                 )?;
             }
         } else {
@@ -1310,7 +1323,10 @@ fn copy_in_ffs(
             let sidecar = uaem::sidecar_path(&entry.host_path);
             let parsed = if sidecar.is_file() {
                 let text = std::fs::read_to_string(&sidecar)?;
-                Some(uaem::parse(&text)?)
+                let parsed = uaem::parse(&text)?;
+                // T5 (card round 2): refused naming the entry, as PFS3's is.
+                latin1_comment(&parsed.comment, &entry.relative)?;
+                Some(parsed)
             } else {
                 None
             };
@@ -1318,7 +1334,7 @@ fn copy_in_ffs(
                 .as_ref()
                 .map_or_else(FileMeta::default, |parsed| FileMeta {
                     protection: Some(parsed.protection),
-                    date: Some(parsed.date),
+                    date: sidecar_date(parsed),
                 });
             let outcome = writer.add_file(parent, name, &data, meta)?;
             // ART-337 (card round 2): `FileMeta` has no comment, so it is set
@@ -3488,6 +3504,87 @@ mod tests {
         let drawer = writer.attributes(c_dir.block).unwrap();
         assert_eq!(drawer.comment, "drawer note");
         assert_eq!(uaem::format_bits(drawer.protection), "----rwed");
+    }
+
+    /// Final review I2: FFS applies PFS3's rule — a sidecar dated the Amiga
+    /// epoch carries no date, so the entry gets the clock's now, never 1978.
+    #[test]
+    fn ffs_a_sidecar_dated_the_epoch_gets_the_clock_s_date() {
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
+        NativeFormatter::new(&CARD_R2_CLOCK)
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("ffs-copy-in-epoch-date");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Epoch"), b"epoch").unwrap();
+        std::fs::write(
+            tree.join("C/Epoch.uaem"),
+            "--p-rwed 1978-01-01 00:00:00.00 note\n",
+        )
+        .unwrap();
+
+        NativeFormatter::new(&CARD_R2_CLOCK)
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let (mut region, geometry, offset) = ffs_region(&image);
+        let writer = VolumeWriter::open(&mut region, geometry, &image, offset).unwrap();
+        let c_dir = writer.find(0, "C").unwrap().unwrap();
+        let epoch = writer.find(c_dir.block, "Epoch").unwrap().unwrap();
+        let file = writer.attributes(epoch.block).unwrap();
+        assert_ne!(CARD_R2_CLOCK.amiga_now(), AmigaDate::default());
+        assert_eq!(file.date, CARD_R2_CLOCK.amiga_now());
+        assert_eq!(file.comment, "note");
+        assert_eq!(uaem::format_bits(file.protection), "--p-rwed");
+    }
+
+    /// T5 (card round 2): the FFS copy refuses a comment an Amiga cannot store
+    /// naming the entry, as the PFS3 copy does.
+    #[test]
+    fn ffs_a_comment_the_amiga_cannot_store_is_refused_by_name() {
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
+        NativeFormatter::UTC
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("ffs-copy-in-comment-not-latin1");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 日本\n",
+        )
+        .unwrap();
+
+        let err = NativeFormatter::UTC
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .expect_err("a comment outside Latin-1 must be refused");
+        let message = err.to_string();
+        assert!(message.contains("C/Assign"), "{message}");
+        assert!(message.contains("an Amiga cannot store"), "{message}");
+    }
+
+    /// Final review M7: NTFS opens `.ART-AMIGA-NAMES.JSON` as the record, so
+    /// that spelling is ART's record too and never copied as a file.
+    #[test]
+    fn a_names_record_in_another_case_is_never_copied() {
+        let (_guard, tree) = fixtures::scratch("record-case");
+        std::fs::write(tree.join("_AUX"), b"aux").unwrap();
+        std::fs::write(
+            tree.join(".ART-AMIGA-NAMES.JSON"),
+            br#"{"version":1,"names":[{"host":"_AUX","amiga":"AUX"}]}"#,
+        )
+        .unwrap();
+        let relatives: Vec<String> = collect_entries(&tree)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.relative)
+            .collect();
+        assert!(
+            relatives
+                .iter()
+                .all(|r| !r.eq_ignore_ascii_case(AMIGA_NAMES_RECORD)),
+            "{relatives:?}"
+        );
     }
 
     #[test]
