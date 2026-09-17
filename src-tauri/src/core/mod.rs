@@ -53,6 +53,7 @@ pub mod rdbedit;
 pub mod recovery;
 pub mod rom;
 pub mod safety;
+pub mod scratch_guard;
 pub mod security;
 pub mod sources;
 pub mod validation;
