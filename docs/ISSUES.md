@@ -235,6 +235,26 @@ part-unpacked archive in the scratch root after every refused source. **Fix dire
 each source's staging folder in a `core::ScratchDir`-style guard that removes it on every ending, and when it cannot
 be removed, the refusal names the folder rather than claiming it is gone.
 
+**ART-341** 🟡 **`core/osinstall` treats `:` as legal in an AmigaDOS name and keeps such a name in the manifest, so a
+tree carrying one fails partway through the copy, after the format** — *found 2026-09-17 by card round 2's scoped
+re-review of the fix wave (`.superpowers/sdd/2026-09-16-one-button-card-round-2/fix-wave-re-review.md`), filed by
+reading; on `art-card-round-2`, unmerged; not fixed*
+`src-tauri/src/core/osinstall/mod.rs` (the doc comments at `host_destination`, ~676 and ~744) and `apply.rs` (~276,
+~958, ~2591) state that `Prices: 1993` is "a legal AmigaDOS filename", and the manifest keeps `:` names, while
+`core/volume/write/dir.rs` `check_name` refuses `:` and `/` — and the card (`content.rs` `refuse_unholdable_name`)
+now refuses them up front. **`:` is not legal:** AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
+Conventions — "Colons (:) and slashes (/) are reserved and cannot be used in file or directory names."
+(<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Working_With_AmigaDOS>); the *AmigaDOS Quick Reference*
+(Rugheimer/Spanik, Abacus 1988) says the same. It is the DOS naming rule, so OFS, FFS and PFS3 all sit behind it.
+The `Prices: 1993` name pinned in `apply.rs`'s tests is invented: a bounded search of the owner's material
+(`find /e/amiga -maxdepth 6 -iname "*prices*"`) found no such file, and the test's own comment says only `AUX`
+came from the owner's 3.9 disc. **Cost today:** none on real media — a sane writer cannot present such a name — but
+a tree built from a hostile or damaged image with a `:` name is recorded in `distribution.json` and then refused by
+`check_name` mid-copy, after the volume was formatted, instead of up front. **Fix direction:** osinstall refuses
+`/`/`:` names by name as `refuse_unholdable_name` does; the manifest rule in `core/preload/amiga_names.rs` refuses
+`:` like the record; the `Prices: 1993` fixture is replaced by a Windows-hostile name that *is* legal on the Amiga
+(`?`, `*`, `"`, `<`, `>`, `|` — e.g. `Prices? 1993`, which the collision tests already use).
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
