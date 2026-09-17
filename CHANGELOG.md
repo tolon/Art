@@ -17,9 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A first-boot step can restart the Amiga.** The Amiga waits three seconds for its disk and restarts, and the rest of
   first boot runs on the next boot. AmigaOS 3.9 ships no restart command: first boot then logs that it could not, and
   carries on; the tab names the Aminet package that supplies one.
+- **ART reads Amiga LZX archives** with its own reader, behind the same safety checks as LHA, ZIP and 7z. An LZX is
+  recognised by its contents whatever it is called, and every header and file is checked against its CRC. Checked
+  against unar on two real archives (1052 files, all identical); not yet opened on the Files screen by hand.
+- **Groundwork for the one-button card's content step** (no screen yet). ART can now tell whether a folder, an
+  archive, a WHDLoad hardfile or an ADF can go onto a card partition, and measure it before anything is written:
+  names an Amiga cannot hold, names Windows cannot hold, and two sources with the same drawer. A request to prepare a
+  card's volumes can carry several folders for one partition; the screen still offers one.
 
 ### Changed
 
+- **When ART falls back to hst-imager to fill a volume, the `.uaem` files beside your files are now applied.**
+  Protection bits, dates and comments reach the Amiga volume. Before, hst-imager was not told to read them, so all
+  three were dropped and nothing said so. Measured on an FFS volume; on FFS hst-imager does not set a drawer's date.
+  Not yet measured on PFS3.
+- **Copying a folder out of an Amiga volume writes a `.uaem` beside each drawer** that has protection bits, a
+  comment or a date, as it already did for files. Copied back, the drawer keeps them.
+- **The seven choices behind the card's content step, approved on 2026-09-17:** two sources with the same drawer at
+  the top are refused, not merged. Protection bits and comments are taken from a ZIP only if an Amiga made it; a
+  PC-made ZIP and a 7z give a date only. An LHA whose header does not say which system made it is read as Amiga's
+  when the file is called `.lha`. A `.uaem` inside an archive wins over the one ART would write, and a broken one
+  refuses the archive. hst-imager reads `.uaem`, and a drawer copied out gets one (both above). Comments reach FFS and
+  PFS3 (under Fixed).
+  An archive entry named like a Windows device (`AUX`) is staged as `_AUX` and gets its name back on the Amiga.
 - The first-boot report says when a step asked for a restart, and whether the Amiga restarted, had no command for it,
   or has not come back yet. A rehearsal that runs out of time while the Amiga waits in a preferences window names that
   window.
@@ -30,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   restart the machine yourself.
 - Applying a screen depth twice no longer keeps a backup copy of ART's own four-byte marker file. The preferences file
   beside it is still backed up, so the Appearance panel reports one backup for one depth change rather than two.
+
+### Fixed
+
+- **A file's date and comment in its `.uaem` now reach a PFS3 partition ART fills.** ART used to date every file and
+  drawer with the time of the copy and drop the comment, counting both as lost (ART-116, ART-335). The comment is
+  kept up to the Amiga's 79 characters; one with a character the Amiga cannot store is refused, naming the file.
+  Checked with ART's own PFS3 reader, not yet on a real Amiga.
+- **A comment in a `.uaem` now reaches an FFS volume ART fills,** for files and drawers. It used to be dropped and
+  not counted (ART-337).
+  A card partition's estimated size now counts those comments, since ART writes them.
 
 ## [0.9.4] - 2026-09-15
 

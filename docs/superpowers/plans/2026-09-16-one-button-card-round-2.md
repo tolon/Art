@@ -43,7 +43,7 @@
 ## Global Constraints
 
 - `src-tauri/src/core/` is platform-independent: `std`, `serde`, `serde_json`, `sha2`, `log`, `thiserror`, `delharc`, `zip`, `sevenz-rust2`, `quick-xml`, `fatfs`, `libpfs3` — **no new crate** this round; never `use tauri`, no network, no process spawn outside a test.
-- A lower-level `core/` module never imports a higher one: `core/archive` does not import `core/volume` or `core/card`; `core/preload` does not import `core/card`. `core/card/content.rs` is the top of this round and may import all of them.
+- A lower-level `core/` module never imports a higher one: `core/archive` does not import `core/volume` or `core/card`; `core/preload` does not import `core/card`. `core/card/content.rs` is the top of this round and may import all of them. *(Corrected 2026-09-17, Task 12, ruling R6: this was already false when written — `core/preload/embed.rs` imports `core::card::{is_dynamic_vhd, read_card}` — and `core/card/content.rs` importing `core/preload` makes the two modules import each other. Accepted for this round and filed as ART-339.)*
 - `vendor/libpfs3`: a change updates `vendor/libpfs3/ART-PATCH.md` **in the same commit** and the changed file's header comment; the crate version in `vendor/libpfs3/Cargo.toml` goes to `0.1.3+art.12` and `cargo update -p libpfs3 --precise 0.1.3+art.12` is run so `Cargo.lock` follows.
 - Test scratch: `let (_guard, dir) = crate::core::ScratchDir::pair("<prefix>", "<tag>");` — `_guard`, never `_`, tuple guard first; a struct `_guard` field last. Names unique within one process (the module's existing `scratch()` helper, or a process-wide atomic counter).
 - Fixtures are synthetic and built at runtime (ART's own FFS writer, hand-built LZX/LHA bytes, `zip::ZipWriter`, `sevenz_rust2::ArchiveWriter`). **No Amiga content in the repository.** Owner material only in `#[ignore]` hooks gated by an env var.
@@ -1980,6 +1980,8 @@ it("sends no folder as an empty list", () => {
 - **Type consistency:** `AmigaAttributes`/`EntryDate` (Task 1) are what Tasks 2, 8, 9 read; `EscapedName`/`ExtractReport.escaped` (Task 4) are what Task 9 reads; `write_record`/`AMIGA_NAMES_RECORD` (Task 7) are what Tasks 9-10 use; `add_*_with_comment` (Task 6) is what Task 8 calls; `SourceNamesCollide` (Task 8) is what Task 10 returns.
 
 ## Decisions the owner should confirm
+
+*All seven approved by the owner on 2026-09-17, before Task 1 (recorded 2026-09-17, Task 12).*
 
 1. **Collisions are refused, not merged:** two sources that both have a `Demos/` drawer at the top are refused (naming both), even if their contents do not overlap.
 2. **ZIP bits and comments are carried only from an Amiga-made ZIP** (host 1, UnZip's rule); a PC-made ZIP carries its date only. 7z carries its date only. The owner's ZIPs are all PC-made (R3 § 2).
