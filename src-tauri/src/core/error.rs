@@ -639,6 +639,17 @@ pub enum CoreError {
         searched: Vec<String>,
         unreadable: Vec<String>,
     },
+
+    /// `core::cardos::whdload::find_whdload` found nothing anywhere ART
+    /// looks, while the card holds at least one title that needs it (P6): a
+    /// card whose games cannot start is exactly the confident wrong sentence
+    /// CLAUDE.md warns about, so this is a refusal, not a silent card.
+    /// `searched` names every material folder and hardfile ART looked in.
+    #[error("{}", whdload_not_found_message(*titles, searched))]
+    WhdloadNotFound {
+        titles: usize,
+        searched: Vec<String>,
+    },
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -714,6 +725,16 @@ fn pfs3_driver_not_found_message(searched: &[String], unreadable: &[String]) -> 
     msg
 }
 
+/// The sentence for [`CoreError::WhdloadNotFound`].
+fn whdload_not_found_message(titles: usize, searched: &[String]) -> String {
+    format!(
+        "{titles} WHDLoad title(s) are on this card and no WHDLoad was found, so they would not \
+         start. ART looked in: {}. Put WHDLoad_usr.lha (from whdload.de) in one of your material \
+         folders and prepare again.",
+        searched.join(", ")
+    )
+}
+
 /// The sentence for [`CoreError::RdbEditFailed`]: two endings, two next steps.
 fn rdb_edit_failed_message(
     backup: &std::path::Path,
@@ -783,6 +804,7 @@ impl CoreError {
             Self::RdbEditJournalLeft { .. } => "ART-RDB-EDIT-JOURNAL-LEFT",
             Self::PartialImageExists { .. } => "ART-CARD-PARTIAL-EXISTS",
             Self::Pfs3DriverNotFound { .. } => "ART-PFS3-DRIVER-NOT-FOUND",
+            Self::WhdloadNotFound { .. } => "ART-WHDLOAD-NOT-FOUND",
         }
     }
 
@@ -997,6 +1019,10 @@ mod tests {
             CoreError::Pfs3DriverNotFound {
                 searched: vec!["x".into()],
                 unreadable: vec![],
+            },
+            CoreError::WhdloadNotFound {
+                titles: 1,
+                searched: vec!["x".into()],
             },
         ];
 

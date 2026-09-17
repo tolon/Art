@@ -12,3 +12,4 @@
 pub mod content;
 pub mod driver;
 pub mod partial;
+pub mod whdload;
