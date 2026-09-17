@@ -269,8 +269,12 @@ impl AmigaNames {
 }
 
 /// A value that can be one node's name: not empty, not `.` or `..`, and no
-/// `/`. The record also refuses `:`; the manifest keeps it, because
-/// `core/osinstall` records a name such as `Prices: 1993` on purpose.
+/// `/`. The record also refuses `:`. The manifest does not yet, but `:` is
+/// not legal in an AmigaDOS name either — AmigaOS Manual, *AmigaDOS: Working
+/// With AmigaDOS*, § Naming Conventions: "Colons (:) and slashes (/) are
+/// reserved and cannot be used in file or directory names."
+/// (<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Working_With_AmigaDOS>).
+/// `core/osinstall` keeps such names today; that is ART-341, not a rule.
 fn is_one_segment(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains('/')
 }

@@ -616,7 +616,9 @@ impl ArchiveBackend for LzxBackend {
                 .map(|i| self.records[i].entry.declared_bytes)
                 .sum();
             if total > MAX_GROUP_OUTPUT {
-                for i in group.members.clone().filter(|i| is_wanted(*i)) {
+                // `fits`, not every wanted member: one already refused for
+                // `limit` above has been reported, and is reported once.
+                for &i in &fits {
                     sink(
                         i,
                         Err(CoreError::InvalidInput(format!(
@@ -992,6 +994,54 @@ pub(crate) mod tests {
                 .all(|(_, e)| e.contains("merged LZX group") && e.contains("limit")),
             "{seen:?}"
         );
+    }
+
+    /// Re-review of the fix wave: a member refused for the caller's limit is
+    /// not refused a second time by the group cap — `sink` hears each wanted
+    /// index once, as `ArchiveBackend::read_selected` promises.
+    #[test]
+    fn a_member_past_the_limit_in_a_group_past_the_cap_is_reported_once() {
+        let (_guard, dir) = scratch("limit-and-cap");
+        let path = dir.join("lc.lzx");
+        std::fs::write(
+            &path,
+            archive(&[
+                Rec {
+                    name: "A",
+                    comment: "",
+                    attrs: 0x0F,
+                    unpacked: 200 << 20,
+                    method: 2,
+                    data_crc: 0,
+                    packed: b"",
+                },
+                Rec {
+                    name: "B",
+                    comment: "",
+                    attrs: 0x0F,
+                    unpacked: 100 << 20,
+                    method: 2,
+                    data_crc: 0,
+                    packed: &[0xFF; 8],
+                },
+            ]),
+        )
+        .unwrap();
+        let mut backend = LzxBackend::open(&path).unwrap();
+        let mut seen = Vec::new();
+        backend
+            .read_selected(&[true, true], 150 << 20, &mut |i, r| {
+                seen.push((i, r.err().map(|e| e.to_string()).unwrap_or_default()));
+                Ok(())
+            })
+            .unwrap();
+        let indices: Vec<usize> = seen.iter().map(|(i, _)| *i).collect();
+        assert_eq!(indices, vec![0, 1], "{seen:?}");
+        assert!(
+            seen[0].1.contains("past the 157286400 bytes asked for"),
+            "{seen:?}"
+        );
+        assert!(seen[1].1.contains("merged LZX group"), "{seen:?}");
     }
 
     #[test]

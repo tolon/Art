@@ -1110,7 +1110,9 @@ fn copy_in_pfs3(
         // own sidecar exactly as for a file's. ART-335 (card round 2): its
         // date and comment go into the new entry itself. A sidecar whose date
         // is the Amiga epoch carries no date (`copy.rs::sidecar_for`'s own
-        // rule), so that entry, like one with no sidecar, gets the clock's.
+        // rule), so that entry, like one with no sidecar, gets the clock's —
+        // a `.uaem` that really states 1978-01-01 included, by choice; FFS
+        // shares the rule (`sidecar_date`).
         let sidecar = read_sidecar(&entry.host_path)?;
         let date = sidecar
             .as_ref()
@@ -1210,7 +1212,9 @@ pub(crate) fn latin1_comment(comment: &str, relative: &str) -> CoreResult<Vec<u8
 /// A sidecar's date, or `None` when it is the Amiga epoch: `sidecar_for`'s
 /// "no date", which the writer turns into the clock's now. The PFS3 copy
 /// applies the same rule, so the writers cannot disagree about a date the
-/// source never stated (final review I2).
+/// source never stated (final review I2). A `.uaem` that really states
+/// 1978-01-01 00:00:00.00 is therefore dated now as well: the two cannot be
+/// told apart, and that is the chosen rule, not a defect to fix back.
 fn sidecar_date(sidecar: &uaem::Sidecar) -> Option<AmigaDate> {
     Some(sidecar.date).filter(|date| *date != AmigaDate::default())
 }
