@@ -112,6 +112,11 @@ pub struct TitleNeeds {
     pub titles: Vec<(String, Vec<WantedImage>)>,
     /// Slaves ART could not read, named — never dropped silently.
     pub unreadable: Vec<String>,
+    /// Every `.slave` file found under the roots, readable or not, whether it
+    /// asks for a Kickstart or not. Each one is a title that needs WHDLoad —
+    /// most titles declare no Kickstart at all, so `titles` alone cannot say
+    /// whether the card needs WHDLoad (P6).
+    pub slaves: usize,
 }
 
 /// Walk each prepared partition root on the host for `.slave` files
@@ -174,6 +179,7 @@ pub fn find_title_needs(roots: &[PathBuf], progress: &dyn ProgressSink) -> CoreR
     }
 
     let total = candidates.len() as u64;
+    let slaves = candidates.len();
     let mut titles = Vec::new();
     let mut unreadable = Vec::new();
     let mut done: u64 = 0;
@@ -199,7 +205,11 @@ pub fn find_title_needs(roots: &[PathBuf], progress: &dyn ProgressSink) -> CoreR
         }
     }
 
-    Ok(TitleNeeds { titles, unreadable })
+    Ok(TitleNeeds {
+        titles,
+        unreadable,
+        slaves,
+    })
 }
 
 /// Where a Kickstart's `.RTB` would come from, once agreed to.
@@ -633,6 +643,7 @@ mod tests {
             needs.unreadable,
             vec!["Games/Broken/Broken.Slave".to_string()]
         );
+        assert_eq!(needs.slaves, 2, "the unreadable slave is a title too");
     }
 
     /// A slave that asks for nothing is not recorded — an empty need is not
@@ -654,6 +665,10 @@ mod tests {
             find_title_needs(std::slice::from_ref(&dir), &crate::core::jobs::NoProgress).unwrap();
         assert!(needs.titles.is_empty(), "{:?}", needs.titles);
         assert!(needs.unreadable.is_empty());
+        assert_eq!(
+            needs.slaves, 1,
+            "a title asking for no Kickstart still needs WHDLoad"
+        );
     }
 
     // -- propose_kickstarts ------------------------------------------------
@@ -684,6 +699,7 @@ mod tests {
                 }],
             )],
             unreadable: vec![],
+            slaves: 1,
         };
 
         let proposal = propose_kickstarts(
@@ -722,6 +738,7 @@ mod tests {
                 }],
             )],
             unreadable: vec![],
+            slaves: 1,
         };
 
         let proposal = propose_kickstarts(&needs, &[], std::slice::from_ref(&dir)).unwrap();

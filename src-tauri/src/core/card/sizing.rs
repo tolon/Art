@@ -1646,4 +1646,34 @@ mod tests {
             "the sweep never put a Work piece at the ceiling, so it proved nothing"
         );
     }
+
+    /// A partition's measure is the sum of its sources' (`core::cardos::prepare`):
+    /// every field adds, none is dropped or taken from one side only. Each
+    /// field starts at a different value on each side so a swapped or
+    /// missing field shows.
+    #[test]
+    fn absorbing_two_measures_adds_every_field() {
+        let mut a = ContentMeasure {
+            files: 1,
+            directories: 20,
+            data_blocks: 300,
+            entry_bytes: 4000,
+        };
+        let b = ContentMeasure {
+            files: 5,
+            directories: 60,
+            data_blocks: 700,
+            entry_bytes: 8000,
+        };
+        a.merge(&b);
+        assert_eq!(
+            a,
+            ContentMeasure {
+                files: 6,
+                directories: 80,
+                data_blocks: 1000,
+                entry_bytes: 12000,
+            }
+        );
+    }
 }

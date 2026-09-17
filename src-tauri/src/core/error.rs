@@ -666,6 +666,97 @@ pub enum CoreError {
          proposal offers."
     )]
     KickstartNotProposed { name: String, why: String },
+
+    /// One of a card partition's sources cannot be used
+    /// (`core::cardos::prepare::measure_card`). `why` is the sentence for the
+    /// source's `Unusable` reason, rendered by `core::cardos` — this module
+    /// sits below `core/cardos` and does not import its types (ART-339).
+    #[error(
+        "'{source_path}' in {partition} cannot be used: {why}. Remove it from {partition} or fix \
+         it."
+    )]
+    CardSourceUnusable {
+        partition: String,
+        source_path: String,
+        why: String,
+    },
+
+    /// A card partition holds non-ASCII names and no hst-imager is set up:
+    /// ART's own PFS3 writer cannot write them (ART-113), and the card
+    /// path never writes them wrong silently.
+    #[error("{}", card_names_need_hst_message(partition, paths, *more))]
+    CardNamesNeedHstImager {
+        partition: String,
+        paths: Vec<String>,
+        more: usize,
+    },
+
+    /// The card cannot be laid out: the sizing refusal, said per variant.
+    #[error("{}", card_does_not_fit_message(.0))]
+    CardDoesNotFit(crate::core::card::sizing::SizingRefusal),
+
+    /// A place the card build writes to has less free space than it needs.
+    #[error(
+        "'{place}' has {available} bytes free and this card needs {needed} there. Free some \
+         space on that drive, or choose another folder, and prepare again."
+    )]
+    NotEnoughSpace {
+        place: String,
+        needed: u64,
+        available: u64,
+    },
+}
+
+/// The sentence for [`CoreError::CardNamesNeedHstImager`].
+fn card_names_need_hst_message(partition: &str, paths: &[String], more: usize) -> String {
+    let mut listed = paths.join(", ");
+    if more > 0 {
+        listed.push_str(&format!(", and {more} more"));
+    }
+    format!(
+        "{partition} holds names ART's own PFS3 writer cannot write yet (ART-113): {listed}. \
+         Point ART at hst-imager in Settings, or rename them."
+    )
+}
+
+/// The sentence for [`CoreError::CardDoesNotFit`], one per refusal.
+fn card_does_not_fit_message(refusal: &crate::core::card::sizing::SizingRefusal) -> String {
+    use crate::core::card::sizing::SizingRefusal;
+    match refusal {
+        SizingRefusal::DoesNotFit {
+            needed,
+            available,
+            largest,
+        } => {
+            let advice = match largest {
+                Some(name) => format!(
+                    "{name} holds the most; move some of it to another card, or choose a larger \
+                     card."
+                ),
+                None => "Choose a larger card.".to_string(),
+            };
+            format!(
+                "These partitions do not fit this card: they need {needed} bytes and the card \
+                 has {available}. {advice}"
+            )
+        }
+        SizingRefusal::PartitionTooLarge { volume_name, bytes } => format!(
+            "{volume_name} would need {bytes} bytes, more than one PFS3 partition can hold. \
+             Split its sources across two partitions."
+        ),
+        SizingRefusal::CardTooSmall { card_gb } => format!(
+            "A {card_gb} GB card is too small to hold System and the RDB. Choose a larger card."
+        ),
+        SizingRefusal::PartitionContentDoesNotFit {
+            volume_name,
+            needed_blocks,
+            available_blocks,
+        } => format!(
+            "{volume_name} needs {needed_blocks} blocks of data and has room for \
+             {available_blocks}. Take something out of {volume_name} (or agree to fewer \
+             Kickstarts) and prepare again."
+        ),
+    }
 }
 
 /// The sentence for [`CoreError::NonAsciiPfs3Names`] — pulled out of the
@@ -822,6 +913,10 @@ impl CoreError {
             Self::Pfs3DriverNotFound { .. } => "ART-PFS3-DRIVER-NOT-FOUND",
             Self::WhdloadNotFound { .. } => "ART-WHDLOAD-NOT-FOUND",
             Self::KickstartNotProposed { .. } => "ART-KICKSTART-NOT-PROPOSED",
+            Self::CardSourceUnusable { .. } => "ART-CARD-SOURCE-UNUSABLE",
+            Self::CardNamesNeedHstImager { .. } => "ART-CARD-NAMES-NEED-HST",
+            Self::CardDoesNotFit(_) => "ART-CARD-DOES-NOT-FIT",
+            Self::NotEnoughSpace { .. } => "ART-NOT-ENOUGH-SPACE",
         }
     }
 
@@ -1044,6 +1139,24 @@ mod tests {
             CoreError::KickstartNotProposed {
                 name: "x".into(),
                 why: "x".into(),
+            },
+            CoreError::CardSourceUnusable {
+                partition: "x".into(),
+                source_path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::CardNamesNeedHstImager {
+                partition: "x".into(),
+                paths: vec!["x".into()],
+                more: 0,
+            },
+            CoreError::CardDoesNotFit(crate::core::card::sizing::SizingRefusal::CardTooSmall {
+                card_gb: 1,
+            }),
+            CoreError::NotEnoughSpace {
+                place: "x".into(),
+                needed: 2,
+                available: 1,
             },
         ];
 
