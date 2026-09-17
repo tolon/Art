@@ -25,6 +25,7 @@
 pub mod compress;
 pub mod extract;
 pub mod lha;
+pub mod lzx;
 pub mod sevenz;
 pub mod tree;
 pub mod zip;
@@ -46,6 +47,43 @@ pub struct ArchiveEntry {
     /// The size the archive *claims*, which is a claim and not a measurement.
     /// The gate budgets from it and then checks what actually arrives.
     pub declared_bytes: u64,
+    /// What this entry says about protection bits, an AmigaDOS comment and a
+    /// date — never more than the format itself states. LHA and ZIP can both
+    /// carry a genuine Amiga origin (R3 § 1, § 2); 7z never does, so its
+    /// backend always reports `AmigaAttributes::default()` with only the
+    /// date filled in.
+    pub amiga: AmigaAttributes,
+}
+
+/// What an archive entry says about its Amiga-side attributes.
+///
+/// Every field is `None`/absent by default: an archive that says nothing
+/// about protection, a comment or a date must not be read as though it said
+/// "none of these are set" in the AmigaDOS sense — those are two different
+/// facts, and only the format's own bytes can tell them apart (R3).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AmigaAttributes {
+    /// `HSPARWED` as a header block stores it — RWED inverted, `uaem::parse_bits`'
+    /// form.
+    pub protection: Option<u32>,
+    /// The file note, Latin-1 decoded; `None` when absent or empty.
+    pub comment: Option<String>,
+    pub date: Option<EntryDate>,
+}
+
+/// An entry's timestamp, in whichever form the archive itself stores it.
+///
+/// Kept as two variants rather than converted to one on the way in: an
+/// MS-DOS date/time pair is wall-clock with no time zone, and turning it into
+/// a `Unix` instant here would be inventing a zone the archive never stated.
+/// That conversion is a consumer's job (Task 9), done with the clock the
+/// consumer is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryDate {
+    /// MS-DOS date (high word) and time (low word): wall-clock time, no zone.
+    MsDos(u32),
+    /// Seconds since 1970, UTC.
+    Unix(i64),
 }
 
 /// What a format has to answer for its bytes to reach the disk.
@@ -58,7 +96,7 @@ pub struct ArchiveEntry {
 /// result, so the bound has to be *inside* the decompression loop. Returning
 /// more than `limit` is a backend defect; every backend is tested for it.
 pub trait ArchiveBackend {
-    /// `"lha"`, `"zip"`, `"7z"` — used in error messages and the operation log.
+    /// `"lha"`, `"zip"`, `"7z"`, `"lzx"` — used in error messages and the operation log.
     fn format(&self) -> &'static str;
 
     /// Every entry, in the order the archive stores them. The gate reads by
@@ -113,12 +151,12 @@ pub fn open(path: &Path) -> CoreResult<Box<dyn ArchiveBackend>> {
 
 /// [`open`], with a key for an archive whose entries are encrypted.
 ///
-/// **ZIP only, and refused rather than ignored for the other two.** The one
+/// **ZIP only, and refused rather than ignored for the others.** The one
 /// shape that needs this is an update package's own ZipCrypto payload (see
 /// `zip::ZipBackend`'s module doc comment). A password silently dropped for an
-/// LHA or a 7z would be ART accepting a recipe it cannot honour and then
+/// LHA, a 7z or an LZX would be ART accepting a recipe it cannot honour and then
 /// failing later for a reason nobody could connect to it — the "confident,
-/// wrong" shape. Neither format is one any shipped recipe names a password
+/// wrong" shape. None of those formats is one any shipped recipe names a password
 /// for, so this refusal is unreachable today and is what keeps it so.
 pub fn open_with_password(
     path: &Path,
@@ -132,7 +170,8 @@ pub fn open_with_password(
             path, password,
         )?)),
         ("7z", None) => Ok(Box::new(sevenz::SevenZBackend::open(path)?)),
-        (format @ ("lha" | "7z"), Some(_)) => Err(CoreError::UnsupportedFormat(format!(
+        ("lzx", None) => Ok(Box::new(lzx::LzxBackend::open(path)?)),
+        (format @ ("lha" | "7z" | "lzx"), Some(_)) => Err(CoreError::UnsupportedFormat(format!(
             "'{}' is a {format} archive and ART can only use a payload password with a ZIP",
             path.display()
         ))),
@@ -192,6 +231,11 @@ mod tests {
                 "7z",
                 "hostile.7z",
                 sevenz::tests::make_7z_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
+            ),
+            (
+                "lzx",
+                "hostile.lzx",
+                lzx::tests::make_lzx_with as fn(&[(&str, &[u8])]) -> Vec<u8>,
             ),
         ]
     }

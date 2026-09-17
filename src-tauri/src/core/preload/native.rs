@@ -16,7 +16,7 @@
 //! type — is refused by name; `NativeFormatter` does not guess.
 //!
 //! `libpfs3` here is ART's vendored copy, `src-tauri/vendor/libpfs3`
-//! (`0.1.3+art.11`): its format and writer differ from 0.1.3 — the super index
+//! (`0.1.3+art.12`): its format and writer differ from 0.1.3 — the super index
 //! level and reserved anodes 0–4 (ART-310), one anode per allocation (ART-312),
 //! directory `parent`s (ART-313), names against `fnsize` (ART-314), the data
 //! bitmap's bounds (ART-315), the deldir, formatted on and written as pfs3aio
@@ -25,9 +25,10 @@
 //! returning to its last commit on error, locking rather than continuing when
 //! a commit itself fails part-way (ART-319), overwriting a file copy-on-write and
 //! renaming over an existing entry in one commit (ART-319's gaps, 2026-09-15), and a
-//! case-only rename no longer deleting the file it renames (ART-322, 2026-09-15);
-//! `ART-PATCH.md` there lists each. The writer's other limits below (ART-113, ART-116)
-//! still hold.
+//! case-only rename no longer deleting the file it renames (ART-322, 2026-09-15),
+//! and a comment on each new entry (ART-335, 2026-09-17);
+//! `ART-PATCH.md` there lists each. The writer's other limit below (ART-113)
+//! still holds; ART-116's is gone.
 //!
 //! ## Embedding a driver is not a formatter's job (ART-117)
 //!
@@ -72,21 +73,26 @@
 //! (`core/volume/write`) encodes these names correctly — so this check runs
 //! only on the PFS3 branch.
 //!
-//! ## A comment or a date `libpfs3` cannot carry is counted, not hidden (ART-116)
+//! ## A sidecar's date and comment are carried (ART-116, then ART-335 and ART-337)
 //!
-//! `libpfs3` 0.1.3 exposes `update_dir_entry_protection` and nothing else for
-//! a directory entry — no setter for a comment or a date — so [`copy_in_pfs3`]
-//! applies a sidecar's protection bits and has nowhere to put the other two.
-//! The FFS branch ([`copy_in_ffs`]) keeps all three, through `FileMeta`. Since
-//! there is no fix available (the same `libpfs3` limitation as above), the
-//! loss is made visible instead of silent: [`CopySummary::comments_lost`] and
-//! [`CopySummary::dates_lost`] count every entry whose sidecar carried a
-//! non-empty comment, or a date other than [`AmigaDate::default`], that could
-//! not be written — the same "is this actually worth mentioning" rule
-//! `core/volume/write/copy.rs::sidecar_for` already applies when it decides
-//! whether a sidecar is worth writing at all. This is information for the
-//! caller to report, not a refusal — G5 verified end to end on PFS3 without
-//! either field, and nothing here blocks that.
+//! `libpfs3` 0.1.3 exposed `update_dir_entry_protection` and nothing else for
+//! a directory entry, so until card round 2 [`copy_in_pfs3`] dropped a
+//! sidecar's comment and date and ART-116 counted each loss. ART's copy now
+//! has `Writer::set_entry_comment` (`0.1.3+art.12`) beside the per-entry
+//! `set_entry_date`, so [`copy_in_pfs3`] writes each new entry with its
+//! sidecar's date and comment, then patches its protection bits. A sidecar
+//! date equal to [`AmigaDate::default`] is "no date" — the rule
+//! `core/volume/write/copy.rs::sidecar_for` applies when it decides whether a
+//! sidecar is worth writing — so that entry, like one with no sidecar, gets
+//! the clock's "now". A comment is Latin-1, one byte a character, the first 79
+//! characters; one holding a character an Amiga cannot store is refused by
+//! the entry's name ([`latin1_comment`]). [`read_sidecar`] is the one reader
+//! of a host sidecar, bounded by `uaem::MAX_UAEM_BYTES`. The FFS branch
+//! ([`copy_in_ffs`]) carries protection and date through `FileMeta` and,
+//! since ART-337, the comment through `set_attributes`, which it used to drop
+//! without counting. [`CopySummary::comments_lost`] and
+//! [`CopySummary::dates_lost`] stay, for callers that still read them; both
+//! are zero on either path.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -101,9 +107,9 @@ use crate::core::card::{read_card, AmigaArea, CardImage};
 use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
 use crate::core::jobs::ProgressSink;
-use crate::core::preload::amiga_names::AmigaNames;
+use crate::core::preload::amiga_names::{AmigaNames, AMIGA_NAMES_RECORD};
 use crate::core::preload::pfs3dev::ArtBlockDevice;
-use crate::core::preload::{CopySummary, ToolVersion, VolumeFormatter};
+use crate::core::preload::{check_source_collisions, CopySummary, ToolVersion, VolumeFormatter};
 use crate::core::rdb::ParsedPartition;
 use crate::core::safety::backup::BACKUP_DIR;
 use crate::core::volume::device::FileRegionMut;
@@ -112,14 +118,14 @@ use crate::core::volume::{BlockDevice, BlockDeviceMut, DosType, VolumeGeometry};
 
 /// The version of the `libpfs3` ART builds: the vendored copy in
 /// `src-tauri/vendor/libpfs3` (ART-310) — crates.io's 0.1.3 with ART's patches,
-/// `+art.9`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
+/// `+art.12`. There is no `CARGO_PKG_VERSION`-style macro for a *dependency's*
 /// version, so this is kept in sync by hand, the same trade-off ART already
 /// accepts for `ureq`'s exact `=3.2.1` pin (CLAUDE.md). `probe()` reports this
 /// constant as which implementation did the work, and
 /// `the_pinned_version_constant_matches_cargo_toml` (below) reads the pin, the
 /// `[patch.crates-io]` line and the vendored manifest, so the constant cannot
 /// drift from what was actually built.
-const LIBPFS3_VERSION: &str = "0.1.3+art.11";
+const LIBPFS3_VERSION: &str = "0.1.3+art.12";
 
 /// A [`VolumeFormatter`] backed by `libpfs3` and ART's own FFS writer.
 /// Launches nothing; see the module docs for what each method actually does.
@@ -140,7 +146,7 @@ impl NativeFormatter {
 
 /// An [`AmigaDate`] as libpfs3's (days, minutes, ticks). PFS3 stores days as
 /// a `u16`, which lasts until 2157, so a later day clamps rather than wraps.
-fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
+pub(crate) fn pfs3_datestamp(date: AmigaDate) -> (u16, u16, u16) {
     (
         u16::try_from(date.days).unwrap_or(u16::MAX),
         date.mins as u16,
@@ -252,7 +258,31 @@ impl VolumeFormatter for NativeFormatter {
         drive: &str,
         source: &Path,
     ) -> CoreResult<()> {
-        let planned = plan_copy(image, slot, drive, source)?;
+        self.can_copy_in_sources(image, slot, drive, &[source.to_path_buf()])
+    }
+
+    fn copy_in(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        source: &Path,
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<CopySummary> {
+        self.copy_in_sources(image, slot, drive, &[source.to_path_buf()], sink)
+    }
+
+    /// Card round 2: every source's entries, together — a non-ASCII name in
+    /// the second folder sends the whole partition to the fallback, because
+    /// one partition is formatted and filled by one tool (ART-122).
+    fn can_copy_in_sources(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        sources: &[PathBuf],
+    ) -> CoreResult<()> {
+        let planned = plan_copy(image, slot, drive, sources)?;
         match family_of(planned.dos) {
             DosFamily::Pfs3 => match non_ascii_refusal(&planned.entries).or_else(|| {
                 // ART-314: against the volume `format_partition` is about to write.
@@ -269,12 +299,14 @@ impl VolumeFormatter for NativeFormatter {
         }
     }
 
-    fn copy_in(
+    /// One pass over the volume for every source (card round 2): the volume
+    /// is filled once, so its "already has files" guard still holds.
+    fn copy_in_sources(
         &self,
         image: &Path,
         slot: Option<usize>,
         drive: &str,
-        source: &Path,
+        sources: &[PathBuf],
         sink: &dyn ProgressSink,
     ) -> CoreResult<CopySummary> {
         let PlannedCopy {
@@ -284,14 +316,14 @@ impl VolumeFormatter for NativeFormatter {
             dos,
             reserved,
             entries,
-        } = plan_copy(image, slot, drive, source)?;
+        } = plan_copy(image, slot, drive, sources)?;
 
         match family_of(dos) {
             DosFamily::Pfs3 => copy_in_pfs3(
-                image, offset, length, block_size, drive, source, &entries, sink, self.clock,
+                image, offset, length, block_size, drive, sources, &entries, sink, self.clock,
             ),
             DosFamily::Ffs => copy_in_ffs(
-                image, offset, length, block_size, dos, reserved, drive, source, &entries, sink,
+                image, offset, length, block_size, dos, reserved, drive, sources, &entries, sink,
                 self.clock,
             ),
             DosFamily::Other => Err(unsupported_family(dos)),
@@ -313,23 +345,35 @@ struct PlannedCopy {
     entries: Vec<CopyEntry>,
 }
 
+/// One card read, then every source's entries in the order given — after
+/// the sources are known to be folders whose top-level names do not collide
+/// ([`check_source_collisions`]), so concatenating them cannot put one name
+/// on the volume twice.
 fn plan_copy(
     image: &Path,
     slot: Option<usize>,
     drive: &str,
-    source: &Path,
+    sources: &[PathBuf],
 ) -> CoreResult<PlannedCopy> {
-    if !source.is_dir() {
-        return Err(CoreError::InvalidInput(format!(
-            "'{}' is not a folder",
-            source.display()
-        )));
+    for source in sources {
+        if !source.is_dir() {
+            return Err(CoreError::InvalidInput(format!(
+                "'{}' is not a folder",
+                source.display()
+            )));
+        }
     }
+    check_source_collisions(sources)?;
 
     let card = read_card(image)?;
     let area = area_for_slot(&card, slot)?;
     let part = partition_by_drive(area, drive)?;
     let (offset, length, block_size) = partition_region(area, part)?;
+
+    let mut entries = Vec::new();
+    for source in sources {
+        entries.extend(collect_entries(source)?);
+    }
 
     Ok(PlannedCopy {
         offset,
@@ -337,8 +381,18 @@ fn plan_copy(
         block_size,
         dos: DosType::new(part.dostype.to_be_bytes()),
         reserved: part.reserved,
-        entries: collect_entries(source)?,
+        entries,
     })
+}
+
+/// Every source, quoted and comma-separated — `'E:\a', 'E:\b'` — for a
+/// sentence about a copy that may have come from more than one folder.
+fn quoted_sources(sources: &[PathBuf]) -> String {
+    sources
+        .iter()
+        .map(|source| format!("'{}'", source.display()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn unsupported_family(dos: DosType) -> CoreError {
@@ -384,6 +438,11 @@ pub(crate) fn from_pfs3(err: libpfs3::error::Error) -> CoreError {
             max_bytes: max,
         },
         libpfs3::error::Error::CommitFailed => CoreError::Pfs3WriterLocked,
+        // Card round 2 (ART-335): `copy_in_pfs3` keeps a comment to 79
+        // characters before it asks, so this is a caller's own mistake.
+        libpfs3::error::Error::CommentTooLong { len, max } => CoreError::InvalidInput(format!(
+            "a comment of {len} bytes is longer than the {max} an Amiga stores"
+        )),
         // The scoped re-review's follow-up 1 (ART-324): a file this volume
         // cannot record the size of says so; the volume is not damaged.
         err @ libpfs3::error::Error::FileTooLarge { .. } => {
@@ -686,12 +745,12 @@ fn put_i32(buf: &mut [u8], offset: usize, value: i32) {
 
 /// One thing to create on the volume. `relative` uses `/` throughout, the way
 /// both `libpfs3`'s path API and AmigaDOS itself do — never a host separator.
-struct CopyEntry {
-    relative: String,
-    host_path: PathBuf,
-    is_dir: bool,
+pub(crate) struct CopyEntry {
+    pub(crate) relative: String,
+    pub(crate) host_path: PathBuf,
+    pub(crate) is_dir: bool,
     /// File size in bytes. `0`, and unused, for a directory.
-    size: u64,
+    pub(crate) size: u64,
 }
 
 fn parent_key(relative: &str) -> &str {
@@ -706,7 +765,7 @@ fn leaf_name(relative: &str) -> &str {
 /// before folding the rest into a count — enough to be useful on a real
 /// install (ART-113 found 24 non-ASCII directories on one real tree), never
 /// enough to make the refusal itself as large as the tree it is refusing.
-const MAX_NAMED_NON_ASCII: usize = 20;
+pub(crate) const MAX_NAMED_NON_ASCII: usize = 20;
 
 /// Every entry in `entries` — file or directory — whose own name (the final
 /// path segment, exactly what `create_dir_in`/`write_file_in` are handed) is
@@ -719,9 +778,16 @@ const MAX_NAMED_NON_ASCII: usize = 20;
 fn non_ascii_entries(entries: &[CopyEntry]) -> Vec<&str> {
     entries
         .iter()
-        .filter(|entry| !leaf_name(&entry.relative).is_ascii())
+        .filter(|entry| needs_latin1(leaf_name(&entry.relative)))
         .map(|entry| entry.relative.as_str())
         .collect()
+}
+
+/// Whether `name` holds a character this version of `libpfs3` cannot write
+/// (ART-113): anything outside ASCII. One rule for the copy's refusal and the
+/// card's measure (`core::card::content`), so the two cannot disagree.
+pub(crate) fn needs_latin1(name: &str) -> bool {
+    !name.is_ascii()
 }
 
 /// The ART-113 refusal itself, or `None` when there is nothing to refuse.
@@ -752,7 +818,7 @@ fn non_ascii_refusal(entries: &[CopyEntry]) -> Option<CoreError> {
 /// find again — M6 (final review): the one rule lives in
 /// `libpfs3::format::pfs3_name_limit`, which the vendored writer's own
 /// `check_name_len` calls too, so there is one rule instead of two copies.
-fn pfs3_name_limit(fnsize: u16) -> usize {
+pub(crate) fn pfs3_name_limit(fnsize: u16) -> usize {
     libpfs3::format::pfs3_name_limit(fnsize)
 }
 
@@ -791,7 +857,7 @@ fn too_large_refusal(
     writer: &libpfs3::writer::Writer,
     entries: &[CopyEntry],
     volume_label: &str,
-    source: &Path,
+    sources: &[PathBuf],
 ) -> Option<CoreError> {
     let offending: Vec<&CopyEntry> = entries
         .iter()
@@ -816,11 +882,11 @@ fn too_large_refusal(
         ("each ", "those files")
     };
     Some(CoreError::InvalidInput(format!(
-        "{named} in '{src}' cannot {each}be copied to '{volume_label}': a file on it can be \
+        "{named} in {src} cannot {each}be copied to '{volume_label}': a file on it can be \
          at most 4294967295 bytes, because this PFS3 partition is not formatted for large files, \
          and ART's own PFS3 format does not make large-file partitions. Nothing was copied. Leave \
-         {that} out of '{src}' and run the copy again.",
-        src = source.display()
+         {that} out of {src} and run the copy again.",
+        src = quoted_sources(sources)
     )))
 }
 
@@ -839,7 +905,7 @@ fn too_large_refusal(
 /// as `_AUX` — and [`AmigaNames`] reads the tree's own `distribution.json` to
 /// put those back (ART-160). A folder with no manifest renames nothing, so
 /// this costs one failed `read_to_string` per copy and changes nothing else.
-fn collect_entries(source: &Path) -> CoreResult<Vec<CopyEntry>> {
+pub(crate) fn collect_entries(source: &Path) -> CoreResult<Vec<CopyEntry>> {
     let mut out = Vec::new();
     let names = AmigaNames::read(source);
     collect_into(source, "", "", &names, &mut out)?;
@@ -880,6 +946,18 @@ fn collect_into(
         // excluding it here means neither route can leak one onto a real
         // PiStorm card regardless of which produced it.
         if host_name == BACKUP_DIR {
+            continue;
+        }
+        // ART-160's other half: `AMIGA_NAMES_RECORD` is ART's own record of
+        // the escaped names a copy into *this* folder had to make, not Amiga
+        // content — like `.art-backup` above, it must never reach the card.
+        // Root-only, the way the record itself is only ever written at a
+        // staging folder's root: a real file happening to share the name one
+        // level down is an ordinary file, not this module's business.
+        // Any case (final review M7): NTFS opens `.ART-AMIGA-NAMES.JSON` as
+        // the record, so that spelling is read as the record and must not
+        // also be copied.
+        if host_prefix.is_empty() && host_name.eq_ignore_ascii_case(AMIGA_NAMES_RECORD) {
             continue;
         }
         let host_relative = if host_prefix.is_empty() {
@@ -932,7 +1010,7 @@ fn copy_in_pfs3(
     length: u64,
     block_size: usize,
     volume_label: &str,
-    source: &Path,
+    sources: &[PathBuf],
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
     clock: &'static dyn AmigaClock,
@@ -975,7 +1053,7 @@ fn copy_in_pfs3(
     // would otherwise answer with a byte count, and before the loop below
     // reads any host file whole into memory. `write_file_in` asks the same
     // `check_file_size`, but only after that read.
-    if let Some(refusal) = too_large_refusal(&writer, entries, volume_label, source) {
+    if let Some(refusal) = too_large_refusal(&writer, entries, volume_label, sources) {
         return Err(refusal);
     }
 
@@ -1000,18 +1078,18 @@ fn copy_in_pfs3(
     let free_bytes = u64::from(writer.vol.free_blocks()) * bs;
     if data_bytes_needed > free_bytes {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs {data_bytes_needed} bytes but '{volume_label}' only has {free_bytes} \
+            "{} needs {data_bytes_needed} bytes but '{volume_label}' only has {free_bytes} \
              bytes free",
-            source.display()
+            quoted_sources(sources)
         )));
     }
     let reserved_needed = entries.len() as u64;
     let reserved_free = u64::from(writer.vol.rootblock.reserved_free);
     if reserved_needed > reserved_free {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs room for {reserved_needed} new file(s) and folder(s), but \
+            "{} needs room for {reserved_needed} new file(s) and folder(s), but \
              '{volume_label}' only has {reserved_free} reserved block(s) free",
-            source.display()
+            quoted_sources(sources)
         )));
     }
 
@@ -1021,12 +1099,32 @@ fn copy_in_pfs3(
 
     let total = entries.len() as u64;
     for (done, entry) in entries.iter().enumerate() {
-        writer.set_entry_date(Some(pfs3_datestamp(clock.amiga_now())));
         // Between whole files, never mid-write (§54; module docs above).
         if sink.is_cancelled() {
             return Err(CoreError::Cancelled);
         }
         sink.report(done as u64, Some(total), &entry.relative);
+
+        // Binding requirement 1: the sidecar is applied, never copied as a
+        // file (already excluded in `collect_entries`) — for a directory's
+        // own sidecar exactly as for a file's. ART-335 (card round 2): its
+        // date and comment go into the new entry itself. A sidecar whose date
+        // is the Amiga epoch carries no date (`copy.rs::sidecar_for`'s own
+        // rule), so that entry, like one with no sidecar, gets the clock's —
+        // a `.uaem` that really states 1978-01-01 included, by choice; FFS
+        // shares the rule (`sidecar_date`).
+        let sidecar = read_sidecar(&entry.host_path)?;
+        let date = sidecar
+            .as_ref()
+            .map(|s| s.date)
+            .filter(|d| *d != AmigaDate::default())
+            .unwrap_or_else(|| clock.amiga_now());
+        writer.set_entry_date(Some(pfs3_datestamp(date)));
+        let comment = match &sidecar {
+            Some(s) => latin1_comment(&s.comment, &entry.relative)?,
+            None => Vec::new(),
+        };
+        writer.set_entry_comment(&comment).map_err(from_pfs3)?;
 
         let parent =
             *anode_of
@@ -1059,33 +1157,11 @@ fn copy_in_pfs3(
             summary.bytes = summary.bytes.map(|n| n + data.len() as u64);
         }
 
-        // Binding requirement 1: apply the sidecar, never copy it as a file
-        // (already excluded in `collect_entries`) — for a directory's own
-        // sidecar exactly as for a file's; `update_dir_entry_protection`
-        // patches the named entry in its parent's listing and does not care
-        // which kind of entry that is.
-        let sidecar = uaem::sidecar_path(&entry.host_path);
-        if sidecar.is_file() {
-            let text = std::fs::read_to_string(&sidecar)?;
-            let parsed = uaem::parse(&text)?;
-            let protection = pfs3_protection(parsed.protection)?;
-            // libpfs3 0.1.3 exposes no way to set a directory entry's date or
-            // its comment — only `update_dir_entry_protection`. Both are read
-            // here and then dropped; FFS's `FileMeta` below carries both,
-            // because ART's own writer does have those setters. ART-116:
-            // counted rather than silently lost, using the same "is this
-            // actually worth mentioning" rule `sidecar_for` already applies
-            // when deciding whether a sidecar is worth writing at all — an
-            // empty comment or the Amiga epoch itself as the date is nothing
-            // this copy could have carried over anyway.
-            if !parsed.comment.is_empty() {
-                summary.comments_lost += 1;
-            }
-            if parsed.date != AmigaDate::default() {
-                summary.dates_lost += 1;
-            }
+        // The protection bits are patched onto the entry just written;
+        // `update_dir_entry_protection` does not care which kind it is.
+        if let Some(s) = &sidecar {
             writer
-                .update_dir_entry_protection(parent, name, protection)
+                .update_dir_entry_protection(parent, name, pfs3_protection(s.protection)?)
                 .map_err(from_pfs3)?;
         }
     }
@@ -1093,9 +1169,55 @@ fn copy_in_pfs3(
     Ok(summary)
 }
 
+/// The `.uaem` sidecar beside `host`, parsed — `None` when there is none.
+/// One bounds rule for every reader of a host tree's sidecars: a file larger
+/// than [`uaem::MAX_UAEM_BYTES`] is refused before it is read, never read
+/// whole. `pub(crate)` so the card's measure (card round 2) asks the same.
+pub(crate) fn read_sidecar(host: &Path) -> CoreResult<Option<uaem::Sidecar>> {
+    let path = uaem::sidecar_path(host);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    if std::fs::metadata(&path)?.len() > uaem::MAX_UAEM_BYTES {
+        return Err(CoreError::InvalidInput(format!(
+            "'{}' is too large to be a .uaem sidecar",
+            path.display()
+        )));
+    }
+    uaem::parse(&std::fs::read_to_string(&path)?).map(Some)
+}
+
+/// The comment as AmigaDOS stores it: Latin-1, one byte a character, the first
+/// [`uaem::MAX_COMMENT_LEN`] characters (what `uaem::parse` itself keeps). A
+/// character above U+00FF is refused naming the entry, since an Amiga cannot
+/// store it and nothing may quietly replace it.
+pub(crate) fn latin1_comment(comment: &str, relative: &str) -> CoreResult<Vec<u8>> {
+    comment
+        .chars()
+        .take(uaem::MAX_COMMENT_LEN)
+        .map(|c| {
+            u8::try_from(u32::from(c)).map_err(|_| {
+                CoreError::InvalidInput(format!(
+                    "the comment of '{relative}' holds '{c}', which an Amiga cannot store"
+                ))
+            })
+        })
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // Copying into an FFS/OFS volume
 // ---------------------------------------------------------------------------
+
+/// A sidecar's date, or `None` when it is the Amiga epoch: `sidecar_for`'s
+/// "no date", which the writer turns into the clock's now. The PFS3 copy
+/// applies the same rule, so the writers cannot disagree about a date the
+/// source never stated (final review I2). A `.uaem` that really states
+/// 1978-01-01 00:00:00.00 is therefore dated now as well: the two cannot be
+/// told apart, and that is the chosen rule, not a defect to fix back.
+fn sidecar_date(sidecar: &uaem::Sidecar) -> Option<AmigaDate> {
+    Some(sidecar.date).filter(|date| *date != AmigaDate::default())
+}
 
 #[allow(clippy::too_many_arguments)]
 fn copy_in_ffs(
@@ -1106,7 +1228,7 @@ fn copy_in_ffs(
     dos: DosType,
     reserved: u32,
     volume_label: &str,
-    source: &Path,
+    sources: &[PathBuf],
     entries: &[CopyEntry],
     sink: &dyn ProgressSink,
     clock: &'static dyn AmigaClock,
@@ -1147,9 +1269,9 @@ fn copy_in_ffs(
     let free_bytes = writer.free_bytes()?;
     if bytes_needed > free_bytes {
         return Err(CoreError::InvalidInput(format!(
-            "'{}' needs {bytes_needed} bytes but '{volume_label}' only has {free_bytes} bytes \
+            "{} needs {bytes_needed} bytes but '{volume_label}' only has {free_bytes} bytes \
              free",
-            source.display()
+            quoted_sources(sources)
         )));
     }
 
@@ -1186,26 +1308,46 @@ fn copy_in_ffs(
             // same as a file's — `make_dir` takes no metadata itself, so
             // `set_attributes` is what carries it onto the just-created
             // header block.
+            // ART-337 (card round 2): the comment too, which this used to drop.
             let sidecar = uaem::sidecar_path(&entry.host_path);
             if sidecar.is_file() {
                 let text = std::fs::read_to_string(&sidecar)?;
                 let parsed = uaem::parse(&text)?;
-                writer.set_attributes(block, Some(parsed.protection), None, Some(parsed.date))?;
+                // T5 (card round 2): refused naming the entry, as PFS3's is.
+                latin1_comment(&parsed.comment, &entry.relative)?;
+                writer.set_attributes(
+                    block,
+                    Some(parsed.protection),
+                    (!parsed.comment.is_empty()).then_some(parsed.comment.as_str()),
+                    sidecar_date(&parsed),
+                )?;
             }
         } else {
             let data = std::fs::read(&entry.host_path)?;
             let sidecar = uaem::sidecar_path(&entry.host_path);
-            let meta = if sidecar.is_file() {
+            let parsed = if sidecar.is_file() {
                 let text = std::fs::read_to_string(&sidecar)?;
                 let parsed = uaem::parse(&text)?;
-                FileMeta {
-                    protection: Some(parsed.protection),
-                    date: Some(parsed.date),
-                }
+                // T5 (card round 2): refused naming the entry, as PFS3's is.
+                latin1_comment(&parsed.comment, &entry.relative)?;
+                Some(parsed)
             } else {
-                FileMeta::default()
+                None
             };
-            writer.add_file(parent, name, &data, meta)?;
+            let meta = parsed
+                .as_ref()
+                .map_or_else(FileMeta::default, |parsed| FileMeta {
+                    protection: Some(parsed.protection),
+                    date: sidecar_date(parsed),
+                });
+            let outcome = writer.add_file(parent, name, &data, meta)?;
+            // ART-337 (card round 2): `FileMeta` has no comment, so it is set
+            // on the header `add_file` just wrote.
+            if let Some(parsed) = parsed.filter(|p| !p.comment.is_empty()) {
+                if let Some(block) = outcome.block {
+                    writer.set_attributes(block, None, Some(&parsed.comment), None)?;
+                }
+            }
             summary.files += 1;
             summary.bytes = summary.bytes.map(|n| n + data.len() as u64);
         }
@@ -1215,6 +1357,23 @@ fn copy_in_ffs(
 }
 
 // ---------------------------------------------------------------------------
+
+/// The PFS3 image fixtures, for tests outside this module that need a
+/// formatted card rather than a copy of how to build one (card round 2, R3).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::{Path, PathBuf};
+
+    /// An 8 MB RDB card with one PFS3 (`PDS`) partition, formatted `Work`.
+    pub(crate) fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
+        super::tests::formatted_pds3_image()
+    }
+
+    /// The byte offset of the card's first partition inside `image`.
+    pub(crate) fn partition_offset(image: &Path) -> u64 {
+        super::tests::partition_offset(image)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1333,6 +1492,28 @@ mod tests {
         );
     }
 
+    /// The record is ART's, like `.art-backup`: it never reaches the card,
+    /// and the names it carries are the ones the copy actually uses.
+    #[test]
+    fn the_names_record_is_not_copied_and_its_names_are_used() {
+        let (_guard, dir) = scratch("names-record");
+        let tree = dir.join("dist");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("_AUX"), b"driver").unwrap();
+        let names = std::collections::BTreeMap::from([("_AUX".to_string(), "AUX".to_string())]);
+        crate::core::preload::amiga_names::write_record(&tree, &names).unwrap();
+
+        let entries = collect_entries(&tree).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|e| e.relative.as_str())
+                .collect::<Vec<_>>(),
+            vec!["AUX"],
+            "the record's file is not itself an entry, and its name wins"
+        );
+    }
+
     fn card_with_partition(
         tag: &str,
         fs: AmigaHardDiskFs,
@@ -1366,13 +1547,13 @@ mod tests {
         card_with_partition("dos3", AmigaHardDiskFs::FfsDirCache, 8)
     }
 
-    fn partition_offset(image: &Path) -> u64 {
+    pub(super) fn partition_offset(image: &Path) -> u64 {
         let card = read_card(image).unwrap();
         let part = &card.areas[0].rdb.partitions[0];
         card.areas[0].offset_bytes + part.byte_offset().unwrap()
     }
 
-    fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
+    pub(super) fn formatted_pds3_image() -> (crate::core::ScratchDir, PathBuf) {
         let (_guard, image) = rdb_image_with_one_pds3_partition();
         NativeFormatter::UTC
             .format_partition(&image, None, 1, "Work", &NoProgress)
@@ -1755,6 +1936,143 @@ mod tests {
         );
     }
 
+    // ---- ART-335 (card round 2): a sidecar's date and comment reach PFS3 ----
+
+    /// A stopped clock whose "now" is nowhere near either sidecar date below,
+    /// so a date read back as the clock's cannot be mistaken for a sidecar's.
+    static CARD_R2_CLOCK: crate::core::clock::FixedClock = crate::core::clock::FixedClock {
+        now: 1_768_478_400,
+        offset: 0,
+    };
+
+    /// One entry of `dir` on a PFS3 image, read back through libpfs3's own
+    /// reader — not recomputed from what ART meant to write.
+    fn pfs3_entry(image: &Path, dir: &str, name: &str) -> libpfs3::ondisk::DirEntry {
+        let mut vol = libpfs3::volume::Volume::open(image, partition_offset(image)).unwrap();
+        vol.list_dir(dir)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("'{name}' is not listed in '{dir}'"))
+    }
+
+    fn pfs3_entry_date(entry: &libpfs3::ondisk::DirEntry) -> (u16, u16, u16) {
+        (
+            entry.creation_day,
+            entry.creation_minute,
+            entry.creation_tick,
+        )
+    }
+
+    /// ART-335 (this round): a sidecar's date and comment reach a PFS3 volume,
+    /// for a file and for a drawer. Read back through libpfs3's own reader.
+    #[test]
+    fn copy_in_carries_the_date_and_comment_out_of_the_uaem_sidecars() {
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-date-comment");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 hello comment\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tree.join("C.uaem"),
+            "----rwed 2020-01-02 03:04:05.00 drawer note\n",
+        )
+        .unwrap();
+
+        let summary = NativeFormatter::new(&CARD_R2_CLOCK)
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let assign = pfs3_entry(&image, "C", "Assign");
+        assert_eq!(assign.comment, "hello comment");
+        let expected = uaem::parse("--p-rwed 2021-04-13 02:43:13.68 x\n")
+            .unwrap()
+            .date;
+        assert_eq!(pfs3_entry_date(&assign), pfs3_datestamp(expected));
+
+        let c = pfs3_entry(&image, "", "C");
+        assert_eq!(c.comment, "drawer note");
+        let expected = uaem::parse("----rwed 2020-01-02 03:04:05.00 x\n")
+            .unwrap()
+            .date;
+        assert_eq!(pfs3_entry_date(&c), pfs3_datestamp(expected));
+
+        assert_eq!(summary.comments_lost, 0);
+        assert_eq!(summary.dates_lost, 0);
+    }
+
+    /// The negative control: no sidecar — or a sidecar whose date is the epoch,
+    /// which `sidecar_for` treats as "no date" — gets no comment and the
+    /// clock's "now".
+    #[test]
+    fn an_entry_without_a_sidecar_date_gets_no_comment_and_the_clock_s_date() {
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-no-sidecar-date");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Plain"), b"plain").unwrap();
+        std::fs::write(tree.join("C/Epoch"), b"epoch").unwrap();
+        std::fs::write(
+            tree.join("C/Epoch.uaem"),
+            "--p-rwed 1978-01-01 00:00:00.00 \n",
+        )
+        .unwrap();
+
+        NativeFormatter::new(&CARD_R2_CLOCK)
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let now = pfs3_datestamp(CARD_R2_CLOCK.amiga_now());
+        assert_ne!(now, (0, 0, 0), "the control clock must not be the epoch");
+        for name in ["Plain", "Epoch"] {
+            let entry = pfs3_entry(&image, "C", name);
+            assert_eq!(entry.comment, "", "{name}");
+            assert_eq!(pfs3_entry_date(&entry), now, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_comment_the_amiga_cannot_store_is_refused_by_name() {
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard, tree) = fixtures::scratch("copy-in-comment-not-latin1");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 日本\n",
+        )
+        .unwrap();
+
+        let err = NativeFormatter::UTC
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .expect_err("a comment outside Latin-1 must be refused");
+        let message = err.to_string();
+        assert!(message.contains("C/Assign"), "{message}");
+        assert!(message.contains("an Amiga cannot store"), "{message}");
+    }
+
+    #[test]
+    fn libpfs3_refuses_a_comment_longer_than_the_amiga_stores() {
+        let (_guard, image) = formatted_pds3_image();
+        let vol = libpfs3::volume::Volume::open_rw(&image, partition_offset(&image)).unwrap();
+        let mut writer = libpfs3::writer::Writer::open(vol).unwrap();
+
+        assert!(matches!(
+            writer.set_entry_comment(&[b'c'; 80]),
+            Err(libpfs3::error::Error::CommentTooLong { len: 80, max: 79 })
+        ));
+        assert!(writer.set_entry_comment(&[b'c'; 79]).is_ok());
+
+        // The longest comment lands whole in pfs3aio's layout and reads back.
+        writer.write_file("Long", b"x").unwrap();
+        drop(writer);
+        let entry = pfs3_entry(&image, "", "Long");
+        assert_eq!(entry.comment, "c".repeat(79));
+    }
+
     #[test]
     fn a_sidecar_is_applied_and_never_copied_as_a_file_of_its_own() {
         let (_guard, image) = formatted_pds3_image();
@@ -1791,6 +2109,54 @@ mod tests {
             .unwrap();
         assert_eq!(summary.files, 1);
         assert_eq!(summary.directories, 1);
+    }
+
+    /// Card round 2: two folders fill one partition in one pass — a second
+    /// `copy_in` would meet a volume that already has files and be refused.
+    #[test]
+    fn two_sources_fill_one_pfs3_partition() {
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard_a, a) = fixtures::scratch("two-sources-a");
+        let (_guard_b, b) = fixtures::scratch("two-sources-b");
+        std::fs::create_dir_all(a.join("A")).unwrap();
+        std::fs::write(a.join("A/One"), b"one").unwrap();
+        std::fs::create_dir_all(b.join("B")).unwrap();
+        std::fs::write(b.join("B/Two"), b"two").unwrap();
+
+        let summary = NativeFormatter::UTC
+            .copy_in_sources(&image, None, "DH0", &[a, b], &NoProgress)
+            .unwrap();
+
+        let mut root: Vec<String> = libpfs3::volume::Volume::open(&image, partition_offset(&image))
+            .unwrap()
+            .list_dir("")
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.name)
+            .collect();
+        root.sort();
+        assert_eq!(root, ["A", "B"]);
+        assert_eq!(summary.files, 2);
+        assert_eq!(summary.directories, 2);
+    }
+
+    /// Card round 2: the pre-flight asks every source, so a non-ASCII name in
+    /// the second folder sends the whole partition to the fallback before it
+    /// is formatted.
+    #[test]
+    fn a_non_ascii_name_in_the_second_source_makes_the_whole_partition_fall_back() {
+        let (_guard, image) = formatted_pds3_image();
+        let (_guard_a, plain) = fixtures::scratch("fallback-plain");
+        let (_guard_b, accented) = fixtures::scratch("fallback-accented");
+        std::fs::write(plain.join("Plain"), b"x").unwrap();
+        std::fs::write(accented.join("français"), b"x").unwrap();
+
+        let err = NativeFormatter::UTC
+            .can_copy_in_sources(&image, None, "DH0", &[plain, accented])
+            .unwrap_err();
+
+        assert!(matches!(err, CoreError::NonAsciiPfs3Names { .. }), "{err}");
+        assert!(format!("{err}").contains("français"), "{err}");
     }
 
     // ---- ART-310: the format writes what pfs3aio writes ----
@@ -2764,15 +3130,17 @@ mod tests {
         assert_eq!(summary.files, 1);
     }
 
-    // ---- ART-116: a dropped comment or date is counted, not hidden ----
+    // ---- ART-116, then ART-335: what is lost is counted; PFS3 now loses nothing ----
 
-    /// A sidecar carrying both a real comment and a real (non-epoch) date —
-    /// `libpfs3` 0.1.3 has a setter for neither, so both must be counted.
-    /// Falsification: a version that only ever set `comments_lost` (or only
-    /// `dates_lost`) would still pass a test that checked one field alone;
-    /// this checks both from the one sidecar in one assertion each.
+    /// A sidecar carrying both a real comment and a real (non-epoch) date.
+    /// ART-116 counted both as lost, because `libpfs3` 0.1.3 had a setter for
+    /// neither; since ART-335 (card round 2, `set_entry_comment` and the
+    /// per-entry `set_entry_date`) both are written, so neither is counted.
+    /// Falsification kept: each field is read back from the volume, so a
+    /// version that only zeroed the counters without writing either field
+    /// fails here, one assertion each.
     #[test]
-    fn copy_in_pfs3_counts_a_dropped_comment_and_a_dropped_date() {
+    fn copy_in_pfs3_carries_the_comment_and_date_it_used_to_count_as_lost() {
         let (_guard, image) = formatted_pds3_image();
         let (_guard, tree) = fixtures::scratch("copy-in-lost-metadata");
         std::fs::write(tree.join("Assign"), b"x").unwrap();
@@ -2786,15 +3154,23 @@ mod tests {
             .copy_in(&image, None, "DH0", &tree, &NoProgress)
             .unwrap();
 
-        assert_eq!(summary.comments_lost, 1);
-        assert_eq!(summary.dates_lost, 1);
+        // ART-335: carried now — the counter counts what could not be written
+        assert_eq!(summary.comments_lost, 0);
+        assert_eq!(summary.dates_lost, 0);
+        let entry = pfs3_entry(&image, "", "Assign");
+        assert_eq!(entry.comment, "a real comment");
+        let expected = uaem::parse("--p-rwed 2021-04-13 02:43:13.68 x\n")
+            .unwrap()
+            .date;
+        assert_eq!(pfs3_entry_date(&entry), pfs3_datestamp(expected));
     }
 
     /// The negative control: a sidecar that only carries protection bits
     /// (empty comment, the Amiga epoch as its date — `sidecar_for`'s own
     /// "nothing worth recording" case for those two fields) must not be
-    /// counted as having lost either. Without this, a version that counted
-    /// every sidecar unconditionally would still pass the test above.
+    /// counted as having lost either. Since ART-335 nothing on this path is
+    /// counted; the entry's own comment and date are
+    /// `an_entry_without_a_sidecar_date_gets_no_comment_and_the_clock_s_date`'s.
     #[test]
     fn copy_in_pfs3_does_not_count_a_sidecar_with_no_comment_or_date_to_lose() {
         let (_guard, image) = formatted_pds3_image();
@@ -2814,11 +3190,11 @@ mod tests {
         assert_eq!(summary.dates_lost, 0);
     }
 
-    /// The FFS branch keeps both fields — see `FileMeta` in `copy_in_ffs` —
-    /// so it must never report either as lost, even for the exact sidecar
-    /// that trips both counters on PFS3 above. Without this, a bug that
-    /// counted on both branches (rather than only where the loss is real)
-    /// would still pass every PFS3-only test above.
+    /// The FFS branch keeps both fields — `FileMeta` and, since ART-337,
+    /// `set_attributes` for the comment, in `copy_in_ffs` — so it must never
+    /// report either as lost, even for the sidecar ART-116 counted on PFS3.
+    /// That the comment really lands is
+    /// `ffs_copy_in_carries_the_comment_of_a_file_and_a_drawer`'s.
     #[test]
     fn copy_in_ffs_never_counts_anything_lost() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
@@ -3096,6 +3472,125 @@ mod tests {
         assert_eq!(uaem::format_bits(attrs.protection), "--p-rwed");
     }
 
+    /// ART-337 (this round): FFS used to drop comments without counting them.
+    #[test]
+    fn ffs_copy_in_carries_the_comment_of_a_file_and_a_drawer() {
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
+        NativeFormatter::UTC
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("ffs-copy-in-comment");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 hello comment\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tree.join("C.uaem"),
+            "----rwed 2020-01-02 03:04:05.00 drawer note\n",
+        )
+        .unwrap();
+
+        NativeFormatter::UTC
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        // ART's own reader, not libpfs3 — this is the FFS branch.
+        let (mut region, geometry, offset) = ffs_region(&image);
+        let writer = VolumeWriter::open(&mut region, geometry, &image, offset).unwrap();
+        let c_dir = writer.find(0, "C").unwrap().unwrap();
+        let assign = writer.find(c_dir.block, "Assign").unwrap().unwrap();
+        let file = writer.attributes(assign.block).unwrap();
+        assert_eq!(file.comment, "hello comment");
+        assert_eq!(uaem::format_bits(file.protection), "--p-rwed");
+        let drawer = writer.attributes(c_dir.block).unwrap();
+        assert_eq!(drawer.comment, "drawer note");
+        assert_eq!(uaem::format_bits(drawer.protection), "----rwed");
+    }
+
+    /// Final review I2: FFS applies PFS3's rule — a sidecar dated the Amiga
+    /// epoch carries no date, so the entry gets the clock's now, never 1978.
+    #[test]
+    fn ffs_a_sidecar_dated_the_epoch_gets_the_clock_s_date() {
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
+        NativeFormatter::new(&CARD_R2_CLOCK)
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("ffs-copy-in-epoch-date");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Epoch"), b"epoch").unwrap();
+        std::fs::write(
+            tree.join("C/Epoch.uaem"),
+            "--p-rwed 1978-01-01 00:00:00.00 note\n",
+        )
+        .unwrap();
+
+        NativeFormatter::new(&CARD_R2_CLOCK)
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .unwrap();
+
+        let (mut region, geometry, offset) = ffs_region(&image);
+        let writer = VolumeWriter::open(&mut region, geometry, &image, offset).unwrap();
+        let c_dir = writer.find(0, "C").unwrap().unwrap();
+        let epoch = writer.find(c_dir.block, "Epoch").unwrap().unwrap();
+        let file = writer.attributes(epoch.block).unwrap();
+        assert_ne!(CARD_R2_CLOCK.amiga_now(), AmigaDate::default());
+        assert_eq!(file.date, CARD_R2_CLOCK.amiga_now());
+        assert_eq!(file.comment, "note");
+        assert_eq!(uaem::format_bits(file.protection), "--p-rwed");
+    }
+
+    /// T5 (card round 2): the FFS copy refuses a comment an Amiga cannot store
+    /// naming the entry, as the PFS3 copy does.
+    #[test]
+    fn ffs_a_comment_the_amiga_cannot_store_is_refused_by_name() {
+        let (_guard, image) = rdb_image_with_one_dos3_partition();
+        NativeFormatter::UTC
+            .format_partition(&image, None, 1, "Work", &NoProgress)
+            .unwrap();
+        let (_guard, tree) = fixtures::scratch("ffs-copy-in-comment-not-latin1");
+        std::fs::create_dir_all(tree.join("C")).unwrap();
+        std::fs::write(tree.join("C/Assign"), b"x").unwrap();
+        std::fs::write(
+            tree.join("C/Assign.uaem"),
+            "--p-rwed 2021-04-13 02:43:13.68 日本\n",
+        )
+        .unwrap();
+
+        let err = NativeFormatter::UTC
+            .copy_in(&image, None, "DH0", &tree, &NoProgress)
+            .expect_err("a comment outside Latin-1 must be refused");
+        let message = err.to_string();
+        assert!(message.contains("C/Assign"), "{message}");
+        assert!(message.contains("an Amiga cannot store"), "{message}");
+    }
+
+    /// Final review M7: NTFS opens `.ART-AMIGA-NAMES.JSON` as the record, so
+    /// that spelling is ART's record too and never copied as a file.
+    #[test]
+    fn a_names_record_in_another_case_is_never_copied() {
+        let (_guard, tree) = fixtures::scratch("record-case");
+        std::fs::write(tree.join("_AUX"), b"aux").unwrap();
+        std::fs::write(
+            tree.join(".ART-AMIGA-NAMES.JSON"),
+            br#"{"version":1,"names":[{"host":"_AUX","amiga":"AUX"}]}"#,
+        )
+        .unwrap();
+        let relatives: Vec<String> = collect_entries(&tree)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.relative)
+            .collect();
+        assert!(
+            relatives
+                .iter()
+                .all(|r| !r.eq_ignore_ascii_case(AMIGA_NAMES_RECORD)),
+            "{relatives:?}"
+        );
+    }
+
     #[test]
     fn ffs_a_sidecar_is_applied_and_never_copied_as_a_file_of_its_own() {
         let (_guard, image) = rdb_image_with_one_dos3_partition();
@@ -3243,7 +3738,7 @@ mod tests {
         let probed = NativeFormatter::UTC.probe().unwrap();
         assert_eq!(
             probed.raw,
-            "libpfs3 0.1.3+art.11 (native, no external tool)"
+            "libpfs3 0.1.3+art.12 (native, no external tool)"
         );
     }
 
@@ -5558,7 +6053,7 @@ mod tests {
         let (_guard, large) = formatted_large_pds3_image();
         let (_guard, tree) = fixtures::scratch("copy-in-too-large");
         let copy = |image: &Path, sizes: &[u64]| -> String {
-            let planned = plan_copy(image, None, "DH0", &tree).unwrap();
+            let planned = plan_copy(image, None, "DH0", std::slice::from_ref(&tree)).unwrap();
             let names = ["Huge.hdf", "Bigger.hdf"];
             let entries: Vec<CopyEntry> = sizes
                 .iter()
@@ -5576,7 +6071,7 @@ mod tests {
                 planned.length,
                 planned.block_size,
                 "DH0",
-                &tree,
+                std::slice::from_ref(&tree),
                 &entries,
                 &NoProgress,
                 NativeFormatter::UTC.clock,

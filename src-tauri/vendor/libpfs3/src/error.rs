@@ -14,8 +14,10 @@
 //! Modified by ART on 2026-09-15 (the scoped re-review's follow-ups 1 and 6,
 //! ART-324 and ART-330): the `FileTooLarge` variant, a file the volume cannot
 //! record the size of, and the `DamagedDirectory` variant, a directory walk
-//! stopped by a malformed entry. `ART-PATCH.md` in this crate's root says what
-//! and why.
+//! stopped by a malformed entry.
+//! Modified by ART on 2026-09-17 (card round 2, ART-335): the `CommentTooLong`
+//! variant, a comment longer than an AmigaDOS entry holds. `ART-PATCH.md` in
+//! this crate's root says what and why.
 
 /// Result type alias using the PFS3 [`Error`].
 pub type Result<T> = std::result::Result<T, Error>;
@@ -160,6 +162,13 @@ pub enum Error {
          reopen it (and check it) before writing to it again"
     )]
     CommitFailed,
+
+    /// ART (card round 2, ART-335): `Writer::set_entry_comment` was given
+    /// more than `writer::MAX_COMMENT_BYTES` bytes — pfs3aio's `CMSIZE` 80 as
+    /// a BSTR (`blocks.h:518`, `directory.c:1035,2200`, `tonioni/pfs3aio`
+    /// `211f7f0`). Nothing was written.
+    #[error("a comment of {len} bytes is longer than the {max} an AmigaDOS entry holds")]
+    CommentTooLong { len: usize, max: usize },
 
     #[error("corrupt filesystem: {0}")]
     Corrupt(String),

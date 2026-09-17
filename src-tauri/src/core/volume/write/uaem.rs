@@ -277,7 +277,7 @@ const AMIGA_EPOCH_DAYS: i64 = 2922;
 /// Howard Hinnant's `days_from_civil`, the standard branch-free civil-calendar
 /// conversion. Written out rather than pulled in as a dependency: `core/` takes
 /// `std` + serde + sha2 + thiserror + delharc and nothing else.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = year - i64::from(month <= 2);
     let era = if year >= 0 { year } else { year - 399 } / 400;
     let year_of_era = year - era * 400;

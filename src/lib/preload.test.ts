@@ -150,7 +150,7 @@ describe("toRequest", () => {
   it("carries only the partitions that were chosen", () => {
     const request = toRequest("card.img", null, chosenFirst(), null);
     expect(request.partitions).toEqual([
-      { area: 1, index: 1, volume_name: "Work", content: null },
+      { area: 1, index: 1, volume_name: "Work", content: [] },
     ]);
   });
 
@@ -171,8 +171,22 @@ describe("toRequest", () => {
       area: 1,
       index: 1,
       volume_name: "Work",
-      content: "E:\\tree",
+      content: ["E:\\tree"],
     });
+  });
+
+  it("sends a chosen partition's folder as a one-element list", () => {
+    const picks = [
+      { area: 1, index: 1, driveName: "DH0", chosen: true, volumeName: "Work", content: "E:\\tree" },
+    ];
+    expect(toRequest("E:\\c.img", null, picks, null).partitions[0].content).toEqual(["E:\\tree"]);
+  });
+
+  it("sends no folder as an empty list", () => {
+    const picks = [
+      { area: 1, index: 1, driveName: "DH0", chosen: true, volumeName: "Work", content: null },
+    ];
+    expect(toRequest("E:\\c.img", null, picks, null).partitions[0].content).toEqual([]);
   });
 
   it("a driver nobody chose is absent, not an empty path", () => {
@@ -265,7 +279,7 @@ describe("formatCount", () => {
         EMBED_STEP,
         { step: "format-partition", slot: 2, index: 1, drive_name: "DH0", volume_name: "Work" },
         { step: "format-partition", slot: 2, index: 2, drive_name: "DH1", volume_name: "Games" },
-        { step: "copy-in", slot: 2, drive_name: "DH0", source: "E:\\tree" },
+        { step: "copy-in", slot: 2, drive_name: "DH0", sources: ["E:\\tree"] },
       ],
       notes: [],
       rdb_backup: null,
@@ -335,7 +349,7 @@ describe("plannedToolPhrase", () => {
     step: "copy-in",
     slot: 2,
     drive_name: "DH0",
-    source: "E:\\tree",
+    sources: ["E:\\tree"] as string[],
   } as const;
   const planOf = (...steps: PreloadStep[]): PreloadPlan => ({
     image: "card.img",

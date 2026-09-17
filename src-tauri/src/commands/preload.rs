@@ -371,9 +371,10 @@ fn run_step(
         PreloadStep::CopyIn {
             slot,
             drive_name,
-            source,
+            sources,
         } => {
-            let summary = formatter.copy_in(&made.image, *slot, drive_name, source, sink)?;
+            let summary =
+                formatter.copy_in_sources(&made.image, *slot, drive_name, sources, sink)?;
             Ok(StepEffect::Copied(summary))
         }
     }
@@ -424,17 +425,17 @@ fn paired_copy_forces_fallback(
         return None;
     };
 
-    let source = made.steps.iter().find_map(|other| match other {
+    let sources = made.steps.iter().find_map(|other| match other {
         PreloadStep::CopyIn {
             slot: copy_slot,
             drive_name: copy_drive,
-            source,
-        } if copy_slot == slot && copy_drive == drive_name => Some(source),
+            sources,
+        } if copy_slot == slot && copy_drive == drive_name => Some(sources),
         _ => None,
     })?;
 
     let err = native
-        .can_copy_in(&made.image, *slot, drive_name, source)
+        .can_copy_in_sources(&made.image, *slot, drive_name, sources)
         .err()?;
     FallbackReason::from_native_error(&err)?;
     Some(FallbackReason::PairedWithFallbackCopy {
@@ -1006,7 +1007,7 @@ mod tests {
         let command: PreloadCommand = serde_json::from_str(
             r#"{"image":"E:\\amiga\\ProjeART\\card.img",
                 "driver":null,
-                "partitions":[{"area":1,"index":1,"volume_name":"Work","content":null}],
+                "partitions":[{"area":1,"index":1,"volume_name":"Work","content":[]}],
                 "tool_path":"E:\\amiga\\hstimager\\hst.imager.exe"}"#,
         )
         .expect("the shape src/lib/preload.ts sends");
@@ -1016,7 +1017,10 @@ mod tests {
         assert_eq!(command.request.partitions.len(), 1);
         assert_eq!(command.request.partitions[0].area, 1);
         assert_eq!(command.request.partitions[0].volume_name, "Work");
-        assert_eq!(command.request.partitions[0].content, None);
+        assert_eq!(
+            command.request.partitions[0].content,
+            Vec::<std::path::PathBuf>::new()
+        );
         assert_eq!(command.request.rdb_backup, None, "absent is None");
 
         // And the two the screen fills in when the user does: a driver to
@@ -1024,7 +1028,7 @@ mod tests {
         let filled: PreloadCommand = serde_json::from_str(
             r#"{"image":"card.img",
                 "driver":"E:\\amiga\\pfs3aio.lha",
-                "partitions":[{"area":2,"index":3,"volume_name":"Games","content":"E:\\tree"}],
+                "partitions":[{"area":2,"index":3,"volume_name":"Games","content":["E:\\tree"]}],
                 "rdb_backup":"E:\\amiga\\card-rdb-backup.bin",
                 "tool_path":"hst.imager.exe"}"#,
         )
@@ -1037,7 +1041,7 @@ mod tests {
         assert_eq!(filled.request.partitions[0].index, 3);
         assert_eq!(
             filled.request.partitions[0].content,
-            Some(std::path::PathBuf::from("E:\\tree"))
+            vec![std::path::PathBuf::from("E:\\tree")]
         );
         assert_eq!(
             filled.request.rdb_backup,
@@ -1049,7 +1053,7 @@ mod tests {
         let no_tool: PreloadCommand = serde_json::from_str(
             r#"{"image":"card.img",
                 "driver":null,
-                "partitions":[{"area":1,"index":1,"volume_name":"Work","content":null}],
+                "partitions":[{"area":1,"index":1,"volume_name":"Work","content":[]}],
                 "tool_path":""}"#,
         )
         .expect("an empty tool_path is a valid payload");
@@ -1089,7 +1093,7 @@ mod tests {
                     area: 1,
                     index: 1,
                     volume_name: "Work".into(),
-                    content: None,
+                    content: Vec::new(),
                 }],
                 rdb_backup: None,
             },
@@ -1237,7 +1241,7 @@ mod tests {
                 area: 1,
                 index: 1,
                 volume_name: "Work".into(),
-                content: Some(tree),
+                content: vec![tree],
             }],
             rdb_backup: None,
         })
@@ -1317,7 +1321,7 @@ mod tests {
                 PreloadStep::CopyIn {
                     slot: None,
                     drive_name: "DH0".into(),
-                    source: tree,
+                    sources: vec![tree],
                 },
             ],
             notes: Vec::new(),
@@ -1418,7 +1422,7 @@ mod tests {
                 PreloadStep::CopyIn {
                     slot: None,
                     drive_name: "DH0".into(),
-                    source: ascii,
+                    sources: vec![ascii],
                 },
                 PreloadStep::FormatPartition {
                     slot: None,
@@ -1429,7 +1433,7 @@ mod tests {
                 PreloadStep::CopyIn {
                     slot: None,
                     drive_name: "DH1".into(),
-                    source: accented,
+                    sources: vec![accented],
                 },
             ],
             notes: Vec::new(),
@@ -1480,7 +1484,7 @@ mod tests {
             PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH0".into(),
-                source: std::path::PathBuf::from("tree"),
+                sources: vec![std::path::PathBuf::from("tree")],
             },
         ]);
 
@@ -1540,7 +1544,7 @@ mod tests {
             steps: vec![PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH0".into(),
-                source: tree,
+                sources: vec![tree],
             }],
             notes: Vec::new(),
             rdb_backup: None,
@@ -1588,12 +1592,12 @@ mod tests {
             PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH0".into(),
-                source: std::path::PathBuf::from("a"),
+                sources: vec![std::path::PathBuf::from("a")],
             },
             PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH1".into(),
-                source: std::path::PathBuf::from("b"),
+                sources: vec![std::path::PathBuf::from("b")],
             },
         ]);
         let native = Recorder {
@@ -1643,7 +1647,7 @@ mod tests {
             PreloadStep::CopyIn {
                 slot: None,
                 drive_name: "DH0".into(),
-                source: std::path::PathBuf::from("tree"),
+                sources: vec![std::path::PathBuf::from("tree")],
             },
             PreloadStep::FormatPartition {
                 slot: None,
@@ -1675,7 +1679,7 @@ mod tests {
         let made = plan_of(vec![PreloadStep::CopyIn {
             slot: None,
             drive_name: "DH0".into(),
-            source: std::path::PathBuf::from("tree"),
+            sources: vec![std::path::PathBuf::from("tree")],
         }]);
         let err = run_with_fallback(
             &made,
@@ -1734,7 +1738,7 @@ mod tests {
                 area: 1,
                 index: 1,
                 volume_name: "Work".into(),
-                content: None,
+                content: Vec::new(),
             }],
             rdb_backup: Some(backup.clone()),
         })
@@ -1802,7 +1806,7 @@ mod tests {
                 area: 1,
                 index: 1,
                 volume_name: "Work".into(),
-                content: None,
+                content: Vec::new(),
             }],
             rdb_backup: Some(backup.clone()),
         })
@@ -1964,7 +1968,7 @@ mod tests {
                 area: 1,
                 index: 1,
                 volume_name: "Work".into(),
-                content: Some(tree),
+                content: vec![tree],
             }],
             rdb_backup: Some(dir.join("card-rdb-backup.bin")),
         };
@@ -2405,7 +2409,7 @@ mod tests {
                 area: 1,
                 index: 1,
                 volume_name: "Workbench".into(),
-                content: Some(tree.clone()),
+                content: vec![tree.clone()],
             }],
             rdb_backup: None,
         };

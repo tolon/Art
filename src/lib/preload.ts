@@ -57,11 +57,11 @@ export interface FormatterReport {
 
 /** How much a copy moved.
  *
- * `comments_lost`/`dates_lost` (ART-116): on the PFS3 path, `libpfs3` 0.1.3
- * has no setter for a directory entry's comment or date — only its
- * protection bits — so these count how many entries carried one that could
- * not be written. Always `0` for an FFS copy, whose own writer keeps both.
- * Not a refusal; information the caller can choose to say something about. */
+ * `comments_lost`/`dates_lost` (ART-116): how many entries carried a `.uaem`
+ * comment or date that could not be written. Since card round 2 ART's own
+ * writer carries both on PFS3 as well as FFS (ART-335, ART-337), so no path
+ * counts one today; the fields stay for readers of older results. Not a
+ * refusal; information the caller can choose to say something about. */
 export interface CopySummary {
   files: number;
   directories: number;
@@ -86,8 +86,9 @@ export interface PreloadPartition {
   area: number;
   index: number;
   volume_name: string;
-  /** A folder on the PC whose tree goes in. Null formats and stops. */
-  content: string | null;
+  /** Folders on the PC whose trees go in, side by side, as one copy. Empty
+   *  formats and stops. */
+  content: string[];
 }
 
 export interface PreloadRequest {
@@ -143,7 +144,7 @@ export type PreloadStep =
       drive_name: string;
       volume_name: string;
     }
-  | { step: "copy-in"; slot: number | null; drive_name: string; source: string };
+  | { step: "copy-in"; slot: number | null; drive_name: string; sources: string[] };
 
 /** Something the preview must say that is not a step (ART-117). */
 export type PlanNote =
@@ -469,7 +470,7 @@ export function toRequest(
         area: pick.area,
         index: pick.index,
         volume_name: pick.volumeName.trim(),
-        content: pick.content,
+        content: pick.content ? [pick.content] : [],
       })),
     rdb_backup: rdbBackup?.trim() ? rdbBackup.trim() : null,
   };
@@ -643,7 +644,7 @@ export function stepPhrase(step: PreloadStep): Phrase {
     case "copy-in":
       return {
         key: "preload.plan.step.copy",
-        params: { drive: step.drive_name, source: step.source },
+        params: { drive: step.drive_name, source: step.sources.join(", ") },
       };
   }
 }

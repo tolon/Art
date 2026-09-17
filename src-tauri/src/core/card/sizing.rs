@@ -139,28 +139,46 @@ pub struct ContentMeasure {
     pub entry_bytes: u64,
 }
 
-fn entry_bytes(name: &str) -> u64 {
-    // `libpfs3` `writer.rs:1153-1194` `build_dir_entry`: an 18-byte fixed
-    // header, the name, a 1-byte comment-length byte (ART writes no
-    // comment), and a 2-byte flags field (4 only once a single file needs
-    // `MODE_LARGEFILE`'s `fsizex` extension, i.e. >= 4 GiB — out of scope
-    // for ART's content), padded up to even (`writer.rs:1166-1169`). This
-    // supersedes the plan's original "17 fixed bytes" guess, which measured
-    // 3 bytes an entry short against the real writer (round-2 review,
-    // CRITICAL 1). Latin-1 on the Amiga side: one byte a character.
-    let raw = 18 + name.chars().count() as u64 + 1 + 2;
+fn entry_bytes(name: &str, comment_bytes: u64) -> u64 {
+    // `libpfs3` `build_dir_entry`, `writer.rs:2139-2194` (grepped
+    // 2026-09-17; supersedes the stale `writer.rs:1153-1194` this comment
+    // used to cite): an 18-byte fixed header, the name, a 1-byte
+    // comment-length byte, the comment itself (card round 2, ART-335 —
+    // `Writer::set_entry_comment`; the PFS3 copy now writes the host's
+    // comment, Task 5), and a 2-byte flags field (4 only once a single file
+    // needs `MODE_LARGEFILE`'s `fsizex` extension, i.e. >= 4 GiB — out of
+    // scope for ART's content), padded up to even. The packing itself —
+    // `extra_fields_offset(nlen, clen) + extra.len()` bytes, `entry[0] =
+    // entry.len() as u8` — is `writer.rs:2170-2193` (supersedes the stale
+    // `writer.rs:1166-1169`); `extra_fields_offset(nlen, clen) = (20 + nlen
+    // + clen) & !1` is `ondisk/direntry.rs:106-108`. This supersedes the
+    // plan's original "17 fixed bytes" guess, which measured 3 bytes an
+    // entry short against the real writer (round-2 review, CRITICAL 1).
+    // Latin-1 on the Amiga side: one byte a character.
+    let raw = 18 + name.chars().count() as u64 + 1 + comment_bytes + 2;
     raw + raw % 2
 }
 
 impl ContentMeasure {
     pub fn add_file(&mut self, name: &str, bytes: u64) {
-        self.files += 1;
-        self.data_blocks += bytes.div_ceil(PFS3_BLOCK).max(1);
-        self.entry_bytes += entry_bytes(name);
+        self.add_file_with_comment(name, 0, bytes);
     }
     pub fn add_directory(&mut self, name: &str) {
+        self.add_directory_with_comment(name, 0);
+    }
+    /// Like [`add_file`](Self::add_file), but the file's directory entry
+    /// also carries a comment of `comment_bytes` bytes (card round 2,
+    /// ART-335: the PFS3 copy now writes the host's comment).
+    pub fn add_file_with_comment(&mut self, name: &str, comment_bytes: u64, bytes: u64) {
+        self.files += 1;
+        self.data_blocks += bytes.div_ceil(PFS3_BLOCK).max(1);
+        self.entry_bytes += entry_bytes(name, comment_bytes);
+    }
+    /// Like [`add_directory`](Self::add_directory), but the drawer's own
+    /// directory entry also carries a comment of `comment_bytes` bytes.
+    pub fn add_directory_with_comment(&mut self, name: &str, comment_bytes: u64) {
         self.directories += 1;
-        self.entry_bytes += entry_bytes(name);
+        self.entry_bytes += entry_bytes(name, comment_bytes);
     }
     pub fn merge(&mut self, other: &ContentMeasure) {
         self.files += other.files;
@@ -173,8 +191,9 @@ impl ContentMeasure {
 /// Directory blocks `content` needs beyond the one guaranteed to root and to
 /// every directory, packed the way `add_dir_entry` really packs them:
 /// sequentially, a block taking one more entry only while `pos + entry_len <
-/// resblocksize` (`writer.rs:1115` — strictly less, so a block is never
-/// packed to its exact size; the `-1` below is that byte).
+/// resblocksize` (`writer.rs:2096`, `add_dir_entry_bytes` — grepped
+/// 2026-09-17, supersedes the stale `writer.rs:1115`; strictly less, so a
+/// block is never packed to its exact size; the `-1` below is that byte).
 /// `ContentMeasure` does not keep directories apart, so this sums
 /// `entry_bytes` across the whole tree and packs it as one pool — which is
 /// provably still safe: for directories 1..n with entry-byte totals `e_i`
@@ -581,6 +600,27 @@ mod tests {
         (128, 127_865_454_592),
     ];
 
+    /// The T6 survivor, closed: an entry's size exactly, for both parities of
+    /// name plus comment, pinned as literals and against libpfs3's own
+    /// `extra_fields_offset` + the 2-byte flags field.
+    #[test]
+    fn an_entry_costs_exactly_what_libpfs3_writes_for_either_parity() {
+        let cases: [(&str, u64, u64); 6] = [
+            ("Assign", 0, 28), // 6 + 0 even
+            ("Assign", 1, 28), // 6 + 1 odd
+            ("Tool", 5, 30),   // 4 + 5 odd
+            ("Tool", 4, 30),   // 4 + 4 even
+            ("ab", 0, 24),     // 2 + 0 even
+            ("abc", 79, 104),  // 3 + 79 even, the longest comment
+        ];
+        for (name, comment, expected) in cases {
+            assert_eq!(entry_bytes(name, comment), expected, "{name} + {comment}");
+            let written =
+                libpfs3::ondisk::extra_fields_offset(name.len(), comment as usize) as u64 + 2;
+            assert_eq!(entry_bytes(name, comment), written, "{name} + {comment}");
+        }
+    }
+
     #[test]
     fn a_card_image_is_ninety_five_percent_of_the_decimal_label() {
         assert_eq!(image_bytes_for_label(16), 15_200_000_000);
@@ -684,6 +724,30 @@ mod tests {
         Ok((u64::from(vol.free_blocks()), result.data_blocks))
     }
 
+    /// Like [`fill`], but every directory and file is created with a
+    /// 79-byte comment (`libpfs3::writer::MAX_COMMENT_BYTES`) — Task 6's
+    /// `entry_bytes` must count these, or an estimate built from
+    /// `add_*_with_comment` runs the real writer out of directory-block room.
+    fn fill_commented(
+        total_blocks: u64,
+        dirs: &[String],
+        files: &[(String, usize)],
+    ) -> Result<(u64, u64), libpfs3::error::Error> {
+        let (dev, result) = format_in_memory(total_blocks);
+        let vol = libpfs3::volume::Volume::from_device(Box::new(dev))?;
+        let mut writer = libpfs3::writer::Writer::open(vol)?;
+        for dir in dirs {
+            writer.set_entry_comment(&[b'c'; 79])?;
+            writer.create_dir(dir)?;
+        }
+        for (path, size) in files {
+            writer.set_entry_comment(&[b'c'; 79])?;
+            writer.write_file(path, &vec![0x5A; *size])?;
+        }
+        let vol = writer.into_volume();
+        Ok((u64::from(vol.free_blocks()), result.data_blocks))
+    }
+
     /// A content profile: `dirs` directories, `per_dir` files each, sized by
     /// `size_of(i)`, names 12 characters — measured into a `ContentMeasure`
     /// exactly as round 2's walker will measure host files.
@@ -763,9 +827,26 @@ mod tests {
         files: &[(String, usize)],
         m: &ContentMeasure,
     ) {
+        assert_estimate_holds_with(label, dirs, files, m, fill);
+    }
+
+    /// [`assert_estimate_holds`], taking the fill function as a parameter —
+    /// Task 6's comment-carrying estimate is checked against [`fill_commented`]
+    /// rather than [`fill`].
+    fn assert_estimate_holds_with(
+        label: &str,
+        dirs: &[String],
+        files: &[(String, usize)],
+        m: &ContentMeasure,
+        fill_fn: impl Fn(
+            u64,
+            &[String],
+            &[(String, usize)],
+        ) -> Result<(u64, u64), libpfs3::error::Error>,
+    ) {
         let bytes = pfs3_fit_bytes(m).expect("within PFS3's range");
         let total_blocks = bytes / PFS3_BLOCK;
-        let (free, data) = fill(total_blocks, dirs, files).unwrap_or_else(|e| {
+        let (free, data) = fill_fn(total_blocks, dirs, files).unwrap_or_else(|e| {
             panic!("{label}: the estimated {bytes} bytes did not hold it: {e}")
         });
         assert!(
@@ -785,7 +866,7 @@ mod tests {
             );
             return;
         }
-        match fill(smaller_total, dirs, files) {
+        match fill_fn(smaller_total, dirs, files) {
             Err(libpfs3::error::Error::DiskFull(msg)) => println!(
                 "{label}: one cylinder smaller ({smaller_total} blocks) the writer refused it: {msg}"
             ),
@@ -867,6 +948,33 @@ mod tests {
     fn large_directories_with_long_names_fit_their_estimate() {
         let (dirs, files, m) = profile_named(10, 1_600, 100, |_| 200);
         assert_estimate_holds("10 large drawers, 100-char names", &dirs, &files, &m);
+    }
+
+    /// Comments live inside the directory entry (`extra_fields_offset(nlen, clen)`,
+    /// `ondisk/direntry.rs:106`): 10 drawers of 1 600 files with 100-character names and
+    /// 79-byte comments must still fit the estimate.
+    #[test]
+    fn large_directories_with_long_names_and_comments_fit_their_estimate() {
+        let mut measure = ContentMeasure::default();
+        let mut dirs = Vec::new();
+        let mut files = Vec::new();
+        for d in 0..10 {
+            let dir = format!("Drawer{d:06}");
+            measure.add_directory_with_comment(&dir, 79);
+            for f in 0..1_600 {
+                let name = format!("{:0>100}", d * 1_600 + f);
+                measure.add_file_with_comment(&name, 79, 200);
+                files.push((format!("{dir}/{name}"), 200));
+            }
+            dirs.push(dir);
+        }
+        assert_estimate_holds_with(
+            "10 large drawers, long names, 79-byte comments",
+            &dirs,
+            &files,
+            &measure,
+            fill_commented,
+        );
     }
 
     /// **ART-311, fixed.** `libpfs3`'s writer makes the index blocks it needs,

@@ -856,19 +856,12 @@ pub fn verify_kickstart_checksum(bytes: &[u8]) -> bool {
 }
 
 /// Calculate IEEE 802.3 CRC32 checksum.
+///
+/// Delegates to [`crate::core::hashing::crc32_ieee`] — ART's one CRC-32
+/// table lives there now; `crc32_empty_and_known_string` below is what
+/// proves the delegation still gives the same answer.
 pub fn compute_crc32(bytes: &[u8]) -> u32 {
-    let mut crc = 0xFFFF_FFFFu32;
-    for &b in bytes {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            if (crc & 1) != 0 {
-                crc = (crc >> 1) ^ 0xEDB8_8320;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    !crc
+    crate::core::hashing::crc32_ieee(bytes)
 }
 
 /// The dump a stored checksum names, if the generated table carries it.

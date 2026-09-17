@@ -171,6 +171,12 @@ pub fn copy_args(image: &Path, slot: Option<usize>, drive: &str, source: &Path) 
         partition_target(image, slot, drive),
         "--recursive".into(),
         "--makedir".into(),
+        // R3 § 7, measured: without `--uaemetadata UaeMetafile` hst-imager
+        // ignores every `.uaem` sidecar beside a source file — the
+        // protection bits, the date and the comment `core/volume/write`
+        // wrote into it are silently lost on this, the fallback, copy path.
+        "--uaemetadata".into(),
+        "UaeMetafile".into(),
     ]
 }
 
@@ -271,21 +277,42 @@ impl VolumeFormatter for HstImager {
         source: &Path,
         sink: &dyn ProgressSink,
     ) -> CoreResult<CopySummary> {
+        self.copy_in_sources(image, slot, drive, &[source.to_path_buf()], sink)
+    }
+
+    /// Card round 2: one `fs copy` per source into the same partition, and
+    /// one listing afterwards — but every refusal first, for **every**
+    /// source, so a second folder that cannot be copied never leaves the
+    /// first one copied beside nothing.
+    fn copy_in_sources(
+        &self,
+        image: &Path,
+        slot: Option<usize>,
+        drive: &str,
+        sources: &[PathBuf],
+        sink: &dyn ProgressSink,
+    ) -> CoreResult<CopySummary> {
+        crate::core::preload::check_source_collisions(sources)?;
         // Refused before anything is launched, never partway (ART-160). An
         // external tool copies the folder as it finds it, so a file the
         // distribution tree had to store as `_AUX` would reach the Amiga
         // under that name. `NativeFormatter` reads the tree's own manifest
         // and puts `AUX` back; this one cannot be told.
-        let names = crate::core::preload::amiga_names::AmigaNames::read(source);
-        if !names.is_empty() {
-            return Err(CoreError::EscapedNamesNeedNativeCopy {
-                pairs: names
+        let mut pairs = Vec::new();
+        for source in sources {
+            let names = crate::core::preload::amiga_names::AmigaNames::read(source);
+            pairs.extend(
+                names
                     .pairs()
-                    .map(|(host, amiga)| (host.to_string(), amiga.to_string()))
-                    .collect(),
-            });
+                    .map(|(host, amiga)| (host.to_string(), amiga.to_string())),
+            );
         }
-        self.run(&copy_args(image, slot, drive, source), sink)?;
+        if !pairs.is_empty() {
+            return Err(CoreError::EscapedNamesNeedNativeCopy { pairs });
+        }
+        for source in sources {
+            self.run(&copy_args(image, slot, drive, source), sink)?;
+        }
         // The count comes from asking the volume, not from reading the copy's
         // own log. A listing that fails leaves the copy standing: the files
         // are there either way, and a number ART could not get is a number,
@@ -306,6 +333,36 @@ mod tests {
 
     fn img() -> PathBuf {
         PathBuf::from("E:").join("cards").join("card.img")
+    }
+
+    /// Card round 2: the escaped-names refusal is asked of **every** source
+    /// before the first `fs copy` runs. The plain folder comes first on
+    /// purpose: a check made inside the copy loop would try to launch the
+    /// missing exe for it and fail with "could not run" instead.
+    #[test]
+    fn every_source_is_checked_for_escaped_names_before_the_first_copy_runs() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-hst-escaped", "sources");
+        let plain = dir.join("plain");
+        let with_record = dir.join("with-record");
+        std::fs::create_dir_all(&plain).unwrap();
+        std::fs::write(plain.join("Plain"), b"x").unwrap();
+        std::fs::create_dir_all(&with_record).unwrap();
+        let names = std::collections::BTreeMap::from([("_AUX".to_string(), "AUX".to_string())]);
+        crate::core::preload::amiga_names::write_record(&with_record, &names).unwrap();
+
+        let tool = HstImager::at(dir.join("nothing-here.exe"));
+        let err = tool
+            .copy_in_sources(
+                &img(),
+                None,
+                "DH0",
+                &[plain, with_record],
+                &crate::core::jobs::NoProgress,
+            )
+            .unwrap_err();
+
+        assert_eq!(err.code(), "ART-ESCAPED-NAME-NEEDS-NATIVE", "{err}");
+        assert!(format!("{err}").contains("_AUX"), "{err}");
     }
 
     /// **ART-160.** A distribution tree that had to escape a name is refused
@@ -342,6 +399,28 @@ mod tests {
         assert!(msg.contains("AUX"), "{msg}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **R2 § 7, item 3.** The record written by content staging
+    /// (`core::preload::amiga_names::write_record`) feeds the very same
+    /// refusal `distribution.json`-escaped names already do: an ART-private
+    /// staging folder that had to rename a node is no more copyable by an
+    /// external tool than a distribution tree is, and for the same reason.
+    #[test]
+    fn a_staged_names_record_is_refused_before_the_tool_runs() {
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-hst-escaped", "record");
+        let names = std::collections::BTreeMap::from([("_AUX".to_string(), "AUX".to_string())]);
+        crate::core::preload::amiga_names::write_record(&dir, &names).unwrap();
+
+        let tool = HstImager::at(dir.join("nothing-here.exe"));
+        let err = tool
+            .copy_in(&img(), None, "DH0", &dir, &crate::core::jobs::NoProgress)
+            .unwrap_err();
+
+        assert_eq!(err.code(), "ART-ESCAPED-NAME-NEEDS-NATIVE");
+        let msg = format!("{err}");
+        assert!(msg.contains("_AUX"), "{msg}");
+        assert!(msg.contains("AUX"), "{msg}");
     }
 
     /// The arguments SD-0 ran, in the order it ran them. Pinned because a
@@ -387,6 +466,18 @@ mod tests {
         assert_eq!(args[2], source.display().to_string(), "source comes first");
         assert!(args[3].ends_with("rdb\\dh0"), "{}", args[3]);
         assert!(args.contains(&"--recursive".to_string()));
+    }
+
+    /// R3 § 7, measured: without `--uaemetadata UaeMetafile` hst-imager
+    /// ignores every `.uaem` — bits, dates and comments silently lost.
+    #[test]
+    fn a_copy_asks_hst_imager_to_read_uaem_sidecars() {
+        let args = copy_args(Path::new(r"E:\x.img"), None, "DH0", Path::new(r"E:\tree"));
+        let at = args
+            .iter()
+            .position(|a| a == "--uaemetadata")
+            .expect("the option is passed");
+        assert_eq!(args.get(at + 1).map(String::as_str), Some("UaeMetafile"));
     }
 
     /// The line a **listing** prints, measured against 1.6.616 on a real card

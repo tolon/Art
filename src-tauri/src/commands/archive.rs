@@ -48,7 +48,7 @@ use crate::error::AppResult;
 /// honest about what it is not showing.
 #[derive(Debug, Clone, Serialize)]
 pub struct ArchiveInfo {
-    /// `"lha"`, `"zip"` or `"7z"` — from the file's own bytes, not its name.
+    /// `"lha"`, `"lzx"`, `"zip"` or `"7z"` — from the file's own bytes, not its name.
     pub format: String,
     pub entry_count: usize,
     pub total_bytes: u64,

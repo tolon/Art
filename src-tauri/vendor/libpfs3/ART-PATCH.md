@@ -1,4 +1,4 @@
-# `libpfs3` 0.1.3+art.11 — ART's vendored copy
+# `libpfs3` 0.1.3+art.12 — ART's vendored copy
 
 This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART for
 [ART-310](../../../docs/ISSUES.md). ART's build uses it through `[patch.crates-io]` in
@@ -9,8 +9,8 @@ This directory is `libpfs3` 0.1.3 as published on crates.io, vendored into ART f
 | Original | `https://static.crates.io/crates/libpfs3/libpfs3-0.1.3.crate`, SHA-256 `02f457ef99a09ddebf56e454c6a25dc3a6860a602c878489f132a4ca3eed4317` |
 | Upstream source | `metaneutrons/pfs3` commit `33e9ff6ba8462cc4e434dfb6e2783d91b7dd5b14`, `crates/libpfs3` (the crate's `.cargo_vcs_info.json`) |
 | Licence | LGPL-3.0-or-later. `LICENSE` is upstream's own file at that commit, unchanged; the full LGPL-3.0 text is `COPYING.LESSER`; the GPL-3.0 text it builds on is ART's `LICENSE` |
-| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so; 2026-09-14, src/format.rs and src/writer.rs for ART-317; 2026-09-14, src/writer.rs, src/error.rs and src/volume.rs for ART-319; 2026-09-15, src/writer.rs for ART-319's disclosed gaps; 2026-09-15, src/writer.rs for ART-322; 2026-09-15, src/writer.rs for the third debt round's final review fix wave; 2026-09-15, src/writer.rs and src/error.rs for ART-323; 2026-09-15, src/ondisk/direntry.rs, src/util.rs, src/writer.rs and src/error.rs for ART-325, ART-326, ART-327 and the scoped re-review's items 4 and 5; 2026-09-15, src/dir.rs, src/ondisk/direntry.rs, src/ondisk/rootblock.rs, src/volume.rs, src/writer.rs and src/error.rs for the scoped re-review's follow-ups 1 and 6 (ART-324, ART-330) |
-| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.11`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
+| Modified | 2026-09-13 and 2026-09-14, by ART: `src/format.rs`, `src/writer.rs`, `src/error.rs`, `src/ondisk/mod.rs` and `src/volume.rs`; each file's header says so; 2026-09-14, src/format.rs and src/writer.rs for ART-317; 2026-09-14, src/writer.rs, src/error.rs and src/volume.rs for ART-319; 2026-09-15, src/writer.rs for ART-319's disclosed gaps; 2026-09-15, src/writer.rs for ART-322; 2026-09-15, src/writer.rs for the third debt round's final review fix wave; 2026-09-15, src/writer.rs and src/error.rs for ART-323; 2026-09-15, src/ondisk/direntry.rs, src/util.rs, src/writer.rs and src/error.rs for ART-325, ART-326, ART-327 and the scoped re-review's items 4 and 5; 2026-09-15, src/dir.rs, src/ondisk/direntry.rs, src/ondisk/rootblock.rs, src/volume.rs, src/writer.rs and src/error.rs for the scoped re-review's follow-ups 1 and 6 (ART-324, ART-330); 2026-09-17, src/writer.rs and src/error.rs for card round 2 (ART-335) |
+| Carried | `src/`, `README.md`, `Cargo.toml` (from `Cargo.toml.orig`: version `0.1.3+art.12`, `[dev-dependencies]` removed), `LICENSE`, `COPYING.LESSER` |
 | Not carried | `tests/`: `GPL-3.0-only` headers, 9.3 MB of fixtures, and a dev-dependency (`sevenz-rust` 0.6) with RUSTSEC-2026-0245 and RUSTSEC-2026-0246. ART's own tests prove the patch (`src-tauri/src/core/preload/native.rs`) |
 
 ## Changes against 0.1.3
@@ -442,6 +442,31 @@ M3, M5; report `fix-wave-report.md` beside it):
       with `MODE_DIR_EXTENSION`. No code changed, so the version stays `0.1.3+art.11`.
     - ART's tests and their mutations are in `docs/ISSUES.md` under ART-324 and ART-330.
 
+**2026-09-17, card round 2** ([ART-335](../../../docs/ISSUES.md); plan
+`docs/superpowers/plans/2026-09-16-one-button-card-round-2.md`, Task 5; report
+`.superpowers/sdd/2026-09-16-one-button-card-round-2/task-5-report.md`):
+
+27. **A new directory entry carries a comment (`src/writer.rs`, `src/error.rs`).** pfs3aio read at
+    `tonioni/pfs3aio` `211f7f0`, not run. `Writer::set_entry_comment(&[u8])` sets the comment of each **new**
+    entry `build_dir_entry` makes — `write_file_in`, `create_dir_in`, `create_softlink_in` — and, like
+    `set_entry_date`, stays until changed; empty is none. The bytes are stored as given, Latin-1 as AmigaDOS
+    stores them. The entry is laid out where pfs3aio's `COMMENT(de)` finds it (`blocks.h:596`): the length byte
+    right after the name, then the bytes (`AddComment`, `directory.c:2221-2223`), and the extra fields at
+    `(20 + nlength + comment length) & 0xfffe` (`:2227-2228`) through `extra_fields_offset`, as item 25
+    already reads them. `MAX_COMMENT_BYTES` is 79: `AddComment` refuses more than `CMSIZE` (80,
+    `blocks.h:518`) characters (`directory.c:2200`), but `GetFIB` copies the comment with its length byte
+    into `fib_Comment`, `CMSIZE` bytes in all (`:1035`), so 79 is what an AmigaDOS program reads back whole —
+    WinUAE's and ART's `uaem::MAX_COMMENT_LEN` agree. A longer comment is refused `Error::CommentTooLong
+    { len, max }` and the comment set before stays. The largest entry, a 107-byte name and a 79-byte comment
+    plus the extra fields, still fits the one-byte `next`. With no comment set, every entry is 0.1.3's byte
+    for byte, so `rename_in`'s moved entry (item 25, which copies the source's own comment),
+    `update_dir_entry_size` and every entry written before this change are unchanged. Not done: a comment on
+    an **existing** entry (pfs3aio's `AddComment`, which may grow the entry and move it) — ART writes a
+    comment only when it creates the entry.
+    - ART's tests: `core::preload::native::tests::libpfs3_refuses_a_comment_longer_than_the_amiga_stores`
+      (80 refused with `len: 80, max: 79`, 79 accepted and read back whole through the crate's reader) and
+      `copy_in_carries_the_date_and_comment_out_of_the_uaem_sidecars`; the mutations are in the report.
+
 ## Re-vendoring
 
 After replacing this directory, run `cargo update -p libpfs3 --precise <version>` in `src-tauri`: Cargo
@@ -757,10 +782,10 @@ index 0ed1380..a142a06 100644
              return Err(Error::NotADirectory);
          }
 diff --git a/src/error.rs b/src/error.rs
-index 48823c7..4735e1e 100644
+index 48823c7..4ce5c34 100644
 --- a/src/error.rs
 +++ b/src/error.rs
-@@ -1,4 +1,21 @@
+@@ -1,4 +1,23 @@
  //! Error types for libpfs3.
 +//!
 +//! Modified by ART on 2026-09-14 (ART-314): the `NameTooLong` variant, for a
@@ -777,12 +802,14 @@ index 48823c7..4735e1e 100644
 +//! Modified by ART on 2026-09-15 (the scoped re-review's follow-ups 1 and 6,
 +//! ART-324 and ART-330): the `FileTooLarge` variant, a file the volume cannot
 +//! record the size of, and the `DamagedDirectory` variant, a directory walk
-+//! stopped by a malformed entry. `ART-PATCH.md` in this crate's root says what
-+//! and why.
++//! stopped by a malformed entry.
++//! Modified by ART on 2026-09-17 (card round 2, ART-335): the `CommentTooLong`
++//! variant, a comment longer than an AmigaDOS entry holds. `ART-PATCH.md` in
++//! this crate's root says what and why.
  
  /// Result type alias using the PFS3 [`Error`].
  pub type Result<T> = std::result::Result<T, Error>;
-@@ -30,9 +47,120 @@ pub enum Error {
+@@ -30,9 +49,127 @@ pub enum Error {
      #[error("already exists: {0}")]
      AlreadyExists(String),
  
@@ -899,6 +926,13 @@ index 48823c7..4735e1e 100644
 +         reopen it (and check it) before writing to it again"
 +    )]
 +    CommitFailed,
++
++    /// ART (card round 2, ART-335): `Writer::set_entry_comment` was given
++    /// more than `writer::MAX_COMMENT_BYTES` bytes — pfs3aio's `CMSIZE` 80 as
++    /// a BSTR (`blocks.h:518`, `directory.c:1035,2200`, `tonioni/pfs3aio`
++    /// `211f7f0`). Nothing was written.
++    #[error("a comment of {len} bytes is longer than the {max} an AmigaDOS entry holds")]
++    CommentTooLong { len: usize, max: usize },
 +
      #[error("corrupt filesystem: {0}")]
      Corrupt(String),
@@ -1785,10 +1819,10 @@ index 757c2f9..9ea9448 100644
                      result.push(entry);
                  }
 diff --git a/src/writer.rs b/src/writer.rs
-index fc692d6..ecb9735 100644
+index fc692d6..27f8aec 100644
 --- a/src/writer.rs
 +++ b/src/writer.rs
-@@ -6,6 +6,47 @@
+@@ -6,11 +6,62 @@
  //! - Anode allocation and chain building
  //! - Directory entry creation and removal
  //! - Rootblock update
@@ -1832,11 +1866,26 @@ index fc692d6..ecb9735 100644
 +//! is not largefile, and `fsizex` is written and patched only on one that is;
 +//! `rename_in` and `delete_in` look their names up through the writer's own
 +//! bounded walk, whose rule `ondisk::entry_bounds` now shares with the reader;
++//! Modified 2026-09-17 by ART for card round 2 (ART-335): `set_entry_comment`,
++//! the comment each new directory entry is written with, in pfs3aio's layout;
 +//! `ART-PATCH.md` in this crate's root says what and why.
  
  use crate::error::{Error, Result};
  use crate::ondisk::*;
-@@ -28,8 +69,41 @@ pub struct Writer {
+ use crate::volume::Volume;
+ 
++/// ART (card round 2, ART-335): at most this many comment bytes — pfs3aio's
++/// `CMSIZE` 80 as a BSTR, WinUAE's and `uaem::MAX_COMMENT_LEN`'s 79.
++/// pfs3aio's `AddComment` refuses more than `CMSIZE` characters
++/// (`directory.c:2200`), but `GetFIB` copies the comment with its length
++/// byte into `fib_Comment`, `CMSIZE` bytes in all (`directory.c:1035`), so 79
++/// is what an AmigaDOS program reads back whole (`tonioni/pfs3aio` `211f7f0`).
++pub const MAX_COMMENT_BYTES: usize = 79;
++
+ /// Writable PFS3 volume — file/directory creation, deletion, and formatting.
+ pub struct Writer {
+     /// The underlying read-only volume (also used for writes to disk).
+@@ -28,8 +79,45 @@ pub struct Writer {
      // Mutable state
      res_bitmap: Vec<u32>,
      data_bm: Vec<(u32, Vec<u32>)>, // (blk_num, longs)
@@ -1864,6 +1913,10 @@ index fc692d6..ecb9735 100644
 +    /// ART-317, whose caller sets local time before each operation. A deldir
 +    /// entry's own date is not this: it is copied from the deleted entry.
 +    entry_date: Option<(u16, u16, u16)>,
++    /// ART (card round 2, ART-335): the comment of each new directory entry,
++    /// Latin-1 bytes as AmigaDOS stores them, at most [`MAX_COMMENT_BYTES`];
++    /// empty is none, as 0.1.3 wrote every entry.
++    entry_comment: Vec<u8>,
 +    /// ART-319: set when a commit itself (`update_rootblock`, or
 +    /// `set_volume_name`'s own direct write) failed part-way — the device may
 +    /// already be half-written, since a pending write lands in place, not
@@ -1879,7 +1932,7 @@ index fc692d6..ecb9735 100644
  }
  
  impl Writer {
-@@ -37,6 +111,19 @@ impl Writer {
+@@ -37,6 +125,19 @@ impl Writer {
      pub fn open(vol: Volume) -> Result<Self> {
          let rb = &vol.rootblock;
          let rbs = rb.reserved_blksize as u32;
@@ -1899,7 +1952,7 @@ index fc692d6..ecb9735 100644
          let rescluster = rbs / vol.block_size();
          let firstreserved = rb.firstreserved;
          let numreserved = (rb.lastreserved - firstreserved + 1) / rescluster;
-@@ -57,6 +144,11 @@ impl Writer {
+@@ -57,6 +158,12 @@ impl Writer {
              res_bitmap: Vec::new(),
              data_bm: Vec::new(),
              pending_writes: Vec::new(),
@@ -1907,11 +1960,12 @@ index fc692d6..ecb9735 100644
 +            anode_roving: 0,
 +            rext_dirty: false,
 +            entry_date: None,
++            entry_comment: Vec::new(),
 +            poisoned: false,
              vol,
          };
          w.load_reserved_bitmap()?;
-@@ -64,38 +156,185 @@ impl Writer {
+@@ -64,38 +171,205 @@ impl Writer {
          Ok(w)
      }
  
@@ -1936,6 +1990,26 @@ index fc692d6..ecb9735 100644
 +    /// entry's own date is not this: it is copied from the deleted entry.
 +    pub fn set_entry_date(&mut self, date: Option<(u16, u16, u16)>) {
 +        self.entry_date = date;
++    }
++
++    /// ART (card round 2, ART-335): the comment of each **new** directory entry,
++    /// Latin-1 bytes as AmigaDOS stores them; empty is none, as 0.1.3 wrote.
++    /// Like `set_entry_date`, it stays until changed. A comment longer than
++    /// [`MAX_COMMENT_BYTES`] is refused and the one set before stays.
++    /// Written where pfs3aio's `COMMENT(de)` finds it — the length byte right
++    /// after the name, then the bytes (`blocks.h:596`; `AddComment`,
++    /// `directory.c:2221-2223`) — with the extra fields after it at
++    /// `(20 + nlength + comment length) & 0xfffe` (`:2227-2228`; `struct direntry`
++    /// is 20 bytes, `blocks.h:327-340`).
++    pub fn set_entry_comment(&mut self, comment: &[u8]) -> Result<()> {
++        if comment.len() > MAX_COMMENT_BYTES {
++            return Err(Error::CommentTooLong {
++                len: comment.len(),
++                max: MAX_COMMENT_BYTES,
++            });
++        }
++        self.entry_comment = comment.to_vec();
++        Ok(())
 +    }
 +
 +    fn entry_datestamp(&self) -> (u16, u16, u16) {
@@ -2098,7 +2172,7 @@ index fc692d6..ecb9735 100644
          let name_bytes = name.as_bytes();
          let len = name_bytes.len().min(30);
          self.vol.rootblock.diskname = name[..len].to_string();
-@@ -114,24 +353,55 @@ impl Writer {
+@@ -114,24 +388,55 @@ impl Writer {
          cluster[RB_OFF_DISKNAME + 1..RB_OFF_DISKNAME + 1 + len].copy_from_slice(&name_bytes[..len]);
          let ds = self.next_datestamp();
          put_u32(&mut cluster, RB_OFF_DATESTAMP, ds);
@@ -2164,7 +2238,7 @@ index fc692d6..ecb9735 100644
          }
          self.write_file_in_no_commit(parent_anode, name, data)?;
          self.update_rootblock()
-@@ -144,6 +414,8 @@ impl Writer {
+@@ -144,6 +449,8 @@ impl Writer {
          name: &str,
          data: &[u8],
      ) -> Result<()> {
@@ -2173,7 +2247,7 @@ index fc692d6..ecb9735 100644
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
  
-@@ -165,6 +437,12 @@ impl Writer {
+@@ -165,6 +472,12 @@ impl Writer {
  
      /// Create a directory in a parent identified by anode. Returns the new dir's anode number.
      pub fn create_dir_in(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -2186,7 +2260,7 @@ index fc692d6..ecb9735 100644
          let dir_blk = self.alloc_reserved_block()?;
          let anodenr = self.alloc_anode(1, dir_blk, 0)?;
  
-@@ -181,6 +459,10 @@ impl Writer {
+@@ -181,6 +494,10 @@ impl Writer {
  
      /// Create a softlink in a parent directory.
      pub fn create_softlink(&mut self, path: &str, target: &str) -> Result<()> {
@@ -2197,7 +2271,7 @@ index fc692d6..ecb9735 100644
          let (parent_anode, name) = self.split_path(path)?;
          self.create_softlink_in(parent_anode, &name, target)
      }
-@@ -192,6 +474,18 @@ impl Writer {
+@@ -192,6 +509,18 @@ impl Writer {
          name: &str,
          target: &str,
      ) -> Result<()> {
@@ -2216,7 +2290,7 @@ index fc692d6..ecb9735 100644
          let data = target.as_bytes();
          let bs = self.vol.block_size() as usize;
          let num_blocks = data.len().div_ceil(bs).max(1);
-@@ -219,14 +513,31 @@ impl Writer {
+@@ -219,14 +548,31 @@ impl Writer {
      }
  
      /// Create a hardlink in a parent directory.
@@ -2251,7 +2325,7 @@ index fc692d6..ecb9735 100644
          // Read the deldir entry
          let rext = self
              .vol
-@@ -256,7 +567,9 @@ impl Writer {
+@@ -256,7 +602,9 @@ impl Writer {
          let blk = deldirblocks[block_idx];
          let data = self.read_reserved_raw(blk)?;
          let off = DELDIR_HEADER_SIZE + slot_idx * DELDIR_ENTRY_SIZE;
@@ -2262,7 +2336,7 @@ index fc692d6..ecb9735 100644
              .ok_or_else(|| Error::NotFound("empty deldir slot".into()))?;
  
          // Check destination doesn't already exist
-@@ -266,6 +579,23 @@ impl Writer {
+@@ -266,6 +614,23 @@ impl Writer {
  
          let old_anode = entry.anode;
  
@@ -2286,7 +2360,7 @@ index fc692d6..ecb9735 100644
          // Read file data via the anode chain (still intact)
          let file_data = self.vol.read_file_data(old_anode, entry.file_size())?;
  
-@@ -290,24 +620,49 @@ impl Writer {
+@@ -290,24 +655,49 @@ impl Writer {
      /// Force-remove a directory entry without touching anodes or data blocks.
      /// Used by check --repair for entries with broken anode chains.
      pub fn force_remove_entry(&mut self, parent_anode: u32, name: &str) -> Result<()> {
@@ -2337,7 +2411,7 @@ index fc692d6..ecb9735 100644
      pub fn overwrite_file_in(
          &mut self,
          parent_anode: u32,
-@@ -315,114 +670,82 @@ impl Writer {
+@@ -315,114 +705,82 @@ impl Writer {
          file_anode: u32,
          data: &[u8],
      ) -> Result<()> {
@@ -2509,7 +2583,7 @@ index fc692d6..ecb9735 100644
      }
  
      /// Append a sub-chain to the tail of an existing anode chain.
-@@ -464,11 +787,28 @@ impl Writer {
+@@ -464,11 +822,28 @@ impl Writer {
  
      /// Clear a single anode slot (set all 3 fields to 0).
      fn clear_single_anode(&mut self, anodenr: u32) -> Result<()> {
@@ -2539,7 +2613,7 @@ index fc692d6..ecb9735 100644
      fn find_dir_entry(&mut self, dir_anode: u32, name: &str) -> Result<(u32, Vec<u8>, usize)> {
          let chain =
              self.vol
-@@ -478,17 +818,14 @@ impl Writer {
+@@ -478,17 +853,14 @@ impl Writer {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
                  let data = self.read_reserved_raw(blk)?;
@@ -2562,7 +2636,7 @@ index fc692d6..ecb9735 100644
                      if crate::util::name_eq_ci(&ename, name) {
                          return Ok((blk, data, pos));
                      }
-@@ -499,73 +836,132 @@ impl Writer {
+@@ -499,73 +871,132 @@ impl Writer {
          Err(Error::NotFound(name.to_string()))
      }
  
@@ -2753,7 +2827,7 @@ index fc692d6..ecb9735 100644
          put_u16(&mut data, pos + 10, cday);
          put_u16(&mut data, pos + 12, cmin);
          put_u16(&mut data, pos + 14, ctick);
-@@ -580,6 +976,15 @@ impl Writer {
+@@ -580,6 +1011,15 @@ impl Writer {
          dir_anode: u32,
          name: &str,
          protection: u8,
@@ -2769,7 +2843,7 @@ index fc692d6..ecb9735 100644
      ) -> Result<()> {
          let (blk, mut data, pos) = self.find_dir_entry(dir_anode, name)?;
          data[pos + 16] = protection;
-@@ -588,6 +993,47 @@ impl Writer {
+@@ -588,6 +1028,47 @@ impl Writer {
          self.update_rootblock()
      }
  
@@ -2817,7 +2891,7 @@ index fc692d6..ecb9735 100644
      pub fn rename_in(
          &mut self,
          src_parent: u32,
-@@ -595,44 +1041,309 @@ impl Writer {
+@@ -595,44 +1076,309 @@ impl Writer {
          dst_parent: u32,
          dst_name: &str,
      ) -> Result<()> {
@@ -3156,7 +3230,7 @@ index fc692d6..ecb9735 100644
  
          if target.is_dir() {
              let sub = self.vol.list_dir_by_anode(target.anode)?;
-@@ -642,96 +1353,237 @@ impl Writer {
+@@ -642,96 +1388,237 @@ impl Writer {
              self.free_anode_chain_reserved(target.anode)?;
              self.clear_anode_chain(target.anode)?;
          } else {
@@ -3381,16 +3455,16 @@ index fc692d6..ecb9735 100644
 +            return Err(Error::Corrupt(format!(
 +                "deldir block {dd_blk} is not a deldir block"
 +            )));
++        }
++        let off = DELDIR_HEADER_SIZE + (slot % DELENTRIES_PER_BLOCK) * DELDIR_ENTRY_SIZE;
++        let evicted = u32_at(&data, off);
++        if evicted != 0 {
++            self.clear_anode_chain(evicted)?; // anodes only (`directory.c:4510-4518`)
          }
 -        let mut block_data = data;
 -        self.write_deldir_entry(&mut block_data, off, entry);
 -        let _ = self.write_reserved(blk, &block_data);
 -        true
-+        let off = DELDIR_HEADER_SIZE + (slot % DELENTRIES_PER_BLOCK) * DELDIR_ENTRY_SIZE;
-+        let evicted = u32_at(&data, off);
-+        if evicted != 0 {
-+            self.clear_anode_chain(evicted)?; // anodes only (`directory.c:4510-4518`)
-+        }
 +        self.write_deldir_entry(&mut data, off, entry);
 +        // The deldir block's date and rext.dd_creation* are now (`directory.c:4556-4560`).
 +        let (cday, cmin, ctick) = self.entry_datestamp();
@@ -3459,7 +3533,7 @@ index fc692d6..ecb9735 100644
      }
  
      // ---- Data bitmap ----
-@@ -739,9 +1591,11 @@ impl Writer {
+@@ -739,9 +1626,11 @@ impl Writer {
      fn load_data_bitmap(&mut self) -> Result<()> {
          let no_bmb = {
              let bits_per_bmb = self.index_per_block * 32;
@@ -3473,7 +3547,7 @@ index fc692d6..ecb9735 100644
          };
          for seq in 0..no_bmb {
              if let Some(blk) = self.get_bitmap_block_nr(seq)? {
-@@ -778,7 +1632,10 @@ impl Writer {
+@@ -778,7 +1667,10 @@ impl Writer {
                              .ok_or_else(|| {
                                  Error::Corrupt("block number overflow in bitmap".into())
                              })?;
@@ -3485,7 +3559,7 @@ index fc692d6..ecb9735 100644
                              continue; // skip out-of-range bitmap bits
                          }
                          longs[li] &= !(0x8000_0000 >> bit);
-@@ -825,7 +1682,9 @@ impl Writer {
+@@ -825,7 +1717,9 @@ impl Writer {
      }
  
      fn free_data_block(&mut self, blk: u32) -> Result<()> {
@@ -3496,7 +3570,7 @@ index fc692d6..ecb9735 100644
              return Ok(());
          }
          let rel = blk - self.bitmapstart;
-@@ -896,55 +1755,106 @@ impl Writer {
+@@ -896,55 +1790,106 @@ impl Writer {
  
      // ---- Anode allocation ----
  
@@ -3607,10 +3681,10 @@ index fc692d6..ecb9735 100644
 +                // No free anode in this block (pfs3aio clears its bit, `anodes.c:414-416`).
 +                self.anode_block_full[seqnr as usize] = true;
 +                seqnr += 1;
-+            }
+             }
 +            if start == 0 {
 +                return Err(Error::DiskFull("no free anode slots".into()));
-             }
++            }
 +            start = 0;
          }
 -        Err(Error::DiskFull("no free anode slots".into()))
@@ -3640,7 +3714,7 @@ index fc692d6..ecb9735 100644
      }
  
      /// Allocate a new anode block and register it in the index.
-@@ -964,43 +1874,62 @@ impl Writer {
+@@ -964,43 +1909,62 @@ impl Writer {
          let idx_off = seqnr % ipb;
  
          if self.vol.rootblock.is_large() {
@@ -3717,7 +3791,7 @@ index fc692d6..ecb9735 100644
                  put_u32(&mut sdata, soff, new_idx);
                  put_u32(&mut sdata, 4, self.datestamp);
                  self.write_reserved(super_blk, &sdata)?;
-@@ -1012,8 +1941,14 @@ impl Writer {
+@@ -1012,8 +1976,14 @@ impl Writer {
                  self.write_reserved(idx_blk, &idata)?;
              }
          } else {
@@ -3734,7 +3808,7 @@ index fc692d6..ecb9735 100644
                  .vol
                  .rootblock
                  .indexblocks
-@@ -1021,7 +1956,18 @@ impl Writer {
+@@ -1021,7 +1991,18 @@ impl Writer {
                  .copied()
                  .unwrap_or(0);
              if idx_blk == 0 {
@@ -3754,7 +3828,7 @@ index fc692d6..ecb9735 100644
              }
              let mut idata = self.read_reserved_raw(idx_blk)?;
              let entry_off = INDEX_BLOCK_HEADER_SIZE + idx_off as usize * 4;
-@@ -1036,18 +1982,7 @@ impl Writer {
+@@ -1036,18 +2017,7 @@ impl Writer {
      }
  
      fn create_anode_chain(&mut self, blocks: &[u32]) -> Result<u32> {
@@ -3774,7 +3848,7 @@ index fc692d6..ecb9735 100644
          // Allocate in reverse so we can set next pointers
          let mut next_nr = 0u32;
          for &(start, count) in clusters.iter().rev() {
-@@ -1092,11 +2027,20 @@ impl Writer {
+@@ -1092,11 +2062,20 @@ impl Writer {
          protection: u8,
      ) -> Result<()> {
          let entry_bytes = self.build_dir_entry(name, entry_type, anode, fsize, protection);
@@ -3795,7 +3869,7 @@ index fc692d6..ecb9735 100644
          for an in &chain {
              for i in 0..an.clustersize {
                  let blk = an.blocknr + i;
-@@ -1104,16 +2048,18 @@ impl Writer {
+@@ -1104,16 +2083,18 @@ impl Writer {
                  if u16::from_be_bytes(data[0..2].try_into().unwrap()) != DBLKID {
                      continue;
                  }
@@ -3820,7 +3894,7 @@ index fc692d6..ecb9735 100644
                      if pos + entry_bytes.len() < self.resblocksize as usize {
                          data[pos + entry_bytes.len()] = 0;
                      }
-@@ -1123,28 +2069,33 @@ impl Writer {
+@@ -1123,28 +2104,33 @@ impl Writer {
                  }
              }
          }
@@ -3864,7 +3938,7 @@ index fc692d6..ecb9735 100644
          put_u32(&mut data, 4, self.next_datestamp());
          self.write_reserved(blk, &data)?;
          Ok(())
-@@ -1160,19 +2111,35 @@ impl Writer {
+@@ -1160,36 +2146,50 @@ impl Writer {
      ) -> Vec<u8> {
          let name_bytes = name.as_bytes();
          let nlen = name_bytes.len().min(107);
@@ -3898,7 +3972,12 @@ index fc692d6..ecb9735 100644
 +            ..ExtraFields::default()
 +        }
 +        .encode();
-+        let fields = extra_fields_offset(nlen, 0);
++        // ART (card round 2, ART-335): the comment set by `set_entry_comment`,
++        // at most 79 bytes, so the entry (at most 20 + 107 + 79 + the extra
++        // fields) still fits its one-byte `next`. With no comment this is
++        // 0.1.3's entry byte for byte.
++        let clen = self.entry_comment.len();
++        let fields = extra_fields_offset(nlen, clen);
 +        let mut entry = vec![0u8; fields];
 +        entry.extend_from_slice(&extra);
 +        entry[0] = entry.len() as u8;
@@ -3910,10 +3989,10 @@ index fc692d6..ecb9735 100644
          put_u16(&mut entry, 10, cday);
          put_u16(&mut entry, 12, cmin);
          put_u16(&mut entry, 14, ctick);
-@@ -1180,16 +2147,6 @@ impl Writer {
+         entry[16] = protection;
          entry[17] = nlen as u8;
          entry[18..18 + nlen].copy_from_slice(&name_bytes[..nlen]);
-         entry[18 + nlen] = 0; // comment length
+-        entry[18 + nlen] = 0; // comment length
 -        let ef_off = if (18 + nlen + 1) & 1 != 0 {
 -            18 + nlen + 2
 -        } else {
@@ -3924,10 +4003,14 @@ index fc692d6..ecb9735 100644
 -        if has_fsizex {
 -            put_u16(&mut entry, ef_off + 2, fsizex);
 -        }
++        // `19 + nlen + clen <= (20 + nlen + clen) & !1` always holds, so the
++        // comment ends before the extra fields start.
++        entry[18 + nlen] = clen as u8; // comment length
++        entry[19 + nlen..19 + nlen + clen].copy_from_slice(&self.entry_comment);
          entry
      }
  
-@@ -1200,11 +2157,52 @@ impl Writer {
+@@ -1200,11 +2200,52 @@ impl Writer {
  
      // ---- Rootblock update ----
  
@@ -3981,7 +4064,7 @@ index fc692d6..ecb9735 100644
          let bs = self.vol.block_size() as usize;
          let rblkcluster = self.vol.rootblock.rblkcluster as u32;
          let cluster_size = rblkcluster as usize * bs;
-@@ -1236,6 +2234,25 @@ impl Writer {
+@@ -1236,6 +2277,25 @@ impl Writer {
              }
          }
  
@@ -4007,7 +4090,7 @@ index fc692d6..ecb9735 100644
          self.vol
              .dev
              .write_blocks(self.firstreserved as u64, rblkcluster, &cluster)?;
-@@ -1286,10 +2303,44 @@ impl Writer {
+@@ -1286,10 +2346,44 @@ impl Writer {
          Ok(())
      }
  
@@ -4055,7 +4138,7 @@ index fc692d6..ecb9735 100644
      }
  
      fn get_bitmap_block_nr(&mut self, seqnr: u32) -> Result<Option<u32>> {
-@@ -1316,3 +2367,21 @@ impl Writer {
+@@ -1316,3 +2410,21 @@ impl Writer {
          Ok((parent, filename))
      }
  }

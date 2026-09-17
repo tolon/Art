@@ -413,6 +413,58 @@ pub enum CoreError {
     )]
     EscapedNamesNeedNativeCopy { pairs: Vec<(String, String)> },
 
+    /// Two sources for one card partition put the same name at its top —
+    /// the same name to AmigaDOS, which compares case-insensitively
+    /// (`core::preload::amiga_fold`). Copying both would merge one into the
+    /// other or replace it; neither is something to do silently (card round 2).
+    #[error(
+        "'{first}' and '{second}' both put '{name}' at the top of this partition. Rename one, \
+         or give them different partitions."
+    )]
+    SourceNamesCollide {
+        name: String,
+        first: String,
+        second: String,
+    },
+
+    /// Two Amiga names inside one source that Windows would stage under the
+    /// same escaped host name (`windows_safe_name`), so neither could be
+    /// copied as itself (card round 2).
+    ///
+    /// `source_path`, not `source`: `thiserror` takes a field called `source`
+    /// to be the error's cause and requires it to be an error type.
+    ///
+    /// `Box<str>` rather than `String`: four `String`s made this the largest
+    /// variant and grew every `CoreError` by a word (clippy's
+    /// `result_large_err` on `gameindex::igame`); the text is never edited.
+    #[error(
+        "'{first}' and '{second}' in '{source_path}' would both be staged as '{host}' on Windows, so \
+         neither could be copied as itself. Rename one on the Amiga side first."
+    )]
+    EscapedNamesCollide {
+        source_path: Box<str>,
+        first: Box<str>,
+        second: Box<str>,
+        host: Box<str>,
+    },
+
+    /// One partition holds both names ART's own PFS3 writer cannot write
+    /// (non-ASCII, ART-113) and escaped names only ART's own writer can put
+    /// back (ART-160) — so neither writer can copy the whole partition, and
+    /// the refusal names both lists (card round 2).
+    #[error(
+        "{}",
+        names_no_writer_message(non_ascii, *non_ascii_more, escaped, *escaped_more)
+    )]
+    NamesNoWriterCanCopy {
+        non_ascii: Vec<String>,
+        /// Non-ASCII names past those listed.
+        non_ascii_more: usize,
+        escaped: Vec<String>,
+        /// Escaped names past those listed.
+        escaped_more: usize,
+    },
+
     /// The tree's own `S/Startup-Sequence` never runs `S:User-Startup`, so the
     /// block ART would merge there could not execute. Writing it and saying
     /// "installed" would be a confident wrong sentence (spec §7).
@@ -564,6 +616,30 @@ fn non_ascii_pfs3_message(paths: &[String], more: usize) -> String {
     msg
 }
 
+/// The sentence for [`CoreError::NamesNoWriterCanCopy`].
+fn names_no_writer_message(
+    non_ascii: &[String],
+    non_ascii_more: usize,
+    escaped: &[String],
+    escaped_more: usize,
+) -> String {
+    let listed = |names: &[String], more: usize| {
+        let mut text = names.join(", ");
+        if more > 0 {
+            text.push_str(&format!(", and {more} more"));
+        }
+        text
+    };
+    format!(
+        "This partition holds names the native PFS3 writer cannot write, because they are not \
+         ASCII ({}; ART-113), and names Windows forced ART to change, which hst-imager cannot \
+         put back ({}; ART-160) — so neither writer can copy all of it. Rename the first set to \
+         ASCII, or put the sources holding them on a different partition from the second.",
+        listed(non_ascii, non_ascii_more),
+        listed(escaped, escaped_more)
+    )
+}
+
 /// The sentence for [`CoreError::Pfs3NamesTooLong`].
 fn pfs3_names_too_long_message(paths: &[String], more: usize, max_bytes: usize) -> String {
     let mut msg = format!(
@@ -628,6 +704,9 @@ impl CoreError {
             Self::NonAsciiPfs3Names { .. } => "ART-PFS3-NON-ASCII-NAME",
             Self::Pfs3NamesTooLong { .. } => "ART-PFS3-NAME-TOO-LONG",
             Self::EscapedNamesNeedNativeCopy { .. } => "ART-ESCAPED-NAME-NEEDS-NATIVE",
+            Self::SourceNamesCollide { .. } => "ART-CARD-SOURCE-COLLISION",
+            Self::EscapedNamesCollide { .. } => "ART-ESCAPED-NAME-COLLISION",
+            Self::NamesNoWriterCanCopy { .. } => "ART-NAMES-NO-WRITER",
             Self::FirstBootHookUnreachable { .. } => "ART-FIRSTBOOT-HOOK-UNREACHABLE",
             Self::FirstBootNotATree { .. } => "ART-FIRSTBOOT-NOT-A-TREE",
             Self::FirstBootNeedsCommand { .. } => "ART-FIRSTBOOT-NEEDS-COMMAND",
@@ -767,6 +846,23 @@ mod tests {
             },
             CoreError::EscapedNamesNeedNativeCopy {
                 pairs: vec![("Storage/DOSDrivers/_AUX".into(), "AUX".into())],
+            },
+            CoreError::SourceNamesCollide {
+                name: "Demos".into(),
+                first: "a".into(),
+                second: "b".into(),
+            },
+            CoreError::EscapedNamesCollide {
+                source_path: "x.lha".into(),
+                first: "AUX".into(),
+                second: "_AUX".into(),
+                host: "_AUX".into(),
+            },
+            CoreError::NamesNoWriterCanCopy {
+                non_ascii: vec!["français".into()],
+                non_ascii_more: 0,
+                escaped: vec!["AUX".into()],
+                escaped_more: 0,
             },
             CoreError::FirstBootHookUnreachable {
                 file: "S/Startup-Sequence".into(),

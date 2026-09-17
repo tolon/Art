@@ -206,6 +206,55 @@ and a listing comes back short — ART-330's confident wrong sentence, from anot
 the block by name in both walks, as `Error::DamagedDirectory` does for a malformed entry, and give the fixture's late
 failure another shape.
 
+**ART-339** 🔵 **`core/card` and `core/preload` import each other, against CLAUDE.md's inward-layering rule** —
+*found 2026-09-17 by the pre-flight scan of card round 2's plan (ledger § 3, ruling R6), by reading; accepted for
+that round on `art-card-round-2`, unmerged*
+`src-tauri/src/core/preload/embed.rs` (`use crate::core::card::{is_dynamic_vhd, read_card}`),
+`src-tauri/src/core/card/content.rs` (`use crate::core::preload::{amiga_fold, first_collision}`,
+`preload::amiga_names::{write_record, AMIGA_NAMES_RECORD}`, `preload::native::…`) · CLAUDE.md: "a lower-level
+`core/` module must not import a higher-level one". `core/preload` already imported `core/card`'s card reader before
+round 2; round 2's `core/card/content.rs` imports `core/preload`'s name fold, collision rule, names record and native
+copy helpers, so the two modules now depend on each other. The round 2 plan's Global Constraints said "`core/preload`
+does not import `core/card`" — false on the day it was written; corrected in place (dated 2026-09-17). **Nothing is
+broken by it today:** `embed.rs` uses only `card/mod.rs`'s low-level readers, and nothing below imports
+`content.rs`. The cost is the one the rule exists for — neither module can be lifted into a crate alone.
+**Fix direction:** move `content.rs` out of `core/card` (for example to `core/cardcontent/`), or move the card
+reader `embed.rs` needs below both modules.
+
+**ART-340** 🟡 **A card source refused after unpacking began leaves its staging folder part-filled, and nothing owns
+removing it yet** — *found 2026-09-16 by card round 2's Task 9 (ledger), triaged by the final whole-branch review
+(2026-09-17) as acceptable for a core round and owed by round 3; on `art-card-round-2`, unmerged*
+`src-tauri/src/core/card/content.rs` (`prepare`, `prepare_archive`, `prepare_hardfile`). `prepare` refuses a hostile
+name, two escaped names that would share a host path and a hardfile's collisions before it writes anything, but a
+refusal that only the unpacking itself can find — a member that fails its CRC, a `.uaem` sidecar ART cannot read, a
+disk error — comes after files are already in `staging`. The contract is documented (`prepare`'s doc comment: "a
+refusal after unpacking began leaves `staging` for the caller to remove"), `staging` is the caller's scratch, and
+`require_empty_staging` stops the folder being reused by accident, so **nothing reaches a card today** — there is no
+caller. The cost arrives with round 3's `card_os_prepare`/`card_os_build`: a command that forgets it leaves a
+part-unpacked archive in the scratch root after every refused source. **Fix direction (round 3):** the command holds
+each source's staging folder in a `core::ScratchDir`-style guard that removes it on every ending, and when it cannot
+be removed, the refusal names the folder rather than claiming it is gone.
+
+**ART-341** 🟡 **`core/osinstall` treats `:` as legal in an AmigaDOS name and keeps such a name in the manifest, so a
+tree carrying one fails partway through the copy, after the format** — *found 2026-09-17 by card round 2's scoped
+re-review of the fix wave (`.superpowers/sdd/2026-09-16-one-button-card-round-2/fix-wave-re-review.md`), filed by
+reading; on `art-card-round-2`, unmerged; not fixed*
+`src-tauri/src/core/osinstall/mod.rs` (the doc comments at `host_destination`, ~676 and ~744) and `apply.rs` (~276,
+~958, ~2591) state that `Prices: 1993` is "a legal AmigaDOS filename", and the manifest keeps `:` names, while
+`core/volume/write/dir.rs` `check_name` refuses `:` and `/` — and the card (`content.rs` `refuse_unholdable_name`)
+now refuses them up front. **`:` is not legal:** AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
+Conventions — "Colons (:) and slashes (/) are reserved and cannot be used in file or directory names."
+(<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Working_With_AmigaDOS>); the *AmigaDOS Quick Reference*
+(Rugheimer/Spanik, Abacus 1988) says the same. It is the DOS naming rule, so OFS, FFS and PFS3 all sit behind it.
+The `Prices: 1993` name pinned in `apply.rs`'s tests is invented: a bounded search of the owner's material
+(`find /e/amiga -maxdepth 6 -iname "*prices*"`) found no such file, and the test's own comment says only `AUX`
+came from the owner's 3.9 disc. **Cost today:** none on real media — a sane writer cannot present such a name — but
+a tree built from a hostile or damaged image with a `:` name is recorded in `distribution.json` and then refused by
+`check_name` mid-copy, after the volume was formatted, instead of up front. **Fix direction:** osinstall refuses
+`/`/`:` names by name as `refuse_unholdable_name` does; the manifest rule in `core/preload/amiga_names.rs` refuses
+`:` like the record; the `Prices: 1993` fixture is replaced by a Windows-hostile name that *is* legal on the Amiga
+(`?`, `*`, `"`, `<`, `>`, `|` — e.g. `Prices? 1993`, which the collision tests already use).
+
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
 
@@ -224,6 +273,130 @@ re-audits them without reason:
 ---
 
 ## Fixed
+
+**ART-338** 🟠 ✅ **ART's own LZX reader refused a match that reaches back before a merged group's first byte, which
+real archives do — fixed: that part of the window reads as zeros, as the Amiga archiver's does** — *opened and
+fixed 2026-09-17 in card round 2 on `art-card-round-2` (unmerged); introduced by the same round's Task 3
+(`e1fd26b`), found by Task 11's owner-material hook, fixed in `3193e36`. **It never shipped:** no release and no
+`main` ever held an LZX reader. Report `.superpowers/sdd/2026-09-16-one-button-card-round-2/task-11-report.md`*
+`src-tauri/src/core/archive/lzx.rs` (`decode_lzx`) · **The defect.** Task 3 refused a match whose offset reached
+before the start of the group's output ("a match reaches N bytes back, before the start of the data"), and its
+synthetic test `a_match_before_the_first_byte_is_refused` asserted that refusal. Real LZX writes such matches: the
+first run of `read_the_owners_lzx_archives_when_asked` on the owner's `boingbag1.lzx` said `written 848 errors 150`.
+Of the failing groups, group 5 (77 members) opens with a repeat of the initial last offset (1) at byte 0 — its first
+member begins `00 00 00 08` in unar's output — and group 45 (73 members) reaches exactly one byte before its start.
+**Outside sources:** XADMaster `LZSS.c` `RestartLZSS` clears the window (`memset(self->window,0,…)`), and
+`XADLZXHandle.m` `resetLZSSHandle` resets only `lastoffs=1` and the code lengths. **The fix.** A byte before the
+group's start reads as zero. **Eliminated:** an off-by-one in the offset arithmetic — the other 66 groups' data CRCs
+passed before and after; a window carried over from the previous group — zeros are what the data CRCs and unar both
+accept. **Measured after:** `written 998 errors 0`; `scripts/lzx-oracle-check.py` against unar — `boingbag1.lzx: files
+998 998 identical 998 differ 0`, `WiFi_WPA_for_AmiKit_PiStorm.lzx: files 54 54 identical 54 differ 0`. **Test:**
+`core::archive::lzx::tests::a_match_before_the_first_byte_reads_the_zeroed_window` (replaces the test that guarded the
+defect; two arms: a repeat of the initial offset at byte 0 gives `\0\0\0x`, a match starting one byte before the data
+and running into it gives `ab\0ab\0`), red first — `Malformed { format: "lzx", detail: "'Out': a match reaches 1 bytes
+back, before the start of the data" }`. **Mutations:** the refusal restored → killed; the pre-start byte `0` → `0x20` →
+killed. **Not proven:** a match running past the end of its block is tolerated but occurred in neither real archive
+(counted 0 in both), so that path is still unexercised by real material.
+
+**ART-337** 🟡 ✅ **ART's native FFS copy dropped a `.uaem` sidecar's comment, for files and drawers, without
+counting the loss** — *found 2026-09-16 by card round 2's attributes research (R3 § 6,
+`docs/superpowers/notes/2026-09-16-card-round-2-attributes.md`), by reading; fixed 2026-09-17 on
+`art-card-round-2` (`d13f9ce`), unmerged*
+`src-tauri/src/core/preload/native.rs` (`copy_in_ffs`) · A drawer got `set_attributes(block, Some(protection), None,
+Some(date))` and a file `FileMeta { protection, date }` — `FileMeta` has no comment field — so the comment was lost on
+both and, unlike PFS3's loss ([ART-116](#fixed)), not counted either. **The fix.** A drawer's
+`set_attributes` passes the comment when it is not empty; a file is followed by `set_attributes(block, None,
+Some(comment), None)`. **Test:** `core::preload::native::tests::ffs_copy_in_carries_the_comment_of_a_file_and_a_drawer`,
+red first (`left: "" right: "hello comment"`); mutation — the file's `set_attributes` removed — killed. **Disclosed, not
+changed:** a comment FFS cannot store (outside Latin-1) is refused through `set_attributes`' own sentence, which does
+not name the file; PFS3's refusal does.
+
+**ART-336** 🟠 ✅ **hst-imager's fallback copy ignored every `.uaem` sidecar, silently — protection bits, dates and
+comments were dropped and nothing said so** — *found and measured 2026-09-16 by card round 2's attributes research
+(R3 § 7); fixed 2026-09-17 on `art-card-round-2` (`5b63652`), unmerged*
+`src-tauri/src/tools/hst_imager.rs` (`copy_args`) · `hst.imager fs copy --help` (1.6.616): `--uaemetadata
+<None|UaeFsDb|UaeMetafile>`, default `UaeFsDb` — WinUAE's `_UAEFSDB.___` database, not `.uaem` files. ART passed no
+option. **Controlled experiment** (one variable, the option; control `C/Plain` with no sidecar; target an FFS ADF
+hst-imager formatted): the default arm listed `C/Assign` and `C/Sub` as `----RWED`, dated now, with no comment; the
+`UaeMetafile` arm gave `C/Assign` `--P-RWED`, `04/13/2021 02:43:13`, `hello comment`, and `C/Sub` `--P-RWED` with its
+comment. In both arms the `.uaem` files were not copied as files and the control was unchanged. **The fix.**
+`copy_args` passes `--uaemetadata UaeMetafile`. This reaches the existing volume-preparation screen's hst-imager
+fallback, not only the card (the owner's decision 5, 2026-09-17). **Test:**
+`tools::hst_imager::tests::a_copy_asks_hst_imager_to_read_uaem_sidecars`; mutation `UaeMetafile` → `UaeFsDb` —
+killed. **Not proven:** the experiment ran on FFS only — hst-imager's handling of `.uaem` on a **PFS3** partition has
+not been measured; a drawer's date is not applied by hst-imager even with the option (measured, FFS).
+
+**ART-335** 🟡 ✅ **ART's native PFS3 copy stamped every entry "now" and dropped a `.uaem`'s comment, though the
+vendored writer could already take a date — ART-116's "not fixable" had gone stale** — *found 2026-09-16 by card round
+2's attributes research (R3 § 6); fixed 2026-09-17 on `art-card-round-2` (`d13f9ce`), unmerged; libpfs3
+`0.1.3+art.12`, ART-PATCH item 27*
+`src-tauri/src/core/preload/native.rs` (`copy_in_pfs3`, `read_sidecar`, `latin1_comment`),
+`src-tauri/vendor/libpfs3/src/writer.rs` (`set_entry_comment`, `build_dir_entry`), `src/error.rs` (`CommentTooLong`) ·
+**The defect.** [ART-116](#fixed) counted a lost comment and date because libpfs3 `=0.1.3` had no setter for either.
+Since ART-317 ART's vendored copy has `Writer::set_entry_date`, and the entry layout already reserves a comment
+(`extra_fields_offset(nlen, clen)`), but `copy_in_pfs3` still stamped `clock.amiga_now()` and wrote a zero-length
+comment. **The fix.** `copy_in_pfs3` reads each entry's sidecar first (bounded by `MAX_UAEM_BYTES`), sets its date —
+the sidecar's unless it is the epoch, else the clock's — and its comment (the first 79 characters; a character above
+U+00FF refused naming the entry) before the entry is created. libpfs3 gains `Writer::set_entry_comment` (pfs3aio
+`AddComment`, `directory.c:2200-2228`; `CMSIZE 80`, `blocks.h:518`; `tonioni/pfs3aio` `211f7f0`) and refuses a
+comment longer than 79 bytes (`Error::CommentTooLong`). `core/card/sizing.rs::entry_bytes` counts the comment's bytes
+(`708fa18`). **Tests:** `core::preload::native::tests::copy_in_carries_the_date_and_comment_out_of_the_uaem_sidecars`
+(red first, `left: "" right: "hello comment"`),
+`an_entry_without_a_sidecar_date_gets_no_comment_and_the_clock_s_date`,
+`a_comment_the_amiga_cannot_store_is_refused_by_name`, `libpfs3_refuses_a_comment_longer_than_the_amiga_stores`,
+`copy_in_pfs3_carries_the_comment_and_date_it_used_to_count_as_lost`, and
+`core::card::sizing::tests::large_directories_with_long_names_and_comments_fit_their_estimate`. Mutations 6/6 killed
+in the copy; in sizing, dropping the comment's bytes is killed but the comment-length byte `+1` → `+0` **survives**
+(absorbed by cylinder rounding — a weak guard, disclosed). *Closed 2026-09-17 by the final review's fix wave:*
+`core::card::sizing::tests::an_entry_costs_exactly_what_libpfs3_writes_for_either_parity` pins the entry size for both
+parities against `extra_fields_offset + 2`, and the `+1` → `+0` mutation now fails it (`left: 26 right: 28`).
+**Not proven:** a comment written by this patched libpfs3
+read back by pfs3aio on a real Amiga.
+
+**ART-334** 🟡 ✅ **`ExtractReport.renamed` held leaf-only display strings, so a name escaped out of an HDF could not
+be restored to its Amiga name** — *found 2026-09-16 by card round 2's research (R2 B1,
+`docs/superpowers/notes/2026-09-16-card-round-2-lzx-and-names.md`), by reading; fixed 2026-09-17 on
+`art-card-round-2` (`fe786cc`, `5b63652`), unmerged*
+`src-tauri/src/core/volume/write/copy.rs` (`host_target`, `ExtractReport`), `src-tauri/src/core/preload/amiga_names.rs`
+· `host_target` recorded `"{name} → {safe}"` for the leaf only, so nothing could tell which host path a name like
+`AUX` became `_AUX` under, and `AmigaNames::read` read only an OS install's `distribution.json`. **The fix.**
+`ExtractReport.escaped: Vec<EscapedName { host_path, amiga_name }>` records each escaped node with its full host path;
+`amiga_names::write_record` writes the pairs to an ART-private `.art-amiga-names.json` (refusing an empty map and an
+existing file), `AmigaNames::read` reads it after the manifest, the native copy skips it at the source root and uses its
+names, and hst-imager refuses a source carrying it before it runs. **Tests:**
+`core::volume::write::copy::tests::an_escaped_drawer_and_the_file_in_it_are_recorded_with_their_host_paths` (red
+first, a compile error on the missing field),
+`core::preload::amiga_names::tests::a_staged_record_puts_the_amiga_names_back_node_by_node`,
+`core::preload::native::tests::the_names_record_is_not_copied_and_its_names_are_used`,
+`tools::hst_imager::tests::a_staged_names_record_is_refused_before_the_tool_runs`; mutations 4/4 and 4/4 killed.
+
+**ART-333** 🟡 ✅ **Extracting from an OFS/FFS volume wrote no `.uaem` sidecar for a drawer, so a drawer's protection
+bits, comment and date were lost** — *found 2026-09-16 by card round 2's research (R2 B1, R3 § 5), by reading; fixed
+2026-09-17 on `art-card-round-2` (`fe786cc`), unmerged*
+`src-tauri/src/core/volume/write/copy.rs` (`extract_dir`, `extract_selection_from_volume`, `header_sidecar`) · Only
+`write_one_file` wrote a sidecar; both `HostTarget::Descend` arms created the directory and wrote none. **The fix.**
+`header_sidecar` (factored out of `write_one_file`) is asked for a drawer too, and `<Drawer>.uaem` is written beside the
+new host directory when the drawer carries bits, a comment or a date. This reaches the Files screen's copy of a folder
+out of a volume (the owner's decision 5, 2026-09-17). **Tests:**
+`core::volume::write::copy::tests::a_drawer_s_protection_date_and_comment_go_into_its_own_sidecar` (red first, the
+sidecar not found) and the control `a_plain_drawer_gets_no_sidecar`; mutations killed.
+
+**ART-332** 🟠 ✅ **The archive gate carried no Amiga protection bits, comments or dates, for any format** — *found
+2026-09-16 by card round 2's research (R2 A4, R3 §§ 1-4), by reading; fixed for the card's content step 2026-09-17 on
+`art-card-round-2` (`ce8e8e7`, `fcf05dd`), unmerged*
+`src-tauri/src/core/archive/{mod,lha,zip,sevenz,lzx}.rs`, `src-tauri/src/core/card/content.rs` (`prepare`) ·
+`ArchiveEntry` was `{ name, is_dir, declared_bytes }`, so an LHA's protection byte and comment, a ZIP made on an Amiga's
+attributes and every format's date were dropped on the way out. **The fix.** `ArchiveEntry.amiga: AmigaAttributes {
+protection, comment, date }`, filled by every backend: LHA per header level (a level-0 entry with no OS id is Amiga only
+when the file is called `.lha`, XADMaster's guess — the owner's decision 3); ZIP bits and comment only from an
+Amiga-made entry (host 1, UnZip's `amiga/amiga.c` rule — decision 2), a date from any; 7z a date only; LZX bits and
+comment, no date. The card's `content::prepare` writes a `.uaem` from them unless the archive carries its own (decision
+4). **Tests:** `core::archive::lha::tests::an_amiga_level_one_entry_carries_its_protection_byte_and_dos_date`,
+`core::card::content::tests::archive_attributes_land_on_a_pfs3_partition` (a level-1 LHA staged and copied onto a PFS3
+image, read back `--p-rwed` with its date), plus the ZIP and 7z tests beside them; mutations 5/5 and 6/6 killed.
+**Not changed:** the gate's other callers — the Files screen's copy out of an archive, OS install, package volumes,
+the layout screen — still write no sidecar; and the card's content step has no command or screen yet (round 3).
+**Not proven:** an Amiga-made ZIP — every ZIP the owner has is PC-made.
 
 **ART-330** 🟡 **libpfs3's reader stopped at a malformed directory entry and answered "not there" for every name
 behind it — so ART's first-boot report said "not booted", and its install check "not found on the volume", for a
@@ -15699,7 +15872,9 @@ changed behaviour. `src/lib/preload.ts`'s `CopySummary` interface carries the
 two fields too, so a future screen reading `PreloadResult` has them on the
 wire already.
 Proved by `core::preload::native::tests::copy_in_pfs3_counts_a_dropped_comment_and_a_dropped_date`
-(a sidecar with both a real comment and a real date counts one of each),
+(a sidecar with both a real comment and a real date counts one of each; renamed
+2026-09-17 to `copy_in_pfs3_carries_the_comment_and_date_it_used_to_count_as_lost`, which now asserts
+nothing is counted and reads both back — see below),
 `copy_in_pfs3_does_not_count_a_sidecar_with_no_comment_or_date_to_lose` (the
 negative control: protection-only sidecar, nothing counted) and
 `copy_in_ffs_never_counts_anything_lost` (the identical sidecar, on FFS,
@@ -15708,6 +15883,10 @@ unconditionally incrementing both counters (dropping the "is this worth
 mentioning" gate) fails the negative control; temporarily adding the same
 counting to `copy_in_ffs` fails `copy_in_ffs_never_counts_anything_lost` —
 both reverted afterwards.
+*Superseded for PFS3 by [ART-335](#fixed) (2026-09-17, card round 2, `art-card-round-2`, unmerged): the
+"not fixable" above had gone stale — ART's vendored libpfs3 could already set a date, and `0.1.3+art.12` sets a
+comment — so `copy_in_pfs3` now writes both and counts nothing lost. The counters stay on the wire. FFS kept its
+date but, contrary to this entry's title, dropped the comment too: [ART-337](#fixed).*
 
 **ART-113** 🟠 ✅ **`libpfs3` 0.1.3 writes an entry's name as UTF-8 and reads it
 back as Latin-1 — any non-ASCII AmigaDOS name fails to copy in** — *found

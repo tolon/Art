@@ -46,11 +46,21 @@
 //! is not largefile, and `fsizex` is written and patched only on one that is;
 //! `rename_in` and `delete_in` look their names up through the writer's own
 //! bounded walk, whose rule `ondisk::entry_bounds` now shares with the reader;
+//! Modified 2026-09-17 by ART for card round 2 (ART-335): `set_entry_comment`,
+//! the comment each new directory entry is written with, in pfs3aio's layout;
 //! `ART-PATCH.md` in this crate's root says what and why.
 
 use crate::error::{Error, Result};
 use crate::ondisk::*;
 use crate::volume::Volume;
+
+/// ART (card round 2, ART-335): at most this many comment bytes — pfs3aio's
+/// `CMSIZE` 80 as a BSTR, WinUAE's and `uaem::MAX_COMMENT_LEN`'s 79.
+/// pfs3aio's `AddComment` refuses more than `CMSIZE` characters
+/// (`directory.c:2200`), but `GetFIB` copies the comment with its length
+/// byte into `fib_Comment`, `CMSIZE` bytes in all (`directory.c:1035`), so 79
+/// is what an AmigaDOS program reads back whole (`tonioni/pfs3aio` `211f7f0`).
+pub const MAX_COMMENT_BYTES: usize = 79;
 
 /// Writable PFS3 volume — file/directory creation, deletion, and formatting.
 pub struct Writer {
@@ -92,6 +102,10 @@ pub struct Writer {
     /// ART-317, whose caller sets local time before each operation. A deldir
     /// entry's own date is not this: it is copied from the deleted entry.
     entry_date: Option<(u16, u16, u16)>,
+    /// ART (card round 2, ART-335): the comment of each new directory entry,
+    /// Latin-1 bytes as AmigaDOS stores them, at most [`MAX_COMMENT_BYTES`];
+    /// empty is none, as 0.1.3 wrote every entry.
+    entry_comment: Vec<u8>,
     /// ART-319: set when a commit itself (`update_rootblock`, or
     /// `set_volume_name`'s own direct write) failed part-way — the device may
     /// already be half-written, since a pending write lands in place, not
@@ -148,6 +162,7 @@ impl Writer {
             anode_roving: 0,
             rext_dirty: false,
             entry_date: None,
+            entry_comment: Vec::new(),
             poisoned: false,
             vol,
         };
@@ -176,6 +191,26 @@ impl Writer {
     /// entry's own date is not this: it is copied from the deleted entry.
     pub fn set_entry_date(&mut self, date: Option<(u16, u16, u16)>) {
         self.entry_date = date;
+    }
+
+    /// ART (card round 2, ART-335): the comment of each **new** directory entry,
+    /// Latin-1 bytes as AmigaDOS stores them; empty is none, as 0.1.3 wrote.
+    /// Like `set_entry_date`, it stays until changed. A comment longer than
+    /// [`MAX_COMMENT_BYTES`] is refused and the one set before stays.
+    /// Written where pfs3aio's `COMMENT(de)` finds it — the length byte right
+    /// after the name, then the bytes (`blocks.h:596`; `AddComment`,
+    /// `directory.c:2221-2223`) — with the extra fields after it at
+    /// `(20 + nlength + comment length) & 0xfffe` (`:2227-2228`; `struct direntry`
+    /// is 20 bytes, `blocks.h:327-340`).
+    pub fn set_entry_comment(&mut self, comment: &[u8]) -> Result<()> {
+        if comment.len() > MAX_COMMENT_BYTES {
+            return Err(Error::CommentTooLong {
+                len: comment.len(),
+                max: MAX_COMMENT_BYTES,
+            });
+        }
+        self.entry_comment = comment.to_vec();
+        Ok(())
     }
 
     fn entry_datestamp(&self) -> (u16, u16, u16) {
@@ -2132,7 +2167,12 @@ impl Writer {
             ..ExtraFields::default()
         }
         .encode();
-        let fields = extra_fields_offset(nlen, 0);
+        // ART (card round 2, ART-335): the comment set by `set_entry_comment`,
+        // at most 79 bytes, so the entry (at most 20 + 107 + 79 + the extra
+        // fields) still fits its one-byte `next`. With no comment this is
+        // 0.1.3's entry byte for byte.
+        let clen = self.entry_comment.len();
+        let fields = extra_fields_offset(nlen, clen);
         let mut entry = vec![0u8; fields];
         entry.extend_from_slice(&extra);
         entry[0] = entry.len() as u8;
@@ -2146,7 +2186,10 @@ impl Writer {
         entry[16] = protection;
         entry[17] = nlen as u8;
         entry[18..18 + nlen].copy_from_slice(&name_bytes[..nlen]);
-        entry[18 + nlen] = 0; // comment length
+        // `19 + nlen + clen <= (20 + nlen + clen) & !1` always holds, so the
+        // comment ends before the extra fields start.
+        entry[18 + nlen] = clen as u8; // comment length
+        entry[19 + nlen..19 + nlen + clen].copy_from_slice(&self.entry_comment);
         entry
     }
 

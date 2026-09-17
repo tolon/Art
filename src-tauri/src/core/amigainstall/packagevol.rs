@@ -716,6 +716,7 @@ mod tests {
                 name: format!("Pkg/f{i}.txt"),
                 is_dir: false,
                 declared_bytes: 1,
+                amiga: crate::core::archive::AmigaAttributes::default(),
             })
             .collect();
         let err = listing_from_entries(Path::new("E:\\dl\\huge.lha"), &entries).unwrap_err();
