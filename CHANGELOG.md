@@ -17,6 +17,7 @@ wording of every entry, with what was measured, is in git history
 - **A first-boot step can restart the Amiga**; on AmigaOS 3.9, which has no restart command, first boot logs that and carries on.
 - **ART reads Amiga LZX archives** with its own reader, behind the same safety checks as LHA, ZIP and 7z (checked against unar).
 - **Groundwork for the one-button card's content step** (no screen yet): folders, archives, WHDLoad hardfiles and ADFs are checked and measured before a card partition is written, and one partition can take several folders.
+- **More groundwork for the one-button card, still no screen**: the PFS3 driver, WHDLoad and the Kickstarts a card's titles need are found — Kickstarts are only ever placed on the names you agree to — and the card is built under a temporary name, checked, and only then given its own.
 
 ### Changed
 

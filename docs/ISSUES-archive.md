@@ -15,6 +15,63 @@ today. An ID is never reused.
 
 ## Fixed
 
+**ART-341** 🟡 ✅ **`core/osinstall` treats `:` as legal in an AmigaDOS name and keeps such a name in the manifest, so a
+tree carrying one fails partway through the copy, after the format** — *found 2026-09-17 by card round 2's scoped
+re-review of the fix wave (the round-2 SDD folder is not on disk; the plan
+`docs/superpowers/plans/2026-09-16-one-button-card-round-2.md` records the finding), filed by reading; fixed
+2026-09-17 by card round 3, Task 2*
+`src-tauri/src/core/osinstall/mod.rs` (the doc comments at `host_destination`, ~676 and ~744) and `apply.rs` (~276,
+~958, ~2591) state that `Prices: 1993` is "a legal AmigaDOS filename", and the manifest keeps `:` names, while
+`core/volume/write/dir.rs` `check_name` refuses `:` and `/` — and the card (`content.rs` `refuse_unholdable_name`)
+now refuses them up front. **`:` is not legal:** AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
+Conventions — "Colons (:) and slashes (/) are reserved and cannot be used in file or directory names."
+(<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Working_With_AmigaDOS>); the *AmigaDOS Quick Reference*
+(Rugheimer/Spanik, Abacus 1988) says the same. It is the DOS naming rule, so OFS, FFS and PFS3 all sit behind it.
+The `Prices: 1993` name pinned in `apply.rs`'s tests is invented: a bounded search of the owner's material
+(`find /e/amiga -maxdepth 6 -iname "*prices*"`) found no such file, and the test's own comment says only `AUX`
+came from the owner's 3.9 disc. **Cost then:** none on real media — a sane writer cannot present such a name — but
+a tree built from a hostile or damaged image with a `:` name was recorded in `distribution.json` and then refused by
+`check_name` mid-copy, after the volume was formatted, instead of up front.
+**Fixed 2026-09-17 by card round 3, Task 2** (commit `dca3b1a`, "osinstall: ':' and '/' names refused before the
+copy (ART-341)"): `CoreError::AmigaNameReserved { path }` (`ART-AMIGA-NAME-RESERVED`) is raised from
+`core::osinstall::apply::refuse_host_name_collisions` for any plan destination whose AmigaDOS path carries a `:` in
+a segment or an empty segment (a leading, trailing or doubled `/`), before the host-name-collision fold and before
+anything is written; `core::preload::amiga_names::AmigaNames::from_records` gained the matching `:` filter for a
+manifest built before the fix or hand-edited. Every `Prices: 1993` fixture literal was replaced — `Prices? 1993`
+where one instance stood alone, `Prices* 1993` on one side of the three collision-pair tests specifically (a plain
+substitution there would have made the pair collide only by case, silently changing what the test proved — caught
+by an actual test failure, not by inspection). Guard:
+`core::osinstall::apply::tests::a_name_with_a_colon_is_refused_before_anything_is_written`,
+`a_name_with_a_doubled_slash_is_refused_before_anything_is_written`,
+`core::preload::amiga_names::tests::the_manifest_half_refuses_a_colon_as_the_record_half_does`. Mutations M2a (the
+check removed from `refuse_host_name_collisions`) and M2b (the `:` filter removed from `from_records`) killed, no
+survivors.
+
+**ART-340** 🟡 ✅ **A card source refused after unpacking began leaves its staging folder part-filled, and nothing owns
+removing it yet** — *found 2026-09-16 by card round 2's Task 9 (ledger), triaged by the final whole-branch review
+(2026-09-17) as acceptable for a core round and owed by round 3; fixed 2026-09-17 by card round 3, Tasks 3 and 12*
+`src-tauri/src/core/card/content.rs` (`prepare`, `prepare_archive`, `prepare_hardfile`). `prepare` refuses a hostile
+name, two escaped names that would share a host path and a hardfile's collisions before it writes anything, but a
+refusal that only the unpacking itself can find — a member that fails its CRC, a `.uaem` sidecar ART cannot read, a
+disk error — comes after files are already in `staging`. The contract is documented (`prepare`'s doc comment: "a
+refusal after unpacking began leaves `staging` for the caller to remove"), `staging` is the caller's scratch, and
+`require_empty_staging` stops the folder being reused by accident, so **nothing reached a card then** — there was no
+caller. The cost arrived with round 3's `card_os_prepare`/`card_os_build`: a command that forgot this would leave a
+part-unpacked archive in the scratch root after every refused source.
+**Fixed 2026-09-17 by card round 3:** Task 3 (commit `5c73a1b`) added `core::scratch_guard::OwnedScratch`, a product
+scratch guard for a folder spanning several Tauri commands (P1: no single Rust stack frame owns a card-OS build
+session end to end) — `create_in`, `finish`, and a `Drop` that removes best-effort and logs what could not be
+removed. Task 12 (commit `8f69563`) wired it into `commands/cardos.rs`'s `CardOsSessions`: `card_os_open` creates one
+`OwnedScratch` per session (`tree/`, `staging/`, `driver/`), `card_os_build`'s `end_build` and `card_os_close` both
+remove it, and every ending — succeeded, failed, stopped — reports an `Option<LeftBehind>` rather than claiming the
+folder gone. Guard: `core::scratch_guard::tests::finish_removes_the_folder_and_everything_in_it`,
+`dropping_without_finish_still_removes_it`, `a_folder_that_cannot_be_removed_is_named_not_claimed_gone` (a held file
+opened with `share_mode(0)`, the working Windows pattern here — a bare `File::create` does not block removal, since
+`FILE_SHARE_DELETE` is in Rust's default sharing flags on this toolchain), `two_guards_in_one_process_never_share_a_folder`; `commands::cardos`'s close test. Mutations M3a (`finish` skips the exists check) and M3b (the counter
+dropped) killed, no survivors; M12a (`Written::Partial => remove_partial(image, false)`), M12b (`Cancelled` reported
+as a generic failure) and M12e (`close` forgets the session instead of removing its folder) killed in
+`commands::cardos`.
+
 **ART-339** 🔵 ✅ **`core/card` and `core/preload` import each other, against CLAUDE.md's inward-layering rule** —
 *found 2026-09-17 by the pre-flight scan of card round 2's plan (the round-2 SDD folder is not on disk; the plan
 `docs/superpowers/plans/2026-09-16-one-button-card-round-2.md` records ruling R6), by reading; accepted for that
@@ -40,7 +97,8 @@ three imports, `card/content.rs:62,63,67`; two mutations red — `card/sizing.rs
 real archives do — fixed: that part of the window reads as zeros, as the Amiga archiver's does** — *opened and
 fixed 2026-09-17 in card round 2 on `art-card-round-2` (unmerged); introduced by the same round's Task 3
 (`e1fd26b`), found by Task 11's owner-material hook, fixed in `3193e36`. **It never shipped:** no release and no
-`main` ever held an LZX reader. Report `.superpowers/sdd/2026-09-16-one-button-card-round-2/task-11-report.md`*
+`main` ever held an LZX reader. Task 11's report was in the round-2 SDD folder, which is not on disk (card round 3's
+`progress.md`); the plan is `docs/superpowers/plans/2026-09-16-one-button-card-round-2.md`*
 `src-tauri/src/core/archive/lzx.rs` (`decode_lzx`) · **The defect.** Task 3 refused a match whose offset reached
 before the start of the group's output ("a match reaches N bytes back, before the start of the data"), and its
 synthetic test `a_match_before_the_first_byte_is_refused` asserted that refusal. Real LZX writes such matches: the

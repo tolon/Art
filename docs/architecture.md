@@ -589,6 +589,44 @@ three rules of its own:
   `scripts/fat-oracle-check.py` reads the boot partition with 7-Zip, which is
   how `fatfs`'s two directory defects were found (ART-102).
 
+## The one-button card: `core/cardos` sits on top
+
+`core/cardos/` (`content.rs`, `driver.rs`, `whdload.rs`, `kickstarts.rs`, `prepare.rs`,
+`partial.rs`) is the top of the card path (card round 3, ART-339). It reads a partition's
+sources and finds the PFS3 driver, chooses and writes WHDLoad, proposes and places
+Kickstarts, and measures, checks and stages a whole card — and it is allowed to import
+`core/card`, `core/preload`, `core/whdload`, `core/gameindex`, `core/rom`, `core/archive`,
+`core/amigaver`, `core/volume`, `core/adf` and `core/osinstall` (for `DistributionManifest`
+only) to do it. **Nothing below it imports it back** — `core/card` builds the image's shape
+and `core/preload` fills a volume, and neither knows `core/cardos` exists — which is the same
+inward-layering rule as everywhere else in `core/`, guarded here by
+`core::independence::core_card_does_not_import_preload_and_nothing_below_imports_cardos`.
+`content.rs` used to live in `core/card/`, where it depended on `core/preload` for the name
+fold and the collision rule while `core/preload` already depended on `core/card` for the card
+reader — the two modules imported each other (ART-339) — so it moved up rather than the
+dependency going down, which is why the module exists at all.
+
+**The build's scratch is a session, not a stack frame (P1).** `commands/cardos.rs`'s four
+commands — `card_os_open`, `card_os_prepare`, `card_os_build`, `card_os_close` — are what the
+card screen runs in order, and no single Rust stack frame spans all four: `card_os_prepare` is
+one job, `card_os_build` another, and the screen can close the session between them or after
+either fails. So the session folder is not a stack guard's business; it is a
+`core::scratch_guard::OwnedScratch` (the non-test counterpart to `core::ScratchDir`) that a
+registry in Tauri `State` holds by id. `card_os_open` creates one under the scratch root, with
+`tree/`, `staging/` and `driver/` inside it; every ending of a build (`end_build`) and
+`card_os_close` both remove it, and — because a host filesystem is not journalled and a
+removal can fail — what could not be removed is named (`LeftBehind { path, why }`) rather than
+claimed gone. This is what closed ART-340: a source refused partway through unpacking used to
+leave `staging` part-filled with nothing that owned cleaning it up, because nothing before this
+round called `core::cardos::content::prepare` at all.
+
+**The image is written under its own name plus `.partial` (P2)**, formatted and filled, checked
+against its own manifest, and only renamed to its real name once that check passes; a
+`.partial` already on disk is refused by name rather than removed, since ART only ever removes
+what it created in the run at hand (P3). Endings stay distinct — succeeded, failed in a named
+phase, stopped in a named phase — and every ending says what became of the `.partial` file, the
+same rule "the failure that does not crash" states for everything else in this codebase.
+
 ## Installing an OS: a component is a set of paths
 
 `core/osinstall/` (`recipe.rs`, `source.rs`, `scan.rs`, `plan.rs`, `apply.rs`,

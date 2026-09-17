@@ -206,40 +206,6 @@ and a listing comes back short — ART-330's confident wrong sentence, from anot
 the block by name in both walks, as `Error::DamagedDirectory` does for a malformed entry, and give the fixture's late
 failure another shape.
 
-**ART-340** 🟡 **A card source refused after unpacking began leaves its staging folder part-filled, and nothing owns
-removing it yet** — *found 2026-09-16 by card round 2's Task 9 (ledger), triaged by the final whole-branch review
-(2026-09-17) as acceptable for a core round and owed by round 3; on `art-card-round-2`, unmerged*
-`src-tauri/src/core/card/content.rs` (`prepare`, `prepare_archive`, `prepare_hardfile`). `prepare` refuses a hostile
-name, two escaped names that would share a host path and a hardfile's collisions before it writes anything, but a
-refusal that only the unpacking itself can find — a member that fails its CRC, a `.uaem` sidecar ART cannot read, a
-disk error — comes after files are already in `staging`. The contract is documented (`prepare`'s doc comment: "a
-refusal after unpacking began leaves `staging` for the caller to remove"), `staging` is the caller's scratch, and
-`require_empty_staging` stops the folder being reused by accident, so **nothing reaches a card today** — there is no
-caller. The cost arrives with round 3's `card_os_prepare`/`card_os_build`: a command that forgets it leaves a
-part-unpacked archive in the scratch root after every refused source. **Fix direction (round 3):** the command holds
-each source's staging folder in a `core::ScratchDir`-style guard that removes it on every ending, and when it cannot
-be removed, the refusal names the folder rather than claiming it is gone.
-
-**ART-341** 🟡 **`core/osinstall` treats `:` as legal in an AmigaDOS name and keeps such a name in the manifest, so a
-tree carrying one fails partway through the copy, after the format** — *found 2026-09-17 by card round 2's scoped
-re-review of the fix wave (`.superpowers/sdd/2026-09-16-one-button-card-round-2/fix-wave-re-review.md`), filed by
-reading; on `art-card-round-2`, unmerged; not fixed*
-`src-tauri/src/core/osinstall/mod.rs` (the doc comments at `host_destination`, ~676 and ~744) and `apply.rs` (~276,
-~958, ~2591) state that `Prices: 1993` is "a legal AmigaDOS filename", and the manifest keeps `:` names, while
-`core/volume/write/dir.rs` `check_name` refuses `:` and `/` — and the card (`content.rs` `refuse_unholdable_name`)
-now refuses them up front. **`:` is not legal:** AmigaOS Manual, *AmigaDOS: Working With AmigaDOS*, § Naming
-Conventions — "Colons (:) and slashes (/) are reserved and cannot be used in file or directory names."
-(<https://wiki.amigaos.net/wiki/AmigaOS_Manual:_AmigaDOS_Working_With_AmigaDOS>); the *AmigaDOS Quick Reference*
-(Rugheimer/Spanik, Abacus 1988) says the same. It is the DOS naming rule, so OFS, FFS and PFS3 all sit behind it.
-The `Prices: 1993` name pinned in `apply.rs`'s tests is invented: a bounded search of the owner's material
-(`find /e/amiga -maxdepth 6 -iname "*prices*"`) found no such file, and the test's own comment says only `AUX`
-came from the owner's 3.9 disc. **Cost today:** none on real media — a sane writer cannot present such a name — but
-a tree built from a hostile or damaged image with a `:` name is recorded in `distribution.json` and then refused by
-`check_name` mid-copy, after the volume was formatted, instead of up front. **Fix direction:** osinstall refuses
-`/`/`:` names by name as `refuse_unholdable_name` does; the manifest rule in `core/preload/amiga_names.rs` refuses
-`:` like the record; the `Prices: 1993` fixture is replaced by a Windows-hostile name that *is* legal on the Amiga
-(`?`, `*`, `"`, `<`, `>`, `|` — e.g. `Prices? 1993`, which the collision tests already use).
-
 **ART-342** 🔵 **`core/whdload` and `core/gameindex` import each other** — *found 2026-09-17 by card round 3's research
 (`.superpowers/sdd/2026-09-17-one-button-card-round-3/research-tree.md` § 1), by reading; not fixed*
 `src-tauri/src/core/whdload/install.rs` imports `core::gameindex` (`:624`, `:713-716`, `:1238-1240`) while
@@ -271,6 +237,8 @@ Fixed and closed entries live in full, verbatim, in
 [ISSUES-archive.md](ISSUES-archive.md). The index below lists each one, newest
 first, as `ID · title · when it was fixed` (the date as the entry states it).
 
+- [ART-341](ISSUES-archive.md) · `core/osinstall` treated `:` as legal in an AmigaDOS name and kept such a name in the manifest, so a tree carrying one failed partway through the copy, after the format — fixed: `:` and an empty path segment are refused before anything is written · fixed 2026-09-17
+- [ART-340](ISSUES-archive.md) · A card source refused after unpacking began left its staging folder part-filled, with nothing owning its removal — fixed: a product scratch guard (`OwnedScratch`) that a card-OS session holds and removes on every ending · fixed 2026-09-17
 - [ART-339](ISSUES-archive.md) · `core/card` and `core/preload` imported each other, against CLAUDE.md's inward-layering rule — fixed: `content.rs` moved to `core/cardos/`, above both · fixed 2026-09-17
 - [ART-338](ISSUES-archive.md) · ART's own LZX reader refused a match that reaches back before a merged group's first byte, which real archives do — fixed: that part of the window reads as zeros, as the Amiga archiver's does · fixed 2026-09-17
 - [ART-337](ISSUES-archive.md) · ART's native FFS copy dropped a `.uaem` sidecar's comment, for files and drawers, without counting the loss · fixed 2026-09-17
