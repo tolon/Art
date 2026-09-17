@@ -30,6 +30,11 @@ import type { DroppedAnalysis } from "@/types";
 export function Layout() {
   const [dragOver, setDragOver] = useState(false);
   const [analyses, setAnalyses] = useState<DroppedAnalysis[]>([]);
+  // The drop position, CSS pixels, converted once in `dnd.ts`
+  // (`cssPointOf`, experiment-drop-coordinates.md) — carried out to the
+  // outlet context beside `analyses`/`dragOver` so a card row can be hit
+  // without a second listener (round 4 task 6). `null` outside a drag.
+  const [dropPosition, setDropPosition] = useState<{ x: number; y: number } | null>(null);
   const record = useRecentFilesStore((s) => s.record);
   const reloadRecent = useRecentFilesStore((s) => s.load);
   const { t } = useTranslation();
@@ -181,9 +186,13 @@ export function Layout() {
 
   useEffect(() => {
     const handler: DropHandler = {
-      onPhase: (phase) => setDragOver(phase === "enter" || phase === "over"),
-      onDrop: (results) => {
+      onPhase: (phase, position) => {
+        setDragOver(phase === "enter" || phase === "over");
+        setDropPosition(position ?? null);
+      },
+      onDrop: (results, position) => {
         setDragOver(false);
+        setDropPosition(position ?? null);
         setAnalyses(results);
         // Record successful analyses into recent files.
         for (const r of results) {
@@ -218,7 +227,7 @@ export function Layout() {
                 (ART-196). Renders nothing at all afterwards. */}
             <ScratchRootGate />
             <JobBar />
-            <Outlet context={{ analyses, dragOver }} />
+            <Outlet context={{ analyses, dragOver, dropPosition }} />
           </main>
         </div>
         {/* The way back when the sidebar is hidden. Placed on the shell rather
