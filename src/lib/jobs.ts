@@ -22,6 +22,15 @@ export type JobState =
   | { state: "cancelled"; files_landed: number | null }
   | { state: "failed"; error_code: string; message: string }
   /**
+   * Refused — the fourth ending (card round 4, Task 1). Something ART's own
+   * rules stopped it doing, decided *before* anything was harmed: never
+   * "not succeeded" and never `failed`, because a refused card build's next
+   * step is the user's (a name, a file, a setting), not "try again".
+   * `code` is the refusal's own `ART-*` id, exactly what the refusing
+   * `CoreError` on the Rust side carries.
+   */
+  | { state: "refused"; code: string; message: string }
+  /**
    * Cancelled by ART itself because a newer job in the same lane replaced it
    * (ART-195) — a live preview the screen re-asked for.
    *
@@ -162,6 +171,8 @@ export function jobStatusLabel(job: JobProgress): Phrase {
           };
     case "failed":
       return { key: "components.jobBar.status.failed", params: { code: job.state.error_code } };
+    case "refused":
+      return { key: "components.jobBar.status.refused" };
     case "superseded":
       // Never actually rendered — `JobBar` drops a superseded job rather than
       // showing it — but the switch has to be total, and "cancelled" is the

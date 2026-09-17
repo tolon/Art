@@ -186,7 +186,8 @@
         "cancelled": "İptal edildi",
         "cancelledPartway_one": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
         "cancelledPartway_other": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
-        "failed": "Başarısız ({{code}})"
+        "failed": "Başarısız ({{code}})",
+        "refused": "Reddedildi"
       },
       "title": {
         "addPackages_one": "{{target}} içine {{count}} paket ekleniyor",

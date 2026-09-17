@@ -81,10 +81,14 @@ export function JobBar() {
   const running = jobs.filter(isRunning);
   const finished = jobs.filter((j) => !isRunning(j));
 
-  // Finished jobs are worth a moment's acknowledgement, but only failures and
-  // cancellations are worth keeping on screen once the user has seen them.
+  // Finished jobs are worth a moment's acknowledgement, but only failures,
+  // refusals and cancellations are worth keeping on screen once the user has
+  // seen them.
   const notable = finished.filter(
-    (j) => j.state.state === "failed" || j.state.state === "cancelled"
+    (j) =>
+      j.state.state === "failed" ||
+      j.state.state === "refused" ||
+      j.state.state === "cancelled"
   );
 
   if (running.length === 0 && notable.length === 0) return null;
@@ -132,6 +136,10 @@ function JobRow({ job }: { job: JobProgress }) {
   const pct = fraction(job);
   const running = isRunning(job);
   const failed = job.state.state === "failed";
+  // Its own tone (round 4, Task 1): kept on screen like a failure, but never
+  // rendered as one — the message is the refusal's own, and the status word
+  // above it is `components.jobBar.status.refused`, not `…status.failed`.
+  const refused = job.state.state === "refused";
   const status = jobStatusLabel(job);
 
   return (
@@ -198,6 +206,10 @@ function JobRow({ job }: { job: JobProgress }) {
       )}
 
       {failed && job.state.state === "failed" && (
+        <div className="muted">{job.state.message}</div>
+      )}
+
+      {refused && job.state.state === "refused" && (
         <div className="muted">{job.state.message}</div>
       )}
     </div>

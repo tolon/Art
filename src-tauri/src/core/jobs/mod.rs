@@ -22,6 +22,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::error::CoreError;
+
 /// A running job's identity, unique for the lifetime of the application.
 pub type JobId = u64;
 
@@ -47,6 +49,18 @@ pub enum JobState {
         error_code: String,
         message: String,
     },
+    /// Refused — the fourth ending (card round 4, Task 1). Something ART's
+    /// own rules stopped it doing, decided **before** anything was harmed,
+    /// never "not succeeded" and never `Failed`: a refused card build has a
+    /// next step that is the user's (a name, a file, a setting), not "try
+    /// again" (T's I3, `commands/cardos.rs::ending_for`). `code` is the
+    /// refusal's own `ART-*` id, exactly what the refusing `CoreError`
+    /// itself carries, so a refusal never gets a second, generic code of its
+    /// own.
+    Refused {
+        code: String,
+        message: String,
+    },
     /// Cancelled by ART itself, because a newer job in the same lane made
     /// this one's answer worthless before it could give it (ART-195).
     ///
@@ -64,6 +78,63 @@ pub enum JobState {
 impl JobState {
     pub fn is_terminal(&self) -> bool {
         !matches!(self, Self::Running)
+    }
+}
+
+/// What a job's closure ends with — the shell half (`commands/jobs.rs`)
+/// turns this into the terminal [`JobState`] the UI is told.
+///
+/// Every job but the card build still just returns a plain
+/// `Result<(), CoreError>` through `spawn_job` / `spawn_job_in_lane`; those
+/// two convert it into [`JobOutcome::Other`] themselves (`Ok(())` becomes
+/// [`JobOutcome::Finished`]), so **no other command's behaviour changes**.
+/// [`JobOutcome::Refused`] exists for the one caller that already knows its
+/// own error is a refusal rather than a failure — the card build, whose
+/// `ending_for` makes exactly that call once and would otherwise have to
+/// repeat it, or lose it, on the way to the job bar.
+#[derive(Debug)]
+pub enum JobOutcome {
+    /// Finished normally.
+    Finished,
+    /// A refusal, already decided by the closure's own error — the job
+    /// bar's fourth ending.
+    Refused(CoreError),
+    /// Anything else, `Cancelled` / `CancelledPartway` included — routed
+    /// exactly as `spawn_job`'s plain `Err(CoreError)` always was.
+    Other(CoreError),
+}
+
+impl From<Result<(), CoreError>> for JobOutcome {
+    fn from(result: Result<(), CoreError>) -> Self {
+        match result {
+            Ok(()) => JobOutcome::Finished,
+            Err(e) => JobOutcome::Other(e),
+        }
+    }
+}
+
+impl JobOutcome {
+    /// The terminal [`JobState`] this outcome ends its job with.
+    pub fn into_state(self) -> JobState {
+        match self {
+            JobOutcome::Finished => JobState::Finished,
+            JobOutcome::Refused(e) => JobState::Refused {
+                code: e.code().to_string(),
+                message: e.to_string(),
+            },
+            JobOutcome::Other(CoreError::Cancelled) => JobState::Cancelled { files_landed: None },
+            // Cancelled, with work already durable on disk (ART-058). Still
+            // a cancellation and not a failure — the job bar must not go red
+            // for something the user asked for — but the count travels with
+            // it so the UI can say what is on the volume.
+            JobOutcome::Other(CoreError::CancelledPartway { files }) => JobState::Cancelled {
+                files_landed: Some(files),
+            },
+            JobOutcome::Other(e) => JobState::Failed {
+                error_code: e.code().to_string(),
+                message: e.to_string(),
+            },
+        }
     }
 }
 
@@ -351,6 +422,53 @@ mod tests {
             serde_json::to_value(&title).unwrap(),
             serde_json::json!({ "key": "components.jobBar.title.syncAminet" })
         );
+    }
+
+    /// A refusal-coded error ends `Refused`, carrying that error's own code
+    /// — never a second, generic "refused" code of its own.
+    #[test]
+    fn a_refused_outcome_ends_refused_with_the_errors_own_code() {
+        let err = crate::core::error::CoreError::SafetyRefused("no room on the card".into());
+        let code = err.code().to_string();
+        let message = err.to_string();
+
+        let state = JobOutcome::Refused(err).into_state();
+
+        assert_eq!(state, JobState::Refused { code, message });
+    }
+
+    /// The same error, routed through `Other` instead, still ends `Failed`
+    /// — the two states are not the same code path with a label swapped.
+    #[test]
+    fn the_same_error_routed_as_other_still_ends_failed() {
+        let err = crate::core::error::CoreError::SafetyRefused("no room on the card".into());
+        let code = err.code().to_string();
+        let message = err.to_string();
+
+        let state = JobOutcome::Other(err).into_state();
+
+        assert_eq!(
+            state,
+            JobState::Failed {
+                error_code: code,
+                message
+            }
+        );
+    }
+
+    /// `Ok(())` and a plain `Err` still behave exactly as `spawn_job` always
+    /// routed them — the `From` conversion `spawn_job`/`spawn_job_in_lane`
+    /// use to keep every other command unchanged.
+    #[test]
+    fn a_plain_result_converts_to_finished_or_other() {
+        assert!(matches!(
+            JobOutcome::from(Ok(())).into_state(),
+            JobState::Finished
+        ));
+        assert!(matches!(
+            JobOutcome::from(Err(crate::core::error::CoreError::Cancelled)).into_state(),
+            JobState::Cancelled { files_landed: None }
+        ));
     }
 
     /// The event the job bar receives carries the phrase, not a sentence.

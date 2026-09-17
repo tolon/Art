@@ -56,7 +56,7 @@ use crate::core::cardos::readback::{count_pfs3_partition, PartitionCount};
 use crate::core::cardos::whdload::{install_whdload, WhdloadInstalled};
 use crate::core::clock::AmigaClock;
 use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, JobTitle, ProgressSink};
+use crate::core::jobs::{JobId, JobOutcome, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{DistributionManifest, MANIFEST_FILE_NAME};
 use crate::core::pistorm::firmware::FirmwareConfig;
@@ -70,7 +70,7 @@ use crate::core::scratch_guard::{LeftBehind, OwnedScratch};
 use crate::error::AppResult;
 use crate::tools::hst_imager::HstImager;
 
-use super::jobs::{spawn_job, JobRegistry};
+use super::jobs::{spawn_job, spawn_job_with_outcome, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 
 /// The session's folders, inside its [`OwnedScratch`].
@@ -1083,6 +1083,18 @@ fn ending_for(phase: BuildPhase, error: &CoreError, refused: bool) -> CardOsEndi
     }
 }
 
+/// What the build's job ends with, from what it built (round 4 Task 1). The
+/// ending is already decided — this only carries `CardOsEnding::Refused`'s
+/// own decision through to the job bar, which would otherwise turn every
+/// non-success into `Failed` and call a refusal what it is not.
+fn job_outcome(ending: &CardOsEnding, error: Option<CoreError>) -> JobOutcome {
+    match (ending, error) {
+        (CardOsEnding::Refused { .. }, Some(err)) => JobOutcome::Refused(err),
+        (_, Some(err)) => JobOutcome::Other(err),
+        (_, None) => JobOutcome::Finished,
+    }
+}
+
 /// The build, without Tauri: what `card_os_build` runs on its job thread and
 /// Task 13 runs in a test.
 pub(crate) fn build_card_os(
@@ -1241,7 +1253,7 @@ pub fn card_os_build(
     let image = ticket.image.display().to_string();
     let title = JobTitle::new("components.jobBar.title.buildCardOs").text("target", &image);
 
-    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+    let id = spawn_job_with_outcome(&app, registry, title, move |job_id, progress| {
         let native = NativeFormatter::new(&crate::tools::local_time::LOCAL_TIME);
         // I1: the hst-imager the preparation asked, never a second path.
         let hst = ticket
@@ -1278,6 +1290,11 @@ pub fn card_os_build(
             partial,
             error,
         } = built;
+        // Computed before `ending` moves into the emitted event below — the
+        // decision `ending_for` already made, carried to the job bar rather
+        // than re-derived (round 4 Task 1: a refused build is never called
+        // failed).
+        let outcome = job_outcome(&ending, error);
         let _ = emit_app.emit(
             CARD_OS_BUILD_EVENT,
             CardOsBuildResult {
@@ -1294,10 +1311,7 @@ pub fn card_os_build(
                 scratch_left,
             },
         );
-        match error {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
+        outcome
     });
 
     Ok(id)
@@ -1788,6 +1802,14 @@ mod tests {
         // System was formatted and filled before SDH1 failed, and says so.
         assert_eq!(built.steps.len(), 2, "{:?}", built.steps);
         assert!(built.error.is_some());
+
+        // Round 4 Task 1: any other error still ends the job `Other`
+        // (`Failed`, once `into_state` runs), never `Refused` — a failure
+        // partway through is not a refusal decided before harm.
+        match job_outcome(&built.ending, built.error) {
+            JobOutcome::Other(_) => {}
+            other => panic!("expected a plain (failed) outcome, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1856,6 +1878,14 @@ mod tests {
         assert_eq!(built.partial, PartialRemoval::NotCreated);
         assert!(!partial_path_for(&image).exists() && !image.exists());
         assert_eq!(listing(&tree), before, "the tree is unchanged");
+
+        // Round 4 Task 1: the job bar's own fourth ending — the refusal
+        // `ending_for` already decided reaches the job outcome unchanged,
+        // carrying the refusal's own code, never a generic one.
+        match job_outcome(&built.ending, built.error) {
+            JobOutcome::Refused(err) => assert_eq!(err.code(), "ART-KICKSTART-NOT-PROPOSED"),
+            other => panic!("expected a refused outcome, got {other:?}"),
+        }
     }
 
     #[test]

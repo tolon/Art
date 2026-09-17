@@ -86,6 +86,16 @@ describe("jobStatusLabel — a cancelled job says what it left behind (ART-058)"
     expect(failed.key).toBe("components.jobBar.status.failed");
     expect(failed.params).toEqual({ code: "ART-IO" });
   });
+
+  it("answers its own key for a refused job — never the failed key (round 4, Task 1)", () => {
+    const refused = jobStatusLabel(
+      job({
+        state: { state: "refused", code: "ART-KICKSTART-NOT-PROPOSED", message: "x" },
+      })
+    );
+    expect(refused.key).toBe("components.jobBar.status.refused");
+    expect(refused.key).not.toBe("components.jobBar.status.failed");
+  });
 });
 
 describe("fraction", () => {
