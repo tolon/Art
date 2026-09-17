@@ -28,10 +28,10 @@ where it was taken.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-17 — card round 3's residual round after the scoped re-review (`d344b26`) recorded its runs; this file's `main`/`origin`, test, lint, sweep, open-defect and "Picking up next session" rows describe `art-card-round-3` after that round. The last code change on `main` is still card round 2's merge, `69d3a40` — round 3 is not merged |
+| **Last updated** | 2026-09-17 — card round 3 merged into `main` (`d421822`, `--no-ff`, on the owner's word) after its second whole-suite run; the `main`/`origin`, test and "Picking up next session" rows below describe `main` at that merge |
 | **Version** | **0.9.4**, released 2026-09-15 — tag `v0.9.4` (annotated, on `e91f22e`), release run 34969262720 `success`, published on the owner's word with one NSIS and one MSI installer. Its notes are CHANGELOG's `[0.9.4]` section. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` — all `0.9.4`, checked 2026-09-17) and `release.yml` refuses a tag that disagrees with any of them, or a version with no CHANGELOG section |
-| **`main` / `origin`** | `origin/main` is still `c866021` (unchanged since the documentation cleanup). **Card round 3 is on `art-card-round-3`, unmerged: reviewed (0 Critical, 5 Important, 18 Minor), fixed in one wave, re-reviewed, its residuals (N1, N2, N5, N6, ART-343's ROM half, M18) fixed — ready to merge on the owner's word** (fourteen tasks: `core/cardos/` above `core/card`/`core/preload` — ART-339 — the WHDLoad phase, the Kickstart proposal, `card_os_open`/`prepare`/`build`/`close`, `.partial` output, and the end-to-end card proven against `hst-imager`). One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
-| **Tests — Rust** | `cd src-tauri && cargo test --lib` on card round 3's residual-round tree (`d344b26`'s code), 2026-09-17, run once: `test result: ok. 3715 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 517.14s`. The fix-wave tree, once: 3708 passed / 66 ignored; before the wave, at `bca7794`, twice: 3686 / 66. **The residual round's run is this tree's first; a second is owed before merging (ART-059)** |
+| **`main` / `origin`** | **`main` is `d421822`** — card round 3 merged `--no-ff` on 2026-09-17 on the owner's word and `art-card-round-3` deleted; pushed, and CI's result on it is the row below. Round 3 was reviewed (0 Critical, 5 Important, 18 Minor), fixed in one wave, re-reviewed, and its residuals (N1, N2, N5, N6, ART-343's ROM half, M18) fixed (fourteen tasks: `core/cardos/` above `core/card`/`core/preload` — ART-339 — the WHDLoad phase, the Kickstart proposal, `card_os_open`/`prepare`/`build`/`close`, `.partial` output, and the end-to-end card proven against `hst-imager`). One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib` on the tree merged as `d421822` (the code of `d344b26`), 2026-09-17, run **twice** (ART-059): `test result: ok. 3715 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 517.14s` and again `ok. 3715 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 555.23s` |
 | **Tests — frontend** | `pnpm test` on the fix-wave tree, 2026-09-17: `Test Files 113 passed (113)`, `Tests 1730 passed (1730)` |
 | **Lint, format, clippy** | Clean on the residual-round tree, 2026-09-17: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`). `pnpm lint` last on the fix-wave tree (the residual round changed no TypeScript) |
 | **Sweeps** | Card round 3's residual round, 2026-09-17, all clean: `control-byte-sweep.py` (7 files allow-listed for AmigaDOS DosType data and 7 for deliberate alignment), `scratch-root-sweep.py` (5 named exceptions — `OwnedScratch::create_in(root, …)` in `commands/cardos.rs` goes through the root it is given, not flagged), `scratch-guard-sweep.py` (157 guard sources, 2064 call sites, 3 hand-built paths, 9 platform-root arguments, 12 exempt), `contrast-check.py --quiet` (105 pairs, both themes). `rom-table-check.py` re-run: 154 identifiable dumps, "the committed table says exactly what the database says" |
@@ -269,8 +269,8 @@ A documentation cleanup followed it (`c866021`, pushed, CI green): closed
 ISSUES entries moved to `docs/ISSUES-archive.md`, executed plans and specs
 pruned, session log and CHANGELOG summarised. It changed no code.
 
-**In progress.** Card round 3 is **built, reviewed and fixed, on
-`art-card-round-3`, unmerged**: fourteen tasks — `core/cardos/` moved above `core/card` and
+**Card round 3 is merged** (`d421822`, `--no-ff`, pushed; the branch is
+deleted): fourteen tasks — `core/cardos/` moved above `core/card` and
 `core/preload` (ART-339), a product scratch guard (`OwnedScratch`) a card-OS
 session holds and removes on every ending (ART-340), `:`/empty-segment
 AmigaDOS names refused before anything is written (ART-341), the PFS3 driver
@@ -289,9 +289,12 @@ a manifest counted off the finished card; System's two refusals with their own
 next steps. The scoped re-review (`fix-wave-re-review.md`) found one wave
 sentence wrong (N1) and three Minors; the residual round (`d344b26`,
 `residual-fix-report.md`) fixed them, split ART-343's ROM half out and fixed it,
-and wrote round 1's cylinder note into CHANGELOG. **Next: a second whole-suite
-run on this tree (ART-059), then merge on the owner's word** — ready to merge,
-no further review owed — then round 4 (every
+and wrote round 1's cylinder note into CHANGELOG. The second whole-suite run
+(ART-059) came back green and the merge followed. Two wording Minors the
+residual re-review raised are deliberately left for round 4: the
+`KickstartSourceChanged` sentence's phrasing, and a `CardFinishLeftBothNames`
+that can be reported beside a later `PartialRemoval::Removed` (both true, at
+different moments). **Next: round 4** (every
 screen the card needs — it must show the four endings and ART-343/344's
 refusals — plus the owner's own card flashed and booted on a real PiStorm).
 
