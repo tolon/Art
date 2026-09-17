@@ -94,6 +94,11 @@ ART is built on the following open-source projects:
   upstream), which spawns a thread pool to parallelise the IDCT step that a
   one-shot wallpaper conversion does not need — so this crate brings no
   transitive dependency of its own
+- **windows-sys** (MIT / Apache-2.0) — **Outside `core/`**, in
+  `tools/free_space.rs`, for `GetDiskFreeSpaceExW`: a card build refuses
+  before it writes when the image's or the scratch's volume is short (design
+  § 6). Already in the build through other crates; this makes it a direct
+  dependency with one feature.
 - **i18next / react-i18next** — internationalization (MIT)
 - **zustand** — state management (MIT)
 - **react-router-dom** — routing (MIT)

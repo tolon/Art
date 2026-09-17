@@ -8,6 +8,7 @@
 //! string** (`core/security`). A path the user picked is an argument, not text
 //! concatenated into a command line.
 
+pub mod free_space;
 pub mod hst_imager;
 pub mod local_time;
 pub mod recycle_bin;
