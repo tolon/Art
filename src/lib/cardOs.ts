@@ -283,3 +283,38 @@ export async function onCardOsBuildResult(
 ): Promise<UnlistenFn> {
   return listen<CardOsBuildResult>(CARD_OS_BUILD_EVENT, (event) => handler(event.payload));
 }
+
+// ---------------------------------------------------------------------------
+// Phase and count
+// ---------------------------------------------------------------------------
+
+/** A build's four phases, plus the preparation's own. */
+export type CardOsPhaseName = BuildPhase | "prepare";
+
+/** What a phase's count is measured in. */
+export type PhaseUnit = "files" | "steps";
+
+export const CARD_OS_PHASE_EVENT = "card-os-phase";
+
+/**
+ * How far a build (or a preparation) has got in one of its phases, so the
+ * screen can say "Bölümler: 4 812 / 9 216 dosya" instead of nothing.
+ * Emitted when a phase starts (`done: 0`) and as it advances.
+ *
+ * `total: null` when the phase cannot know its total — draw a count then,
+ * never a bar (a bar of a guessed width carries no information).
+ */
+export interface CardOsPhaseEvent {
+  jobId: number;
+  session: number;
+  phase: CardOsPhaseName;
+  done: number;
+  total: number | null;
+  unit: PhaseUnit;
+}
+
+export async function onCardOsPhase(
+  handler: (event: CardOsPhaseEvent) => void
+): Promise<UnlistenFn> {
+  return listen<CardOsPhaseEvent>(CARD_OS_PHASE_EVENT, (event) => handler(event.payload));
+}

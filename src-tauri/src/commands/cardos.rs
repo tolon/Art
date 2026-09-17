@@ -433,6 +433,26 @@ pub fn card_os_prepare(
     let title = JobTitle::new("components.jobBar.title.prepareCardOs").text("target", &target);
 
     let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        // Task 2: the screen's phase-and-count, before the (possibly slow)
+        // preparation itself starts — the source count is known from the
+        // request alone.
+        let source_count = request
+            .partitions
+            .iter()
+            .map(|partition| partition.sources.len() as u64)
+            .sum::<u64>();
+        let _ = emit_app.emit(
+            CARD_OS_PHASE_EVENT,
+            CardOsPhaseEvent {
+                job_id,
+                session: request.session,
+                phase: CardOsPhase::Prepare,
+                done: 0,
+                // Never `Some(0)` standing in for "unknown" (the bar rule).
+                total: (source_count > 0).then_some(source_count),
+                unit: PhaseUnit::Files,
+            },
+        );
         let outcome = prepare_card(
             &request,
             &image,
@@ -558,6 +578,100 @@ impl BuildPhase {
             Self::Partitions => "partitions",
             Self::Check => "check",
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase and count (round 4, Task 2): the screen says "Bölümler: 4 812 /
+// 9 216 dosya" instead of nothing.
+// ---------------------------------------------------------------------------
+
+/// The event a build's or a preparation's phase-and-count arrives on.
+pub const CARD_OS_PHASE_EVENT: &str = "card-os-phase";
+
+/// Every phase the screen can be told about: a build's four, plus the
+/// preparation's own (it is not one of [`BuildPhase`]'s four — a preparation
+/// never reaches the build).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CardOsPhase {
+    Whdload,
+    Card,
+    Partitions,
+    Check,
+    Prepare,
+}
+
+impl From<BuildPhase> for CardOsPhase {
+    fn from(phase: BuildPhase) -> Self {
+        match phase {
+            BuildPhase::Whdload => Self::Whdload,
+            BuildPhase::Card => Self::Card,
+            BuildPhase::Partitions => Self::Partitions,
+            BuildPhase::Check => Self::Check,
+        }
+    }
+}
+
+/// What a phase's count is measured in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PhaseUnit {
+    Files,
+    Steps,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardOsPhaseEvent {
+    pub job_id: JobId,
+    pub session: u64,
+    pub phase: CardOsPhase,
+    pub done: u64,
+    /// `None` when this phase cannot know its total — the screen then draws
+    /// a count and never a bar (the bar rule, T §1.4). Never `Some(0)`
+    /// standing in for "unknown".
+    pub total: Option<u64>,
+    pub unit: PhaseUnit,
+}
+
+/// Where a build's (or a preparation's) phase-and-count goes. [`build_card_os`]
+/// takes this as a trait object, never an `AppHandle`, so it stays testable
+/// without Tauri — the job closure supplies the real emitter
+/// ([`EmittingPhaseSink`]).
+pub(crate) trait PhaseSink: Send + Sync {
+    fn phase(&self, phase: CardOsPhase, done: u64, total: Option<u64>, unit: PhaseUnit);
+}
+
+/// No phase-and-count event — for a caller, or a test, that does not care.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct NoPhaseSink;
+
+impl PhaseSink for NoPhaseSink {
+    fn phase(&self, _phase: CardOsPhase, _done: u64, _total: Option<u64>, _unit: PhaseUnit) {}
+}
+
+/// The real emitter a build's job closure gives [`build_card_os`]: every
+/// `phase()` call becomes a [`CARD_OS_PHASE_EVENT`] on the webview.
+struct EmittingPhaseSink<'a> {
+    app: &'a AppHandle,
+    job_id: JobId,
+    session: u64,
+}
+
+impl PhaseSink for EmittingPhaseSink<'_> {
+    fn phase(&self, phase: CardOsPhase, done: u64, total: Option<u64>, unit: PhaseUnit) {
+        let _ = self.app.emit(
+            CARD_OS_PHASE_EVENT,
+            CardOsPhaseEvent {
+                job_id: self.job_id,
+                session: self.session,
+                phase,
+                done,
+                total,
+                unit,
+            },
+        );
     }
 }
 
@@ -933,6 +1047,7 @@ fn run_phases(
     native: &dyn VolumeFormatter,
     fallback: Option<HstFallback<'_>>,
     progress: &dyn ProgressSink,
+    phases: &dyn PhaseSink,
     built: &mut BuiltCardOs,
     written: &mut Written,
 ) -> PhaseResult<()> {
@@ -940,6 +1055,7 @@ fn run_phases(
 
     // 1. WHDLoad and the agreed Kickstarts, into the tree.
     gate(Whdload, progress)?;
+    phases.phase(Whdload.into(), 0, None, PhaseUnit::Files);
     built.kickstarts = place_agreed(&prepared.kickstarts, &request.agreed_kickstarts, tree)
         .map_err(at(Whdload))?;
     if let Some(choice) = &prepared.whdload {
@@ -950,6 +1066,7 @@ fn run_phases(
     //    again: the Whdload phase took time, and a file that appeared meanwhile
     //    is still a refusal, not a failure.
     gate(Card, progress)?;
+    phases.phase(Card.into(), 0, None, PhaseUnit::Files);
     refuse_partial_destination(image).map_err(at(Card))?;
     let partial = partial_path_for(image);
     let CardImageInputs {
@@ -969,11 +1086,22 @@ fn run_phases(
         }
     }
 
-    // 3. Every partition formatted, and filled from its roots.
+    // 3. Every partition formatted, and filled from its roots. The total file
+    //    count is only known once every copy has run (`CopySummary`'s own
+    //    tally) — reported as the phase's tally, not a live per-file count.
     gate(Partitions, progress)?;
+    phases.phase(Partitions.into(), 0, None, PhaseUnit::Files);
     let made = plan(&preload_request_for(prepared, tree, &partial)).map_err(at(Partitions))?;
     match run_with_fallback(&made, native, fallback.map(|f| f.tool), progress) {
-        Ok((_outcome, steps)) => built.steps = steps,
+        Ok((outcome, steps)) => {
+            built.steps = steps;
+            let copied = outcome.copied.files;
+            // Never `Some(0)` standing in for "unknown" — a phase that truly
+            // copied nothing says so with `None`, same as one that cannot
+            // know its total at all (the bar rule).
+            let total = (copied > 0).then_some(copied);
+            phases.phase(Partitions.into(), copied, total, PhaseUnit::Files);
+        }
         Err(stopped) => {
             let stopped = *stopped;
             built.steps = stopped.steps;
@@ -981,13 +1109,24 @@ fn run_phases(
         }
     }
 
-    // 4. Counted, described, checked, named — and only then its manifest.
+    // 4. Counted, described, checked, named — and only then its manifest. The
+    //    partition count is known before the read-back starts, so the screen
+    //    sees each partition's check land in turn.
     gate(Check, progress)?;
     let card = read_card(&partial).map_err(at(Check))?;
-    let counts = (0..prepared.measured.plan.partitions.len())
-        .map(|index| count_pfs3_partition(&partial, &card, 0, index))
-        .collect::<CoreResult<Vec<_>>>()
-        .map_err(at(Check))?;
+    let total_partitions = prepared.measured.plan.partitions.len() as u64;
+    phases.phase(Check.into(), 0, Some(total_partitions), PhaseUnit::Steps);
+    let mut counts = Vec::with_capacity(prepared.measured.plan.partitions.len());
+    for index in 0..prepared.measured.plan.partitions.len() {
+        let count = count_pfs3_partition(&partial, &card, 0, index).map_err(at(Check))?;
+        counts.push(count);
+        phases.phase(
+            Check.into(),
+            (index + 1) as u64,
+            Some(total_partitions),
+            PhaseUnit::Steps,
+        );
+    }
     let manifest = describe_card(
         &partial,
         facts,
@@ -1097,6 +1236,7 @@ fn job_outcome(ending: &CardOsEnding, error: Option<CoreError>) -> JobOutcome {
 
 /// The build, without Tauri: what `card_os_build` runs on its job thread and
 /// Task 13 runs in a test.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_card_os(
     prepared: &PreparedCard,
     tree: &Path,
@@ -1105,6 +1245,7 @@ pub(crate) fn build_card_os(
     native: &dyn VolumeFormatter,
     fallback: Option<HstFallback<'_>>,
     progress: &dyn ProgressSink,
+    phases: &dyn PhaseSink,
 ) -> BuiltCardOs {
     let mut built = BuiltCardOs {
         ending: CardOsEnding::Succeeded,
@@ -1136,6 +1277,7 @@ pub(crate) fn build_card_os(
         native,
         fallback,
         progress,
+        phases,
         &mut built,
         &mut written,
     );
@@ -1260,6 +1402,11 @@ pub fn card_os_build(
             .hst_imager
             .as_ref()
             .map(|path| (path, HstImager::at(path)));
+        let phase_sink = EmittingPhaseSink {
+            app: &emit_app,
+            job_id,
+            session: request.session,
+        };
         let built = build_card_os(
             &ticket.prepared,
             &ticket.tree,
@@ -1271,6 +1418,7 @@ pub fn card_os_build(
                 tool: tool as &dyn VolumeFormatter,
             }),
             progress,
+            &phase_sink,
         );
 
         // After every ending, the session and its folder go.
@@ -1780,6 +1928,7 @@ mod tests {
             &failing,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         assert!(
@@ -1827,6 +1976,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &sink,
+            &NoPhaseSink,
         );
 
         assert!(
@@ -1865,6 +2015,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         // I3: a refusal is its own ending, never a failure.
@@ -1905,6 +2056,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         // M11: the archive's own refusal, not any Card-phase ending.
@@ -1995,6 +2147,7 @@ mod tests {
                 &NativeFormatter::UTC,
                 fallback,
                 &NoProgress,
+                &NoPhaseSink,
             );
             match &built.ending {
                 CardOsEnding::Refused {
@@ -2055,6 +2208,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         match &built.ending {
@@ -2115,6 +2269,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &sink,
+            &NoPhaseSink,
         );
 
         assert!(
@@ -2185,6 +2340,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         match &built.ending {
@@ -2463,6 +2619,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
         assert!(
             matches!(built.ending, CardOsEnding::Succeeded),
@@ -2563,6 +2720,108 @@ mod tests {
         );
     }
 
+    /// One `phase()` call: what phase, how far, out of what, in what unit.
+    type PhaseEvent = (CardOsPhase, u64, Option<u64>, PhaseUnit);
+
+    /// Records every `phase()` call, in the order it arrived — Task 2's own
+    /// double, so a build can be driven without Tauri and still checked for
+    /// what it told the screen.
+    #[derive(Default)]
+    struct RecordingPhaseSink {
+        events: Mutex<Vec<PhaseEvent>>,
+    }
+
+    impl PhaseSink for RecordingPhaseSink {
+        fn phase(&self, phase: CardOsPhase, done: u64, total: Option<u64>, unit: PhaseUnit) {
+            self.events.lock().unwrap().push((phase, done, total, unit));
+        }
+    }
+
+    /// Task 2: a whole build tells the screen its four phases, in order, with
+    /// counts that never exceed their total and never a `total` of `0`
+    /// standing in for "unknown" (the bar rule, T §1.4) — and nothing arrives
+    /// after `build_card_os` has returned its ending.
+    #[test]
+    fn a_build_reports_its_four_phases_in_order_with_counts_that_never_exceed_their_total() {
+        let (_guard, dir) = scratch("phase-events");
+        let (prepared, tree) = small_prepared_card(&dir);
+        let image = dir.join("card.img");
+        let sink = RecordingPhaseSink::default();
+
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_agreeing(&dir, &["kick34005.A500"]),
+            &NativeFormatter::UTC,
+            None,
+            &NoProgress,
+            &sink,
+        );
+        assert!(
+            matches!(built.ending, CardOsEnding::Succeeded),
+            "{:?} {:?}",
+            built.ending,
+            built.error
+        );
+
+        let events = sink.events.into_inner().unwrap();
+        assert!(!events.is_empty(), "a whole build must report something");
+
+        // Exactly one phase-start (done: 0) per phase, in this order — a
+        // reversal is a defect the screen would show as going backwards.
+        let starts: Vec<CardOsPhase> = events
+            .iter()
+            .filter(|(_, done, ..)| *done == 0)
+            .map(|(phase, ..)| *phase)
+            .collect();
+        assert_eq!(
+            starts,
+            vec![
+                CardOsPhase::Whdload,
+                CardOsPhase::Card,
+                CardOsPhase::Partitions,
+                CardOsPhase::Check,
+            ],
+            "{events:?}"
+        );
+
+        // The bar rule: a `total` is either unknown (`None`) or a real,
+        // positive count — never `Some(0)` standing in for "unknown" — and a
+        // `done` never runs ahead of its own `total`.
+        for (phase, done, total, _unit) in &events {
+            if let Some(total) = total {
+                assert_ne!(
+                    *total, 0,
+                    "{phase:?}: 0 must be None, not a total: {events:?}"
+                );
+                assert!(
+                    done <= total,
+                    "{phase:?}: {done} exceeds {total}: {events:?}"
+                );
+            }
+        }
+
+        // The Check phase counted each of the card's four partitions in
+        // turn, ending at the total it opened with.
+        let check: Vec<(u64, Option<u64>)> = events
+            .iter()
+            .filter(|(phase, ..)| *phase == CardOsPhase::Check)
+            .map(|(_, done, total, _)| (*done, *total))
+            .collect();
+        assert_eq!(
+            check,
+            vec![
+                (0, Some(4)),
+                (1, Some(4)),
+                (2, Some(4)),
+                (3, Some(4)),
+                (4, Some(4)),
+            ],
+            "{events:?}"
+        );
+    }
+
     /// Decision 1, the other direction: a Kickstart the proposal supplies but
     /// the user did not agree to never reaches the card.
     #[test]
@@ -2589,6 +2848,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
         assert!(
             matches!(built.ending, CardOsEnding::Succeeded),
@@ -2653,6 +2913,7 @@ mod tests {
                 tool: tool as &dyn VolumeFormatter,
             }),
             &NoProgress,
+            &NoPhaseSink,
         );
         assert!(
             matches!(built.ending, CardOsEnding::Succeeded),

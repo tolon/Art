@@ -18,16 +18,20 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 import {
   CARD_OS_BUILD_EVENT,
+  CARD_OS_PHASE_EVENT,
   CARD_OS_PREPARE_EVENT,
   cardOsBuild,
   cardOsClose,
   cardOsOpen,
   cardOsPrepare,
   onCardOsBuildResult,
+  onCardOsPhase,
   onCardOsPrepareResult,
   type CardOsBuildRequest,
   type CardOsBuildResult,
   type CardOsEnding,
+  type CardOsPhaseEvent,
+  type CardOsPhaseName,
   type CardOsPrepareRequest,
   type PartialRemoval,
 } from "@/lib/cardOs";
@@ -135,5 +139,49 @@ describe("the card session events", () => {
     await onCardOsPrepareResult(() => {});
     expect(CARD_OS_PREPARE_EVENT).toBe("card-os-prepare-result");
     expect(listenMock).toHaveBeenCalledWith("card-os-prepare-result", expect.any(Function));
+  });
+
+  // Round 4, Task 2: the build says which phase it is in and how far — a
+  // typed event, not a freeform message, so the screen can draw a count.
+  it("listens for a phase-and-count on card-os-phase", async () => {
+    let deliver: ((event: { payload: unknown }) => void) | undefined;
+    listenMock.mockImplementationOnce(async (_name: string, cb: typeof deliver) => {
+      deliver = cb;
+      return () => {};
+    });
+    const seen: CardOsPhaseEvent[] = [];
+
+    await onCardOsPhase((event) => seen.push(event));
+
+    expect(CARD_OS_PHASE_EVENT).toBe("card-os-phase");
+    expect(listenMock).toHaveBeenCalledWith("card-os-phase", expect.any(Function));
+
+    // `total: null` is the bar rule: a phase that cannot know its total is
+    // drawn as a count, never a bar of a guessed width.
+    const started: CardOsPhaseEvent = {
+      jobId: 7,
+      session: 3,
+      phase: "whdload",
+      done: 0,
+      total: null,
+      unit: "files",
+    };
+    const advanced: CardOsPhaseEvent = {
+      jobId: 7,
+      session: 3,
+      phase: "partitions",
+      done: 4812,
+      total: 9216,
+      unit: "files",
+    };
+    deliver?.({ payload: started });
+    deliver?.({ payload: advanced });
+
+    expect(seen).toEqual([started, advanced]);
+
+    // The literal is typed against the Rust mirror: a `phase` the type does
+    // not carry (or a five-phase set that drops "prepare") fails `pnpm lint`.
+    const phases: CardOsPhaseName[] = ["whdload", "card", "partitions", "check", "prepare"];
+    expect(new Set(phases).size).toBe(5);
   });
 });
