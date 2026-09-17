@@ -63,10 +63,12 @@ mod tests {
 
     #[test]
     fn a_path_that_does_not_exist_yet_is_answered_for_its_nearest_existing_folder() {
-        let dir = std::env::temp_dir()
-            .join("art-free-space-not-there")
-            .join("deeper");
-        assert!(available_bytes(&dir).unwrap() > 0);
+        // `dir` itself exists (the guard creates it); `deeper` does not, so
+        // this still exercises the nearest-existing-ancestor walk without
+        // building a scratch path by hand (`scripts/scratch-guard-sweep.py`).
+        let (_guard, dir) = crate::core::ScratchDir::pair("art-free-space", "not-there");
+        let deeper = dir.join("deeper");
+        assert!(available_bytes(&deeper).unwrap() > 0);
     }
 
     // R8 (controller ruling): the brief's third test
