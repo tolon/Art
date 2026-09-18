@@ -331,4 +331,63 @@ describe("the volume preload screen and the core's own name rule (Q7)", () => {
     await confirm();
     expect(runButton().disabled).toBe(false);
   });
+
+  /**
+   * **The question is asked once, and the answer is kept** (round 4 fix-wave
+   * re-review, N1).
+   *
+   * The names in flight were held in `useState` **and listed in the checking
+   * effect's own dependencies**, so adding a name re-ran the effect and the
+   * re-run's cleanup cancelled the answer already on its way. The answer then
+   * arrived, was discarded for "not current", and removed the name from the
+   * in-flight list — which re-ran the effect once more, found the name in
+   * neither map, and asked again. In the running app that is
+   * `card_os_check_volume_name` at IPC rate for as long as a name is chosen,
+   * `nameVerdicts` never receiving an entry (so a name the core refuses never
+   * blocks Run — the regression the in-flight list was added to fix), and a
+   * flickering blocker.
+   *
+   * **Why the existing case above cannot see it**: its mock resolves as a
+   * microtask, which beats the re-render React has already scheduled, so the
+   * cleanup never runs before the answer lands. The round trip here resolves
+   * on a **macrotask**, which is the only thing an `invoke` can do, and the
+   * two assertions are the two halves of the loop: how many times one
+   * unchanged name was asked about, and whether its verdict was stored.
+   */
+  it("asks the core once for one unchanged name, and keeps the verdict that lands late", async () => {
+    const user = userEvent.setup();
+    let answer: ((verdict: VolumeNameVerdict) => void) | null = null;
+    checkVolumeNameMock.mockImplementation(
+      () =>
+        new Promise<VolumeNameVerdict>((resolve) => {
+          answer = (verdict) => setTimeout(() => resolve(verdict), 0);
+        })
+    );
+    render(<VolumePreload />);
+
+    await waitFor(() => expect(screen.getByText("SDH0")).toBeTruthy());
+    await user.click(screen.getAllByRole("checkbox")[0]);
+
+    // Asked, and said so — with nothing but the asking having changed since.
+    await waitFor(() => expect(checkVolumeNameMock).toHaveBeenCalledWith("SDH0"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(
+      screen.getByText("ART is checking whether SDH0's volume name is one AmigaDOS accepts.")
+    ).toBeTruthy();
+
+    // The answer lands a macrotask later, after React has re-rendered.
+    await act(async () => {
+      answer?.({ ok: false, why: "too-long", maxChars: 30 });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(
+      screen.getByText(
+        "SDH0's volume name is longer than 30 characters, which is where AmigaDOS names stop."
+      )
+    ).toBeTruthy();
+    expect(checkVolumeNameMock.mock.calls.filter(([name]) => name === "SDH0")).toHaveLength(1);
+  });
 });

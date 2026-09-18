@@ -22,7 +22,7 @@
 // setting beside `winuaePath`, and this screen can set it too so somebody who
 // arrives here first is not sent to Settings and back.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -169,10 +169,29 @@ export function VolumePreload() {
     }
   }, [fingerprint]);
 
-  /** The names whose round trip is in flight — what blocks Run while it is
-   *  (round 4 final review, minor) and what stops a second ask for a name
-   *  already being asked about. */
-  const [namesChecking, setNamesChecking] = useState<string[]>([]);
+  /**
+   * The names whose round trip is in flight — what blocks Run while it is
+   * (round 4 final review, minor) and what stops a second ask for a name
+   * already being asked about.
+   *
+   * **A ref, not state** (round 4 fix-wave re-review, N1). Held in `useState`
+   * it was in the checking effect's own dependency list, and the effect's
+   * first act was to add to it — always a new array, so never a bail-out. So
+   * asking re-ran the effect, the re-run's cleanup cancelled the answer
+   * already on its way, the answer arrived and was discarded for "not
+   * current", and discarding it removed the name — which re-ran the effect
+   * once more, found the name in neither map, and asked again. In the running
+   * app that is `card_os_check_volume_name` in a loop at IPC rate for as long
+   * as a name is chosen, with `nameVerdicts` never receiving an entry, so a
+   * name the core refuses never blocks Run at all. The suite was green over it
+   * because a mocked promise resolves as a microtask — before the re-render
+   * React has already scheduled — which an `invoke` round trip cannot do.
+   *
+   * The ref carries the truth; `noteChecking` below is a bare render trigger
+   * so the blocker's *"checking…"* sentence follows it.
+   */
+  const namesChecking = useRef<Set<string>>(new Set());
+  const [, noteChecking] = useReducer((count: number) => count + 1, 0);
 
   /** Every chosen, non-empty, trimmed name — the whole of what this screen
    *  ever has an opinion about. */
@@ -200,9 +219,8 @@ export function VolumePreload() {
   // it, every chosen name has an entry, so the effect's own `names` list is
   // empty and it does not run again.
   useEffect(() => {
-    const names = chosenNames.filter(
-      (name) => !(name in nameVerdicts) && !namesChecking.includes(name)
-    );
+    const inFlight = namesChecking.current;
+    const names = chosenNames.filter((name) => !(name in nameVerdicts) && !inFlight.has(name));
     if (names.length === 0) {
       setNameVerdicts((prev) => {
         const kept = Object.keys(prev).filter((name) => chosenNames.includes(name));
@@ -211,15 +229,20 @@ export function VolumePreload() {
       });
       return;
     }
-    let current = true;
-    setNamesChecking((prev) => [...new Set([...prev, ...names])]);
-    const done = () =>
-      setNamesChecking((prev) => prev.filter((name) => !names.includes(name)));
+    for (const name of names) inFlight.add(name);
+    noteChecking();
+    const done = () => {
+      for (const name of names) inFlight.delete(name);
+      noteChecking();
+    };
     void Promise.all(
       names.map((name) => cardOsCheckVolumeName(name).then((verdict) => [name, verdict] as const))
     )
       .then((entries) => {
-        if (!current) return done();
+        // **The answer is kept whatever has re-rendered since** (N1): it is a
+        // verdict on a string, not on this render, and nothing but an answer
+        // can end the asking. A verdict for a name nobody has chosen any more
+        // is dropped by the prune branch above on the next pass.
         setNameVerdicts((prev) => {
           const next = { ...prev };
           for (const [name, verdict] of entries) next[name] = verdict;
@@ -234,10 +257,7 @@ export function VolumePreload() {
         // in `preloadBlocker`'s own comment.
         done();
       });
-    return () => {
-      current = false;
-    };
-  }, [chosenKey, chosenNames, nameVerdicts, namesChecking]);
+  }, [chosenKey, chosenNames, nameVerdicts]);
 
   // G9: the ROM question is about the card and the folders going onto it —
   // one verdict per folder, since the screen takes one folder per partition
@@ -378,7 +398,7 @@ export function VolumePreload() {
     picks,
     plan,
     nameVerdicts,
-    namesChecking,
+    namesChecking: [...namesChecking.current],
   });
   const erases = plan ? formatCount(plan) : 0;
 
