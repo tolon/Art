@@ -76,20 +76,128 @@ interface Recogniser {
 
 /**
  * A card refusal's `ART-*` code and the catalogue key that says it — round 4,
- * task 3's proof of shape. Unlike [`RECOGNISERS`] below, this side needs no
- * regex: `CardOsEnding::{Refused,Failed}` already hand over `code` and
- * `params` typed (`error.details()`, `core/error.rs`), so there is nothing
- * to parse back out of a sentence. Task 11 adds the rest of the card codes;
- * this one proves the mechanism end to end.
+ * task 3's proof of shape, task 11's full set. Unlike [`RECOGNISERS`] below,
+ * this side needs no regex: `CardOsEnding::{Refused,Failed}` already hand
+ * over `code` and `params` typed (`error.details()`, `core/error.rs`), so
+ * there is nothing to parse back out of a sentence.
+ *
+ * `key` is a function where one code reads several ways — `error.details()`
+ * hands over a `kind`/`reason`/emptiness tag precisely so the sentence can be
+ * chosen without parsing anything (`CardSourceUnusable`'s six `reason`s,
+ * `CardDoesNotFit`'s five `kind`s, and three codes with a present/absent
+ * field). Every field a sentence needs already exists in `details()` — round
+ * 4 task 3 covered every code this task owns, so no Rust change was needed
+ * here.
  */
 interface CardRecogniser {
   code: string;
-  key: string;
+  key: string | ((params: Record<string, string>) => string);
 }
 
 const CARD_RECOGNISERS: CardRecogniser[] = [
-  { code: "ART-CARD-SOURCE-UNUSABLE", key: "errors.cardSourceUnusable" },
+  { code: "ART-CARD-SOURCE-UNUSABLE", key: cardSourceUnusableKey },
+  { code: "ART-PFS3-DRIVER-NOT-FOUND", key: pfs3DriverNotFoundKey },
+  { code: "ART-WHDLOAD-NOT-FOUND", key: "errors.whdloadNotFound" },
+  { code: "ART-KICKSTART-NOT-PROPOSED", key: "errors.kickstartNotProposed" },
+  { code: "ART-CARD-NAMES-NEED-HST", key: cardNamesNeedHstKey },
+  { code: "ART-CARD-DOES-NOT-FIT", key: cardDoesNotFitKey },
+  { code: "ART-NOT-ENOUGH-SPACE", key: notEnoughSpaceKey },
+  { code: "ART-CARD-CHECK-FAILED", key: "errors.cardCheckFailed" },
+  { code: "ART-HST-IMAGER-UNUSABLE", key: hstImagerUnusableKey },
+  { code: "ART-KICKSTART-SOURCE-CHANGED", key: "errors.kickstartSourceChanged" },
+  { code: "ART-CARD-PARTITION-TOO-MANY-ENTRIES", key: "errors.cardPartitionTooManyEntries" },
+  { code: "ART-CARD-PARTIAL-EXISTS", key: "errors.cardPartialExists" },
 ];
+
+/** `CoreError::CardSourceUnusable`'s `why.reason` (`UnusableSource`'s own
+ *  `details()`) — one sentence per reason, because "cannot be used" with no
+ *  reason is the one thing a user cannot act on. */
+function cardSourceUnusableKey(params: Record<string, string>): string {
+  switch (params.reason) {
+    case "missing":
+      return "errors.cardSourceUnusable.missing";
+    case "unreadable":
+      return "errors.cardSourceUnusable.unreadable";
+    case "archive-unreadable":
+      return "errors.cardSourceUnusable.archiveUnreadable";
+    case "hardfile-not-whdload":
+      return "errors.cardSourceUnusable.hardfileNotWhdload";
+    case "not-an-amiga-source":
+      return "errors.cardSourceUnusable.notAnAmigaSource";
+    case "not-a-folder":
+      return "errors.cardSourceUnusable.notAFolder";
+    default:
+      // `UnusableSource` is a closed six-member enum on the Rust side; this
+      // is unreachable today and only a defensive net against a seventh
+      // member arriving here before its sentence does.
+      return "errors.verbatim";
+  }
+}
+
+/** `Pfs3DriverNotFound.unreadable` is said only when it is not empty — most
+ *  searches never meet an archive ART could not read at all (same rule as
+ *  `pfs3_driver_not_found_message` on the Rust side). */
+function pfs3DriverNotFoundKey(params: Record<string, string>): string {
+  return params.unreadable
+    ? "errors.pfs3DriverNotFound.missingUnreadable"
+    : "errors.pfs3DriverNotFound.missing";
+}
+
+/** `CardNamesNeedHstImager.more` is said only when it is over zero. */
+function cardNamesNeedHstKey(params: Record<string, string>): string {
+  return Number(params.more) > 0 ? "errors.cardNamesNeedHst.withMore" : "errors.cardNamesNeedHst.noMore";
+}
+
+/** `CoreError::CardDoesNotFit`'s `SizingRefusal.details()` `kind` tag — one
+ *  sentence per sizing refusal, since each names a different set of fields
+ *  (bytes for one, PFS3 blocks for another) that no single sentence could
+ *  read. `does-not-fit` further splits on whether a `largest` partition was
+ *  named, the same optional-field rule `Pfs3DriverNotFound` follows above. */
+function cardDoesNotFitKey(params: Record<string, string>): string {
+  switch (params.kind) {
+    case "does-not-fit":
+      return params.largest
+        ? "errors.cardDoesNotFit.doesNotFit"
+        : "errors.cardDoesNotFit.doesNotFitNoPartition";
+    case "partition-too-large":
+      return "errors.cardDoesNotFit.partitionTooLarge";
+    case "card-too-small":
+      return "errors.cardDoesNotFit.cardTooSmall";
+    case "partition-content-does-not-fit":
+      return "errors.cardDoesNotFit.partitionContentDoesNotFit";
+    case "system-additions-do-not-fit":
+      return "errors.cardDoesNotFit.systemAdditionsDoNotFit";
+    default:
+      // `SizingRefusal` is a closed five-member enum on the Rust side; see
+      // `cardSourceUnusableKey`'s own note.
+      return "errors.verbatim";
+  }
+}
+
+/** `CoreError::NotEnoughSpace`'s `what` (`SpacePlace::tag`) — each place has
+ *  its own next step (image folder vs. scratch folder in Settings). */
+function notEnoughSpaceKey(params: Record<string, string>): string {
+  switch (params.what) {
+    case "image":
+      return "errors.notEnoughSpace.image";
+    case "scratch":
+      return "errors.notEnoughSpace.scratch";
+    case "image-and-scratch":
+      return "errors.notEnoughSpace.imageAndScratch";
+    default:
+      // `SpacePlace` is a closed three-member enum on the Rust side; see
+      // `cardSourceUnusableKey`'s own note.
+      return "errors.verbatim";
+  }
+}
+
+/** `CoreError::HstImagerUnusable`'s `path` is empty exactly when no
+ *  hst-imager was given to this build at all (`refuse_without_hst_imager`'s
+ *  `None` branch) — a different next step from one that was given and did
+ *  not work. */
+function hstImagerUnusableKey(params: Record<string, string>): string {
+  return params.path ? "errors.hstImagerUnusable.toolUnusable" : "errors.hstImagerUnusable.noTool";
+}
 
 /** Whether `value` is a [`CardRefusal`] — the shape `CardOsEnding`'s
  *  `refused` and `failed` carry, as opposed to a raw string or `Error`. */
@@ -148,11 +256,18 @@ const RECOGNISERS: Recogniser[] = [
 export function errorPhrase(value: unknown): Phrase {
   if (isCardRefusal(value)) {
     const recogniser = CARD_RECOGNISERS.find((r) => r.code === value.code);
-    if (recogniser) {
-      return { key: recogniser.key, params: { id: value.code, ...value.params } };
+    const key = recogniser
+      ? typeof recogniser.key === "function"
+        ? recogniser.key(value.params)
+        : recogniser.key
+      : null;
+    if (key && key !== "errors.verbatim") {
+      return { key, params: { id: value.code, ...value.params } };
     }
-    // Not one of the card codes this recogniser knows yet (Task 11 adds the
-    // rest): the same two fallbacks as below, built from the typed fields
+    // Either not one of the card codes this recogniser knows (a code outside
+    // task 11's list, e.g. `ART-CARD-FINISH-LEFT-BOTH-NAMES`), or a known
+    // code whose own `kind`/`reason` tag was not one of its closed enum's
+    // members: the same two fallbacks as below, built from the typed fields
     // directly rather than through `parseError`, since `message` carries no
     // `Error ID:` trailer (`CardOsEnding.message` is `to_string()`, not
     // `user_message()` — research-tree.md §2.6, note 2).

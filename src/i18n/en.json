@@ -3203,7 +3203,45 @@
     "verbatim": "{{sentence}}\n\nError ID: {{id}}",
     "treeDestinationOccupied": "'{{path}}' already has something in it. ART never builds a distribution tree over a folder that is not empty — choose an empty folder, or make a new one.\n\nError ID: ART-SAFETY-REFUSED",
     "packageWrongArchive": "'{{archive}}' is not the archive this package's installer lives in: it carries no '{{expected}}' drawer. What it does hold: {{found}}.\n\nError ID: ART-INPUT-INVALID",
-    "cardSourceUnusable": "'{{source}}' in {{partition}} cannot be used. Remove it from {{partition}} or fix it.\n\nError ID: {{id}}",
+    "cardSourceUnusable": {
+      "missing": "'{{source}}' in {{partition}} will not be copied: it does not exist any more. Remove it from {{partition}}, or put the folder or archive back where ART found it.\n\nError ID: {{id}}",
+      "unreadable": "'{{source}}' in {{partition}} will not be copied: ART could not read it ({{detail}}). Remove it from {{partition}}, or close whatever else has it open and try again.\n\nError ID: {{id}}",
+      "archiveUnreadable": "'{{source}}' in {{partition}} will not be copied: ART could not read the archive ({{detail}}). Remove it from {{partition}}, or get a fresh copy of the archive.\n\nError ID: {{id}}",
+      "hardfileNotWhdload": "'{{source}}' in {{partition}} will not be copied: {{detail}}. Remove it from {{partition}}, or choose a hardfile a WHDLoad installer built.\n\nError ID: {{id}}",
+      "notAnAmigaSource": "'{{source}}' in {{partition}} will not be copied: it is not a folder, an archive, a WHDLoad hardfile or a floppy image ({{detail}}). Remove it from {{partition}}, or choose one of those four kinds.\n\nError ID: {{id}}",
+      "notAFolder": "System's tree in {{partition}} will not be copied: it must be a folder, and '{{source}}' is not one. Remove it from {{partition}}, or point System at the folder ART built.\n\nError ID: {{id}}"
+    },
+    "pfs3DriverNotFound": {
+      "missing": "The card will not be built: no PFS3 driver was found in {{searched}}. Put pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself.\n\nError ID: {{id}}",
+      "missingUnreadable": "The card will not be built: no PFS3 driver was found in {{searched}}, and ART could not read {{unreadable}}. Put a working pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself.\n\nError ID: {{id}}"
+    },
+    "whdloadNotFound": "{{titles}} WHDLoad title(s) on this card will not start: no WHDLoad was found anywhere ART looked ({{searched}}). Put WHDLoad_usr.lha (from whdload.de) in one of your material folders and prepare the card again.\n\nError ID: {{id}}",
+    "kickstartNotProposed": "'{{name}}' will not be placed on the card: it is not something the current proposal offers ({{why}}). Prepare the card again, and agree only to what its proposal offers.\n\nError ID: {{id}}",
+    "cardNamesNeedHst": {
+      "noMore": "{{partition}} will not be written: it holds names ART's own PFS3 writer cannot write ({{paths}}). Point ART at hst-imager in Settings, or rename those files to ASCII, and prepare the card again.\n\nError ID: {{id}}",
+      "withMore": "{{partition}} will not be written: it holds names ART's own PFS3 writer cannot write ({{paths}}, and {{more}} more). Point ART at hst-imager in Settings, or rename those files to ASCII, and prepare the card again.\n\nError ID: {{id}}"
+    },
+    "cardDoesNotFit": {
+      "doesNotFit": "These partitions will not fit this card: they need {{needed}} bytes and the card has {{available}}. Move some of {{largest}} to another card, or choose a larger card.\n\nError ID: {{id}}",
+      "doesNotFitNoPartition": "These partitions will not fit this card: they need {{needed}} bytes and the card has {{available}}. Choose a larger card.\n\nError ID: {{id}}",
+      "partitionTooLarge": "{{volumeName}} will not fit on this card: it would need {{bytes}} bytes, more than one PFS3 partition can hold. Split its sources across two partitions.\n\nError ID: {{id}}",
+      "cardTooSmall": "This card will not hold System and the RDB: a {{cardGb}} GB card is too small. Choose a larger card.\n\nError ID: {{id}}",
+      "partitionContentDoesNotFit": "{{volumeName}} will not hold its own tree: the tree needs {{neededBlocks}} blocks and {{volumeName}} has room for {{availableBlocks}}. Take something out of the tree, and prepare the card again.\n\nError ID: {{id}}",
+      "systemAdditionsDoNotFit": "System will not hold everything this card adds to it: it needs {{neededBlocks}} blocks and has room for {{availableBlocks}} — the tree by itself needs {{treeBlocks}}. The Kickstarts affected are {{kickstarts}}; take what this card does not need out of your material folders, and prepare again.\n\nError ID: {{id}}"
+    },
+    "notEnoughSpace": {
+      "image": "'{{place}}' will not receive this card: it has {{available}} bytes free and the build needs {{needed}}. Free some space there, or choose another folder for the card image, and prepare again.\n\nError ID: {{id}}",
+      "scratch": "'{{place}}' will not hold the build's staging: it has {{available}} bytes free and the build needs {{needed}}. Free some space there, or choose another scratch folder in Settings, and prepare again.\n\nError ID: {{id}}",
+      "imageAndScratch": "'{{place}}' will not hold both the card image and the build's staging: it has {{available}} bytes free and the build needs {{needed}} there. Free some space there, or choose another folder for the image, or another scratch folder in Settings, and prepare again.\n\nError ID: {{id}}"
+    },
+    "cardCheckFailed": "This card image will not be finished: it failed {{failures}} of its checks ({{checks}}). Build it again; if it fails the same way, keep the operation log so it can be looked at.\n\nError ID: {{id}}",
+    "hstImagerUnusable": {
+      "noTool": "{{partitions}} will not be written: they hold names only hst-imager can write, and no hst.imager.exe was given to this build. Point ART at a working hst.imager.exe in Settings, or rename those names to ASCII, and prepare the card again.\n\nError ID: {{id}}",
+      "toolUnusable": "{{partitions}} will not be written: they hold names only hst-imager can write, and '{{path}}' cannot be used as hst-imager ({{why}}). Point ART at a working hst.imager.exe in Settings, or rename those names to ASCII, and prepare the card again.\n\nError ID: {{id}}"
+    },
+    "kickstartSourceChanged": "'{{name}}' will not be placed: '{{path}}' is no longer the file the card was prepared with ({{why}}). Prepare the card again, so its proposal offers what is there now.\n\nError ID: {{id}}",
+    "cardPartitionTooManyEntries": "'{{partition}}' will not be written: it would hold {{entries}} files and folders, more than the {{bound}} ART can read back off a finished card. Move some of what it holds to another partition, and prepare again.\n\nError ID: {{id}}",
+    "cardPartialExists": "This card will not be built: '{{path}}' is a half-built image from an earlier run. Delete it yourself, or choose another image name, and build again.\n\nError ID: {{id}}",
     "verbatimNoId": "{{sentence}}"
   },
   "network": {
