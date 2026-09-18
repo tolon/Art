@@ -28,9 +28,9 @@ where it was taken.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-18 — card round 4 (every screen) built on `art-card-round-4` (13 tasks, `51769ad`..`a0b0415`, on top of round 3's merge `d421822`), then its final whole-branch review, one fix wave, a scoped re-review and the residual round that closed the re-review's three findings (N1, N2, N3) and the M2 comment correction its own re-review raised; **unmerged, with ART-059's two whole-suite Rust runs taken at `993ecc9` and green — nothing test-shaped is owed before the merge.** The `main`/`origin` row below still describes `main` as merged through round 3; the test, lint and sweep rows below describe `art-card-round-4` at the residual round, the i18n row at `a0b0415` |
+| **Last updated** | 2026-09-18 — card round 4 (every screen) merged into `main` (`6e91ec2`, `--no-ff`, on the owner's word) after its final review, one fix wave, a scoped re-review and the residual round that closed N1, N2, N3 and the M2 comment. The test, lint, sweep and i18n rows below were measured on the branch at the commits they name; `main` carries exactly that code |
 | **Version** | **0.9.4**, released 2026-09-15 — tag `v0.9.4` (annotated, on `e91f22e`), release run 34969262720 `success`, published on the owner's word with one NSIS and one MSI installer. Its notes are CHANGELOG's `[0.9.4]` section. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` — all `0.9.4`, checked 2026-09-17) and `release.yml` refuses a tag that disagrees with any of them, or a version with no CHANGELOG section |
-| **`main` / `origin`** | **`main` is `d421822`** — card round 3 merged `--no-ff` on 2026-09-17 on the owner's word and `art-card-round-3` deleted; pushed, and CI's result on it is the row below. Round 3 was reviewed (0 Critical, 5 Important, 18 Minor), fixed in one wave, re-reviewed, and its residuals (N1, N2, N5, N6, ART-343's ROM half, M18) fixed (fourteen tasks: `core/cardos/` above `core/card`/`core/preload` — ART-339 — the WHDLoad phase, the Kickstart proposal, `card_os_open`/`prepare`/`build`/`close`, `.partial` output, and the end-to-end card proven against `hst-imager`). One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
+| **`main` / `origin`** | **`main` is `6e91ec2`** — card round 4 merged `--no-ff` on 2026-09-18 on the owner's word and `art-card-round-4` deleted; pushed, and CI's result on it is recorded here once it lands. Round 4 is the screens: the card as a destination on the Machine tab, partition rows filled by drop / Add… / a row menu, sizes measured without staging, the Kickstart agreement, the card run's five phases and four endings, a fourth job ending (`refused`), and every card refusal in Turkish. It was reviewed (3 Critical, 5 Important, 9 Minor), fixed in one wave, re-reviewed (2 new findings), and those fixed in a residual round. Round 3 merged before it as `d421822`. One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
 | **Tests — Rust** | `cd src-tauri && cargo test --lib` on `art-card-round-4` at `993ecc9` (the residual round), 2026-09-18, **twice — ART-059 satisfied**: `test result: ok. 3729 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 537.79s`, then the same result in `500.44s`. The only change committed after those two runs is a corrected doc comment on `card_os_prepare` (the residual round's own re-review, M2), which cannot alter behaviour |
 | **Tests — frontend** | `pnpm test` on `art-card-round-4` at the residual round, 2026-09-18: `Test Files 122 passed (122)`, `Tests 1945 passed (1945)` |
 | **Lint, format, clippy** | Clean on `art-card-round-4` at the residual round, 2026-09-18: `pnpm lint` (both `tsc --noEmit` passes), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (no warnings). `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`) was last run at `a0b0415`; no Cargo file has changed since |
@@ -299,8 +299,8 @@ modifies, rather than appended after the proposal's own number), and
 `PartialRemoval::Removed` — the screen states both true facts, at their
 different moments, rather than contradicting itself.
 
-**Card round 4 — every screen — is built** on `art-card-round-4` (13 tasks,
-`51769ad`..`a0b0415`, on top of round 3's merge): a fourth job ending
+**Card round 4 — every screen — is merged** (`6e91ec2`, 13 tasks plus a fix
+wave and a residual round, on top of round 3's merge): a fourth job ending
 (`refused`, so a refused build is never called failed); a typed phase-and-count
 event (`CARD_OS_PHASE_EVENT`); every card refusal typed with parameters (round
 3's ruling that `CardSourceUnusable.why` was prose reversed); three read-only
@@ -460,9 +460,9 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
 
 - **The PiStorm card path** — SD-0, SD-1, SD-2 and SD-4 are built, SD-3's two
   named gaps are merged, SD-5 is part-built. The one-button card has rounds 1
-  and 2 on `main`; rounds 3 and 4 (every screen) are built on `art-card-round-3`
-  and `art-card-round-4`, both unmerged, awaiting one final whole-branch review
-  over the two together. The gaps still
+  and 2 on `main`, and so are rounds 3 (the core and its commands, `d421822`)
+  and 4 (every screen, `6e91ec2`), each reviewed, fixed and re-reviewed before
+  its merge. The gaps still
   open are one line each in the stage table below. What is left in SD-1 is
   **not code**: a card flashed and an A500 booted, which is also the project's
   1.0 bar.
@@ -482,8 +482,8 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
 - **The Emu68 Hatcher intake** (`rootrootde/emu68hatcher`, MIT) — scoped at six
   rounds. Five have landed on `main`: prefs and wallpaper (1), drawer icons
   (2), refusal evidence (3), media identification by hash (4), and first boot
-  phases 1–3 (5); the one-button card is the sixth, rounds 1–2 merged and
-  rounds 3 and 4 built on `art-card-round-3`/`art-card-round-4`, unmerged.
+  phases 1–3 (5); the one-button card is the sixth, all four
+  rounds merged (`69d3a40`, `d421822`, `6e91ec2`).
 - **Releases in the community's hands** — reading what came back is still the
   first thing a session does: issues on the repository, and whatever the owner
   was told directly. A report that went *well* counts: the gaps the README
