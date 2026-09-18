@@ -18,6 +18,11 @@ wording of every entry, with what was measured, is in git history
 - **ART reads Amiga LZX archives** with its own reader, behind the same safety checks as LHA, ZIP and 7z (checked against unar).
 - **Groundwork for the one-button card's content step** (no screen yet): folders, archives, WHDLoad hardfiles and ADFs are checked and measured before a card partition is written, and one partition can take several folders.
 - **More groundwork for the one-button card, still no screen**: the PFS3 driver, WHDLoad and the Kickstarts a card's titles need are found — Kickstarts are only ever placed on the names you agree to — and the card is built under a temporary name, checked, and only then given its own.
+- **The one-button card has its screen.** On the OS Builder's Machine tab, choose *Card image* instead of a folder and pick one card size (16/32/64/128/256 GB, shown beside its real byte count). Below it, a section for the card's partitions: System and Work always there, add more by name, and fill each by dragging files onto its own row, a folder-picker button, or its menu — every source is recognised and named, every size is live, and an overflow is named by partition and never rounded away.
+- **Before a card is built, ART lists every Kickstart its titles want** — where it found each one, or what to add — and places only the ones you tick; nothing is ticked for you.
+- **Building a card reports its own phases by name**, and where there is a real count, how many files or steps so far — never a bar pretending to know a total it does not have.
+- **A refused card build says why, by name, in your own language, and is never shown as "failed"** — a refusal names what is missing and where to get it, and the same button re-runs the whole thing once you have fixed it.
+- **The manual card screens — Card Builder and volume preparation — are now Power User–mode features.** The one-button card is the default path in Beginner mode; switching to Power User mode does not remove or disable anything, it only shows the two screens alongside it.
 
 ### Changed
 

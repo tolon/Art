@@ -235,7 +235,15 @@ the file, both checksums and "prepare the card again". Tests:
 `an_agreed_kickstart_whose_file_changed_since_the_proposal_is_refused_by_name` (both arms: unchanged control,
 changed bytes, a stated size that differs, the file gone) and, through the build,
 `a_kickstart_changed_since_prepare_is_refused_before_the_tree_or_the_image`; the comparison, the size check and the
-call each mutated and seen red.
+call each mutated and seen red. **Round 4's screen (2026-09-18) renders the ROM half's refusal** —
+`ART-KICKSTART-SOURCE-CHANGED` is one of the 28 rows `src/lib/errorText.ts`'s `CARD_RECOGNISERS` answers in the
+user's own language (Task 11), and the Build tab's own button turns `cardRun.run` into `cardRun.runAgain` the
+moment the run is not running — pressing it opens a fresh session, re-prepares and rebuilds, which is round 4's
+answer to Q9's "the screen says what a re-prepare costs and offers it on one press": the refusal names the file
+and both checksums, and the one button that follows it does the "prepare again" the sentence asks for. **Still
+open**: the tree/sources half above — nothing on the screen fingerprints a folder source or the tree between
+prepare and build, so a change there is still only caught by the Partitions-phase failure this entry describes,
+not refused earlier by name.
 
 **ART-344** 🔵 **A card session's scratch folder is left behind when the app exits without closing it, and a
 panicking job leaves the session busy** — *found 2026-09-17 by card round 3's final whole-branch review
@@ -250,6 +258,13 @@ exit hook that deletes several GB while the window closes, and a startup sweep o
 processes, are both design choices (what to remove without asking, what to show). **Fix direction:** drain
 `CardOsSessions` on `RunEvent::Exit` and report what could not be removed to the log; list leftover `card-os-*`
 folders under the scratch root at startup and offer them for removal, never removing one silently.
+**Round 4's screen (2026-09-18) narrows the exposure (Q9):** `card_os_open` is called only when the user presses
+the Build tab's run button — `src/lib/useCardOsRun.ts`, never on mount — so a session cannot leak by merely
+opening the tab; mutation-checked (`opens no session until the button is pressed`, Task 10). Every path through
+the run (succeeded, refused, failed, the user's own Stop, giving up at the Kickstart agreement) calls
+`card_os_close` exactly once. **Still open, as filed:** no exit hook and no startup sweep were built this round —
+a session left by a real crash or a killed process is still found only by hand, and `session.tree` (the build
+session's own remembered key) can still name a scratch path that no longer exists after such a crash.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.
