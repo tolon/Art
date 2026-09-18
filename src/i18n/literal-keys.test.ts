@@ -734,6 +734,58 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // `FirstBootReportPanel.tsx` renders `rebootReportPhrase`, the same helper,
     // and each read detail line (`t(d.phrase.key, { window })`).
     // `phrase-keys.test.ts` resolves every key those mappers return.
-    expect(dynamicCalls).toBe(196);
+    // 196 → 206 (card round 4, task 8): ten, all in the card section, and all
+    // of them a `Phrase` from `@/lib/cardOsMeasure` — the module exists so
+    // that `src/lib` never renders a string. `CardPartitionRow.tsx` renders
+    // three (the size cell's `sizePhrase`, what a partition holds through
+    // `partitionContentPhrase`, and each listed source's own
+    // `sourcePhrase` — a kind, or the refusal that says why it cannot be
+    // used); `CardSection.tsx` renders seven (a typed volume name's problem
+    // from `volumeNameProblemPhrase`, the footer's `totalPhrase`, three
+    // `sizePhrase` renders for the heading's cost and the free-of-total
+    // line, the `overflowPhrase` that names the partition, and `errorPhrase`
+    // for a refusal that is not about size). `cardOsMeasure.test.ts`
+    // enumerates every variant each can return and `phrase-keys.test.ts`
+    // resolves each one in the catalogue, which is the check this scan
+    // cannot make. The row's own System/Work caption is deliberately *two*
+    // literal calls rather than one over a ternary, so it stays inside
+    // the static check.
+    // 206 → 208 (the same task's follow-up): the PFS3 driver line and its
+    // refusal, `driverPhrase` and `driverMissingPhrase` from the same module
+    // — one names the driver found and **where it came from**, which is two
+    // different facts for an archive and a loose file, and the other says
+    // what to add and everywhere ART looked. Both are enumerated in
+    // `cardOsMeasure.test.ts` and resolved in `phrase-keys.test.ts`.
+    // 208 → 212 (card round 4, task 9): four, all in
+    // `KickstartAgreement.tsx`, all a `Phrase` from `@/lib/cardOsKickstarts`
+    // — what ART found for a name (`offerPhrase`), where its `.RTB` would
+    // come from or the package to get one from (`rtbPhrase`), the titles
+    // that asked for it (`titlesPhrase`), and the step's own summary
+    // (`summaryPhrase`). The row's badge is deliberately a literal
+    // `t("cardKickstart.tag.ready")` / `t("cardKickstart.tag.blocked")`
+    // pair, the same choice `CardPartitionRow.tsx` made for its own tag, so
+    // it stays inside the static check. `cardOsKickstarts.test.ts`
+    // enumerates every variant each mapper can return and
+    // `phrase-keys.test.ts` resolves each one in the catalogue, which is the
+    // check this scan cannot make.
+    // 212 → 223 (card round 4, task 10): eleven, all in `BuildTab.tsx`'s new
+    // card mode, all a `Phrase` from `@/lib/cardOsRun` or one it composes —
+    // the row's own outcome (`cardPhasePhrase`), its live count
+    // (`cardCountPhrase`), the sub-phase it is in and the one a stop stopped
+    // in (`cardSubPhasePhrase`, twice), the detail a written phase carries,
+    // the refusal's own sentence (`cardRefusalPhrase`), an install row's
+    // typed reasons (`refusalPhrase`), what to do about it
+    // (`cardNextStepPhrase`), what became of the `.partial`
+    // (`cardPartialPhrase`) and a session folder that could not be removed
+    // (`cardScratchLeftPhrase`). The button's three labels and the four
+    // blockers are deliberately literal `t("cardRun.…")` calls, so they stay
+    // inside the static check. `cardOsRun.test.ts` enumerates every variant
+    // each mapper can return and `phrase-keys.test.ts` resolves each one in
+    // the catalogue, which is the check this scan cannot make.
+    // 223 → 225 (round 4 fix wave): two in `BuildTab.tsx`'s new fallback
+    // list — which step hst-imager wrote (`stepPhrase`) and why ART's own
+    // writer could not (`fallbackPhrase`), both `@/lib/preload` mappers the
+    // manual builder has drawn since ART-120 and the one-button run dropped.
+    expect(dynamicCalls).toBe(225);
   });
 });

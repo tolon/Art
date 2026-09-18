@@ -17,7 +17,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { RouterProvider, createMemoryRouter } from "react-router-dom";
+import { RouterProvider, createMemoryRouter, useOutletContext } from "react-router-dom";
 import { useEffect, type ReactElement } from "react";
 import i18n from "i18next";
 
@@ -37,6 +37,7 @@ vi.mock("@/components/ScratchRootGate", () => ({
 vi.mock("@/components/layout/TopBar", () => ({ TopBar: () => <div data-testid="top-bar" /> }));
 
 const { Layout } = await import("./Layout");
+const { setupDragDrop } = await import("@/lib/dnd");
 const { useRunLock } = await import("@/lib/runLock");
 const { useSettingsStore } = await import("@/stores/settingsStore");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
@@ -156,6 +157,39 @@ describe("the browser's back and forward are inside the run lock (ART-292)", () 
 
     expect(router.state.location.pathname).toBe("/");
     expect(await screen.findByTestId("home-screen")).toBeTruthy();
+  });
+});
+
+describe("the drop position travels through the one global listener (Task 6)", () => {
+  // `dnd.ts` is mocked at the `@/lib` boundary, so this reaches into the
+  // handler `Layout` registered with it — the same shape `setupDragDrop`
+  // calls for real — and checks what the outlet context does with the
+  // position it is handed, in CSS pixels already (the conversion itself is
+  // `dropTarget.test.ts`'s case, not this one).
+
+  function PositionScreen() {
+    const context = useOutletContext<{ dropPosition: { x: number; y: number } | null }>();
+    return <div data-testid="drop-position">{JSON.stringify(context.dropPosition ?? null)}</div>;
+  }
+
+  it("forwards a position it receives to the outlet context", async () => {
+    // Every case in this file mounts `Layout` and so calls `setupDragDrop`
+    // again; clear first so the call captured below is this test's own.
+    vi.mocked(setupDragDrop).mockClear();
+    await act(async () => {
+      shellAt(["/os-builder"], [{ path: "/os-builder", element: <PositionScreen /> }]);
+    });
+    await screen.findByTestId("drop-position");
+    expect(screen.getByTestId("drop-position").textContent).toBe("null");
+
+    const handler = vi.mocked(setupDragDrop).mock.calls[0][0];
+    await act(async () => {
+      handler.onPhase?.("over", { x: 120, y: 80 });
+    });
+
+    expect(screen.getByTestId("drop-position").textContent).toBe(
+      JSON.stringify({ x: 120, y: 80 })
+    );
   });
 });
 

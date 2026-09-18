@@ -17,7 +17,9 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::core::error::CoreError;
-use crate::core::jobs::{CancelToken, JobId, JobProgress, JobState, JobTitle, ProgressSink};
+use crate::core::jobs::{
+    CancelToken, JobId, JobOutcome, JobProgress, JobState, JobTitle, ProgressSink,
+};
 use crate::error::AppResult;
 
 /// The event name the frontend listens on.
@@ -214,6 +216,27 @@ pub fn spawn_job<F>(app: &AppHandle, registry: Arc<JobRegistry>, title: JobTitle
 where
     F: FnOnce(JobId, &dyn ProgressSink) -> Result<(), CoreError> + Send + 'static,
 {
+    spawn_in_lane(app, registry, title, None, move |id, sink| {
+        work(id, sink).into()
+    })
+}
+
+/// [`spawn_job`], but the closure already knows whether its own error is a
+/// refusal rather than a failure — the card build, whose `ending_for`
+/// (`commands/cardos.rs`) makes that call once and passes it through as
+/// [`JobOutcome::Refused`] so the job bar's fourth ending is not lost on the
+/// way there. Every other job keeps returning a plain
+/// `Result<(), CoreError>` through [`spawn_job`] / [`spawn_job_in_lane`]
+/// unchanged.
+pub fn spawn_job_with_outcome<F>(
+    app: &AppHandle,
+    registry: Arc<JobRegistry>,
+    title: JobTitle,
+    work: F,
+) -> JobId
+where
+    F: FnOnce(JobId, &dyn ProgressSink) -> JobOutcome + Send + 'static,
+{
     spawn_in_lane(app, registry, title, None, work)
 }
 
@@ -240,7 +263,9 @@ pub fn spawn_job_in_lane<F>(
 where
     F: FnOnce(JobId, &dyn ProgressSink) -> Result<(), CoreError> + Send + 'static,
 {
-    spawn_in_lane(app, registry, title, Some(lane), work)
+    spawn_in_lane(app, registry, title, Some(lane), move |id, sink| {
+        work(id, sink).into()
+    })
 }
 
 fn spawn_in_lane<F>(
@@ -251,7 +276,7 @@ fn spawn_in_lane<F>(
     work: F,
 ) -> JobId
 where
-    F: FnOnce(JobId, &dyn ProgressSink) -> Result<(), CoreError> + Send + 'static,
+    F: FnOnce(JobId, &dyn ProgressSink) -> JobOutcome + Send + 'static,
 {
     if let Some(lane) = lane {
         // Before the new job exists, so it can never supersede itself.
@@ -272,23 +297,8 @@ where
 
     let app = app.clone();
     std::thread::spawn(move || {
-        let result = work(id, &sink);
-
-        let state = match result {
-            Ok(()) => JobState::Finished,
-            Err(CoreError::Cancelled) => JobState::Cancelled { files_landed: None },
-            // Cancelled, with work already durable on disk (ART-058). Still a
-            // cancellation and not a failure — the job bar must not go red for
-            // something the user asked for — but the count travels with it so
-            // the UI can say what is on the volume.
-            Err(CoreError::CancelledPartway { files }) => JobState::Cancelled {
-                files_landed: Some(files),
-            },
-            Err(e) => JobState::Failed {
-                error_code: e.code().to_string(),
-                message: e.to_string(),
-            },
-        };
+        let outcome = work(id, &sink);
+        let state = outcome.into_state();
 
         // A terminal update always goes out, ignoring the throttle: the UI must
         // never be left showing a job as running after it has stopped.

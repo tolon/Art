@@ -41,6 +41,7 @@ export const FILESYSTEM_DRIVER_KEY = "preload.driver";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type { CardReport } from "@/lib/card";
+import type { VolumeNameVerdict } from "@/lib/cardOs";
 import type { Phrase } from "@/lib/phrase";
 
 /** What the formatter reports itself to be. */
@@ -476,10 +477,6 @@ export function toRequest(
   };
 }
 
-/** AmigaDOS names stop at thirty characters — `core/volume/write/dir.rs`'s
- *  `MAX_NAME_LEN`, restated here so a refusal can say the number. */
-export const MAX_VOLUME_NAME = 30;
-
 /** Whether this plan writes into the card's RDB (ART-117). */
 export function editsRdb(plan: PreloadPlan): boolean {
   return plan.steps.some(
@@ -491,8 +488,28 @@ export function editsRdb(plan: PreloadPlan): boolean {
  * Why the preload cannot run yet, or null when it can.
  *
  * A reason rather than a boolean: a disabled button that does not say why is
- * the defect ART-100 was. The volume-name rules are the two
- * `core/volume/write/dir.rs::check_name` already holds.
+ * the defect ART-100 was.
+ *
+ * **Q7: the reserved-character and too-long checks read
+ * `card_os_check_volume_name`'s own verdict** (`core/volume/write/
+ * dir.rs::check_name`, asked live as a chosen name changes) **rather than
+ * restating the rule here** — a third copy would be a third answer. `blank`
+ * stays a local check: every text field needs to know whether the user has
+ * typed anything at all, which is not one of `check_name`'s language-specific
+ * rules. `nameVerdicts` is keyed by the trimmed name itself — the verdict is
+ * a pure function of the string, not of which drive is asking.
+ *
+ * **A name whose check is still in flight blocks Run, and says so** (round 4
+ * final review, minor). The rule used to be "a name with no entry yet is not
+ * blocked on that account", which made this a regression from the synchronous
+ * check it replaced: Run stood live over a name the core was about to refuse,
+ * and the refusal arrived after the job had started. `namesChecking` is the
+ * set of names actually being asked about, so this is *"checking…"* — the
+ * `destinationChecked` rule, not the `destinationTaken` one — and it clears
+ * itself. A round trip that **failed** leaves the name in neither map and
+ * Run live, which is deliberate and disclosed: the core refuses it again at
+ * run time, and a screen that blocked for ever on a question it could not ask
+ * would have no way out.
  *
  * **ART-117: an RDB edit needs a backup path.** The engine refuses without one
  * too (`PreloadPlan::ready_to_run`); asking here keeps Run disabled rather than
@@ -503,6 +520,9 @@ export function preloadBlocker(input: {
   rdbBackup: string | null;
   picks: PartitionPick[];
   plan: PreloadPlan | null;
+  nameVerdicts: Record<string, VolumeNameVerdict>;
+  /** Names whose `card_os_check_volume_name` round trip has not landed. */
+  namesChecking?: string[];
 }): Phrase | null {
   if (!input.image?.trim()) return { key: "preload.blocked.noCard" };
 
@@ -512,16 +532,22 @@ export function preloadBlocker(input: {
   for (const pick of chosen) {
     const name = pick.volumeName.trim();
     if (!name) return { key: "preload.blocked.blankName", params: { drive: pick.driveName } };
-    if (name.includes(":") || name.includes("/")) {
-      return { key: "preload.blocked.badName", params: { drive: pick.driveName } };
+    if (input.namesChecking?.includes(name)) {
+      return { key: "preload.blocked.checkingName", params: { drive: pick.driveName } };
     }
-    // Characters, not bytes: thirty accented characters are thirty characters.
-    if ([...name].length > MAX_VOLUME_NAME) {
+    const verdict = input.nameVerdicts[name];
+    if (!verdict || verdict.ok) continue;
+    if (verdict.why === "too-long") {
       return {
         key: "preload.blocked.longName",
-        params: { drive: pick.driveName, max: MAX_VOLUME_NAME },
+        params: { drive: pick.driveName, max: verdict.maxChars },
       };
     }
+    if (verdict.why === "reserved-character") {
+      return { key: "preload.blocked.badName", params: { drive: pick.driveName } };
+    }
+    // "empty": the trim check above already owns that sentence — the core
+    // agreeing is not a second one.
   }
 
   if (!input.plan) return { key: "preload.blocked.notPlanned" };

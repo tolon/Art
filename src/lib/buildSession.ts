@@ -34,6 +34,7 @@
 // still owned by their own panels. A migration that never touches them cannot
 // lose them.
 
+import type { CardTarget, DestinationKind } from "@/lib/cardTarget";
 import {
   INSTALL_RELEASES,
   rememberedComponentKey,
@@ -215,6 +216,17 @@ export interface BuildSession {
   packages: PackageChoice;
   card: CardChoice;
   firstboot: FirstBootChoice;
+  /**
+   * The Machine tab's destination choice (card round 4, design § 3): the OS
+   * Builder's tree written to a folder, as it always has been, or onto a
+   * PiStorm card image. Per release, like every other card-round-4 addition
+   * (owner decision Q2) — `osinstall.destination` keeps its present meaning
+   * either way (pre-flight ruling R2).
+   */
+  destinationKind: DestinationKind;
+  /** What a one-button card build writes, per release (Q2). See
+   *  `@/lib/cardTarget` for the whole shape and its guard. */
+  cardTarget: CardTarget;
 }
 
 /** Where each section persists inside `settings.remembered`. */

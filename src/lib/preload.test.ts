@@ -24,6 +24,7 @@ import {
   type PreloadStep,
 } from "@/lib/preload";
 import type { CardReport } from "@/lib/card";
+import type { VolumeNameVerdict } from "@/lib/cardOs";
 import type { ParsedPartition } from "@/lib/hdf";
 
 function partition(drive_name: string, dostype_str: string): ParsedPartition {
@@ -209,6 +210,7 @@ describe("preloadBlocker", () => {
     rdbBackup: null as string | null,
     picks: chosenFirst(),
     plan: PLAN,
+    nameVerdicts: {} as Record<string, VolumeNameVerdict>,
   };
 
   it("is clear when a card, a chosen partition and a plan are in hand", () => {
@@ -244,26 +246,72 @@ describe("preloadBlocker", () => {
     expect(blocker?.params).toEqual({ drive: "DH0" });
   });
 
-  // The same two rules `core/volume/write/dir.rs::check_name` holds, and for
-  // the same reason: a name AmigaDOS cannot store is not a name.
-  it("refuses a name carrying a path separator", () => {
+  // Q7: the rule itself is `core::volume::write::dir::check_name`'s alone —
+  // asked live through `card_os_check_volume_name` — and this is a test of
+  // the *mapping* from its verdict to a blocked reason, never of the rule.
+  // A chosen name with no verdict yet (the round trip has not landed) is not
+  // blocked on that account, the same "asking is a state, not a refusal"
+  // rule `destinationTaken` follows elsewhere.
+  it("refuses a name the core's own verdict calls a reserved character", () => {
     for (const bad of ["Work:", "Games/Old"]) {
       const picks = chosenFirst();
       picks[0] = { ...picks[0], volumeName: bad };
-      expect(preloadBlocker({ ...ready, picks })?.key, bad).toBe("preload.blocked.badName");
+      const nameVerdicts: Record<string, VolumeNameVerdict> = {
+        [bad]: { ok: false, why: "reserved-character", maxChars: 30 },
+      };
+      expect(preloadBlocker({ ...ready, picks, nameVerdicts })?.key, bad).toBe(
+        "preload.blocked.badName"
+      );
     }
   });
 
-  it("refuses a name past AmigaDOS's thirty characters, counting characters", () => {
+  it("refuses a name the core's own verdict calls too long, and says the core's own bound", () => {
+    const longName = "W".repeat(31);
     const picks = chosenFirst();
-    picks[0] = { ...picks[0], volumeName: "W".repeat(31) };
-    const blocker = preloadBlocker({ ...ready, picks });
+    picks[0] = { ...picks[0], volumeName: longName };
+    const nameVerdicts: Record<string, VolumeNameVerdict> = {
+      [longName]: { ok: false, why: "too-long", maxChars: 30 },
+    };
+    const blocker = preloadBlocker({ ...ready, picks, nameVerdicts });
     expect(blocker?.key).toBe("preload.blocked.longName");
     expect(blocker?.params).toEqual({ drive: "DH0", max: 30 });
 
-    // Thirty accented characters are thirty characters, not sixty bytes.
-    picks[0] = { ...picks[0], volumeName: "ü".repeat(30) };
-    expect(preloadBlocker({ ...ready, picks })).toBeNull();
+    // The core said it is fine — thirty accented characters within its own
+    // budget, say — and nothing here re-derives a length to disagree with it.
+    const okName = "ü".repeat(30);
+    const okPicks = chosenFirst();
+    okPicks[0] = { ...okPicks[0], volumeName: okName };
+    expect(
+      preloadBlocker({ ...ready, picks: okPicks, nameVerdicts: { [okName]: { ok: true } } })
+    ).toBeNull();
+  });
+
+  /**
+   * **A name being checked right now blocks Run, and says so** (round 4 final
+   * review, minor). Round 4 replaced a synchronous name check with a round
+   * trip and left Run live while it was in flight, which is a regression: the
+   * user pressed Run over a name the core was a moment from refusing, and the
+   * refusal arrived after the job had started. The two states are different —
+   * *being asked* blocks and clears itself; *asked and the round trip failed*
+   * leaves Run live, which is deliberate, because a screen that blocked for
+   * ever on a question it could not ask has no way out.
+   */
+  it("blocks while a chosen name's check is in flight, and not once it has failed", () => {
+    const picks = chosenFirst();
+    picks[0] = { ...picks[0], volumeName: "Work:" };
+    const blocker = preloadBlocker({
+      ...ready,
+      picks,
+      nameVerdicts: {},
+      namesChecking: ["Work:"],
+    });
+    expect(blocker?.key).toBe("preload.blocked.checkingName");
+    expect(blocker?.params).toEqual({ drive: "DH0" });
+
+    // Nobody is asking any more, and no verdict came back: Run is live and
+    // the core is the one that refuses it.
+    expect(preloadBlocker({ ...ready, picks, nameVerdicts: {}, namesChecking: [] })).toBeNull();
+    expect(preloadBlocker({ ...ready, picks, nameVerdicts: {} })).toBeNull();
   });
 
   it("asks for a preview before a format, because §92 puts PREVIEW before APPLY", () => {

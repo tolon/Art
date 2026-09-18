@@ -81,10 +81,14 @@ export function JobBar() {
   const running = jobs.filter(isRunning);
   const finished = jobs.filter((j) => !isRunning(j));
 
-  // Finished jobs are worth a moment's acknowledgement, but only failures and
-  // cancellations are worth keeping on screen once the user has seen them.
+  // Finished jobs are worth a moment's acknowledgement, but only failures,
+  // refusals and cancellations are worth keeping on screen once the user has
+  // seen them.
   const notable = finished.filter(
-    (j) => j.state.state === "failed" || j.state.state === "cancelled"
+    (j) =>
+      j.state.state === "failed" ||
+      j.state.state === "refused" ||
+      j.state.state === "cancelled"
   );
 
   if (running.length === 0 && notable.length === 0) return null;
@@ -132,6 +136,10 @@ function JobRow({ job }: { job: JobProgress }) {
   const pct = fraction(job);
   const running = isRunning(job);
   const failed = job.state.state === "failed";
+  // Its own tone (round 4, Task 1): kept on screen like a failure, but never
+  // rendered as one — the message is the refusal's own, and the status word
+  // above it is `components.jobBar.status.refused`, not `…status.failed`.
+  const refused = job.state.state === "refused";
   const status = jobStatusLabel(job);
 
   return (
@@ -167,9 +175,19 @@ function JobRow({ job }: { job: JobProgress }) {
         )}
       </div>
 
-      {running && (
+      {/*
+        **No bar at all when the total is unknown** (round 4 final review,
+        minor). This drew a fixed 25 % sliver, which CLAUDE.md names as the
+        same defect as a fake bar: it looks like progress and carries no
+        information — a quarter of the way along, for ever. The count beside
+        the title already says "N so far", which is the honest form, and
+        `CardPhaseRow` has done exactly this since the round began. A bar
+        appears when, and only when, there is something for it to measure.
+      */}
+      {running && pct !== null && (
         <div
           aria-hidden
+          data-testid="job-bar-progress"
           style={{
             height: 4,
             marginTop: 4,
@@ -181,9 +199,7 @@ function JobRow({ job }: { job: JobProgress }) {
           <div
             style={{
               height: "100%",
-              // An unknown total gets a fixed sliver rather than a bar that
-              // pretends to know how far along the work is.
-              width: pct === null ? "25%" : `${pct * 100}%`,
+              width: `${pct * 100}%`,
               background: "var(--accent)",
               transition: "width 120ms linear",
             }}
@@ -198,6 +214,10 @@ function JobRow({ job }: { job: JobProgress }) {
       )}
 
       {failed && job.state.state === "failed" && (
+        <div className="muted">{job.state.message}</div>
+      )}
+
+      {refused && job.state.state === "refused" && (
         <div className="muted">{job.state.message}</div>
       )}
     </div>

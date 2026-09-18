@@ -186,7 +186,8 @@
         "cancelled": "Cancelled",
         "cancelledPartway_one": "Cancelled — {{count}} file was already written and is still there",
         "cancelledPartway_other": "Cancelled — {{count}} files were already written and are still there",
-        "failed": "Failed ({{code}})"
+        "failed": "Failed ({{code}})",
+        "refused": "Refused"
       },
       "title": {
         "addPackages_one": "Adding {{count}} package to {{target}}",
@@ -219,6 +220,7 @@
         "installArchivesInto_other": "Installing {{count}} archives into {{target}}",
         "installOnAmiga": "Installing {{name}} on the Amiga",
         "installRelease": "Installing {{release}} into {{target}}",
+        "measureCardOs": "Measuring {{target}}",
         "planArchives_one": "Planning {{count}} archive",
         "planArchives_other": "Planning {{count}} archives",
         "planLayout_one": "Working out what {{count}} source needs",
@@ -806,7 +808,9 @@
         "replaces": "Would replace {{replaced}} files ({{fresh}} new and {{unchanged}} identical among the release's parts)",
         "replacesUpdates": "The updates would replace {{replaced}} files already in the tree",
         "replacesPending": "Not previewed yet",
-        "checking": "Checking the destination…"
+        "checking": "Checking the destination…",
+        "card_one": "A {{gb}} GB card image at {{image}}, with {{count}} partition — its system tree is built in ART's own working folder and removed with it",
+        "card_other": "A {{gb}} GB card image at {{image}}, with {{count}} partitions — its system tree is built in ART's own working folder and removed with it"
       },
       "unresolved": "{{name}}: more than one file carries it. Use one of them on the Amiga files tab (the readout's row offers each); it will not be written until you do.",
       "navigationLocked": "A build is running — Stop it before leaving this tab.",
@@ -2118,6 +2122,261 @@
       }
     }
   },
+  "cardSection": {
+    "heading": "Partitions",
+    "headingCost": "The image file will be {{size}} on disk.",
+    "headingCostPending": "The image's own size is measured once this build has a system tree.",
+    "free": "{{free}} free of {{total}}",
+    "needTree": "Sizes appear once this build has a system tree to measure.",
+    "measuring": "measuring…",
+    "notMeasured": "not measured yet",
+    "column": {
+      "name": "Partition",
+      "holds": "What it holds",
+      "size": "Size"
+    },
+    "system": {
+      "role": "the operating system"
+    },
+    "work": {
+      "role": "the rest of the card"
+    },
+    "dropFixed": {
+      "system": "System takes nothing dropped on it: it is the system tree this build writes. Drop those files on one of your own partitions instead.",
+      "work": "Work takes nothing dropped on it: it is whatever is left of the card after the other partitions. Drop those files on one of your own partitions instead."
+    },
+    "content": {
+      "none": "nothing on it yet",
+      "summary": "Sources: {{sources}} · Files: {{count}}"
+    },
+    "source": {
+      "pending": "ART has not looked at this one yet."
+    },
+    "sourceKind": {
+      "folder": "folder",
+      "archive": "{{format}} archive",
+      "whdloadHardfile": "WHDLoad hard file",
+      "adf": "disk image"
+    },
+    "unusable": {
+      "missing": "not there any more — it was moved or deleted after it was added.",
+      "unreadable": "cannot be read: {{detail}}",
+      "archiveUnreadable": "this archive cannot be read: {{detail}}",
+      "hardfileNotWhdload": "a hard file, but not a WHDLoad one: {{detail}}",
+      "notAnAmigaSource": "not something a card partition can take ({{format}}). A folder, an archive, a WHDLoad hard file or an ADF is.",
+      "notAFolder": "not a folder."
+    },
+    "size": {
+      "gb": "{{value}} GB",
+      "mb": "{{value}} MB",
+      "kb": "{{value}} kB",
+      "bytes": "{{value}} bytes"
+    },
+    "total": {
+      "line": "{{used}} GB / {{total}} GB — {{percent}} % of the card image"
+    },
+    "overflow": {
+      "status": "This card does not fit what it has been asked for.",
+      "doesNotFit": "{{over}} GB too much: {{needed}} GB is asked for and the card image holds {{available}} GB. {{partition}} is the largest partition asked for — take something out of it, or choose a larger card.",
+      "doesNotFitNoPartition": "{{over}} GB too much: {{needed}} GB is asked for and the card image holds {{available}} GB. Take something out, or choose a larger card.",
+      "partitionTooLarge": "{{partition}} would be {{gb}} GB — larger than PFS3 can build. Lower its smallest size, or split it in two.",
+      "cardTooSmall": "A {{cardGb}} GB card is too small for a card image. Choose a larger card.",
+      "partitionContent": "{{partition}} holds {{needed}} GB and the card gives it {{available}} GB. Take something out of it, or choose a larger card.",
+      "systemAdditions": "System's tree fits, but what the card adds to it does not: {{needed}} GB needed against {{available}} GB, the tree itself {{tree}} GB. The Kickstarts are {{kickstarts}} — take the ROM files this card does not need out of the folders ART scans.",
+      "other": "{{sentence}}"
+    },
+    "nameProblem": {
+      "empty": "A partition needs a name.",
+      "tooLong": "That name is too long: AmigaDOS allows {{max}} characters.",
+      "reservedCharacter": "That name holds a character AmigaDOS does not allow in a volume name.",
+      "duplicate": "This card already has a partition called {{name}}.",
+      "reserved": "{{name}} is a name ART gives a partition itself: System holds the operating system, and Work — split into Work, Work_1 and so on when it is large — is whatever is left of the card. Choose another name."
+    },
+    "newName": {
+      "label": "Name for the new partition",
+      "placeholder": "Demos",
+      "add": "Add"
+    },
+    "addPartition": "+ Add partition",
+    "addSource": "Add…",
+    "rowMenu": "What can I do with {{name}}?",
+    "removePartition": "Remove {{name}}",
+    "removeSource": "Remove {{name}}",
+    "menu": {
+      "addFolder": "Add folder…",
+      "addFiles": "Add files…",
+      "removePartition": "Remove this partition"
+    },
+    "chooseFolderTitle": "Choose a folder for this partition",
+    "chooseFilesTitle": "Choose archives, hard files or disk images for this partition",
+    "tag": {
+      "measured": "measured",
+      "notMeasured": "not measured",
+      "overflow": "does not fit"
+    },
+    "floor": {
+      "label": "Smallest size",
+      "hint": "MB — a floor, never a way past the card's own total."
+    },
+    "driver": {
+      "fromArchive": "PFS3 driver pfs3aio {{version}} — from {{from}}",
+      "loose": "PFS3 driver pfs3aio {{version}} — the file at {{at}}",
+      "missing": "No PFS3 driver, so no partition can be formatted. Put pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself. ART looked in: {{searched}}.",
+      "missingUnreadable": "No PFS3 driver, so no partition can be formatted. Put pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself. ART looked in: {{searched}}, and could not read: {{unreadable}}."
+    },
+    "image": {
+      "label": "Image file",
+      "none": "No image file chosen.",
+      "chooseTitle": "Where should the card image be written?",
+      "hint": "The .img file ART writes. You flash it to the card yourself, with the imager you already use.",
+      "blocker": "The build cannot start without an image file."
+    },
+    "emu68": {
+      "label": "Emu68 archive",
+      "none": "No Emu68 release chosen.",
+      "chooseTitle": "Choose your Emu68 release archive",
+      "hint": "Your own download from the Emu68 releases page — ART never fetches one. The card builder's choice is offered here; choosing another changes this card only."
+    },
+    "pfs3": {
+      "label": "PFS3 driver (override)",
+      "none": "Found in your material folders.",
+      "chooseTitle": "Choose the PFS3 driver file",
+      "hint": "Only if you want a particular pfs3aio. Left alone, ART uses the one it finds in your material folders and says which below."
+    }
+  },
+  "cardKickstart": {
+    "heading": "Kickstart images",
+    "intro": "The titles on this card each name a Kickstart image they need. Nothing here is placed until you tick it — ART only proposes.",
+    "noneNeeded": "No title on this card needs a Kickstart image, so there is nothing to agree to here.",
+    "column": {
+      "name": "Name",
+      "offer": "What ART found",
+      "rtb": "Its .RTB"
+    },
+    "titles": {
+      "list": "Wanted by: {{list}}",
+      "withMore_one": "Wanted by: {{list}} and {{count}} more",
+      "withMore_other": "Wanted by: {{list}} and {{count}} more"
+    },
+    "offer": {
+      "supplied": "You have it — {{rom}}",
+      "encrypted": "ART found {{count}} Amiga Forever ROM(s) that may be it, but each needs its rom.key beside it before ART can read it.",
+      "notHere": "Not in your ROM folder.",
+      "unmatchable": "This title names a list rather than one image, so ART cannot match it."
+    },
+    "rtb": {
+      "loose": "Found — {{path}}",
+      "inArchive": "Found in {{archive}}",
+      "missing": "Not found in any material folder. Put {{package}} in one — ART's own package catalogue already carries it."
+    },
+    "tag": {
+      "ready": "ready",
+      "blocked": "cannot be added"
+    },
+    "agree": "Place {{name}} on this card?",
+    "unreadable": {
+      "heading": "{{count}} .slave file(s) ART could not read, so it could not ask what they need:"
+    },
+    "summary": {
+      "none": "No title on this card asks for a Kickstart image.",
+      "line": "{{agreed}} of {{total}} Kickstart image(s) will be placed. The rest are left out — a title that needs one it does not get will not run under WHDLoad."
+    }
+  },
+  "cardRun": {
+    "confirm": "I have read what will be built, and the card image may be written.",
+    "fallback": "{{step}} was written by {{tool}} rather than by ART's own writer:",
+    "run": "Build the card",
+    "runAgain": "Build the card again",
+    "running": "Building…",
+    "stop": "Stop",
+    "giveUp": "Give this up",
+    "giveUpHint": "The working folder ART opened for this card is removed with it.",
+    "blocked": {
+      "noImage": "Choose where the card image goes, on the Machine tab, before this can be built.",
+      "noArchive": "Choose the Emu68 archive this card gets, on the Machine tab, before this can be built.",
+      "noSize": "Choose a card size, on the Machine tab, before this can be built.",
+      "emptyPartition": "'{{partition}}' has nothing in it yet. Drop files or folders onto it on the Machine tab, or remove the partition, before this can be built."
+    },
+    "phase": {
+      "pending": "waiting",
+      "running": "running",
+      "tree": {
+        "succeeded": "System tree built",
+        "refused": "The system tree was refused",
+        "failed": "The system tree could not be built",
+        "stopped": "You stopped the system tree",
+        "notAttempted": "System tree — not attempted"
+      },
+      "package": {
+        "succeeded": "Update added",
+        "refused": "The update was refused",
+        "failed": "The update could not be added",
+        "stopped": "You stopped the update",
+        "notAttempted": "Update — not attempted"
+      },
+      "firstboot": {
+        "succeeded": "First-boot setup written",
+        "refused": "The first-boot setup was refused",
+        "failed": "The first-boot setup could not be written",
+        "stopped": "You stopped the first-boot setup",
+        "notAttempted": "First-boot setup — not attempted"
+      },
+      "prepare": {
+        "succeeded": "Card prepared",
+        "refused": "Preparing the card was refused ({{code}})",
+        "failed": "Preparing the card failed ({{code}})",
+        "stopped": "You stopped the preparation",
+        "notAttempted": "Preparation — not attempted"
+      },
+      "agree": {
+        "succeeded": "Kickstart images agreed",
+        "refused": "The Kickstart step was refused ({{code}})",
+        "failed": "The Kickstart step failed ({{code}})",
+        "stopped": "You gave this up at the Kickstart step",
+        "notAttempted": "Kickstart step — not attempted"
+      },
+      "build": {
+        "succeeded": "Card image written",
+        "refused": "The card was refused ({{code}}) — nothing of the image was written",
+        "failed": "The card image failed ({{code}})",
+        "stopped": "You stopped the card image",
+        "notAttempted": "Card image — not attempted"
+      }
+    },
+    "next": {
+      "refused": "Fix what the refusal names, then press Build again. Nothing of the card image was written.",
+      "failed": "The card image was being written at {{image}}; nothing else on your disks was touched. What became of its .partial file is said below.",
+      "failedUnknown": "ART did not get as far as naming a card image, and nothing else on your disks was touched.",
+      "stopped": "You stopped this. The card image at {{image}} was not finished; what became of its .partial file is said below.",
+      "stoppedUnknown": "You stopped this before ART had named a card image."
+    },
+    "count": {
+      "soFar": "{{done}} so far",
+      "of": "{{done}} / {{total}}"
+    },
+    "sub": {
+      "prepare": "Staging what each partition holds",
+      "whdload": "WHDLoad",
+      "card": "Card image",
+      "partitions": "Partitions",
+      "check": "Checking the finished card"
+    },
+    "partial": {
+      "notCreated": "No half-written .partial file was created.",
+      "removed": "The half-written {{path}} was removed.",
+      "alreadyGone": "The half-written {{path}} was already gone when ART went to remove it.",
+      "notRemoved": "{{path}} could NOT be removed ({{why}}) — it is still on your disk.",
+      "removedAfterBothNamesLeft": "The refusal above is what happened when the build finished: neither name could be removed. A later check found {{path}} gone after all and removed it. The image's own name may still be on your disk — check for it yourself."
+    },
+    "scratchLeft": "ART's own working folder {{path}} could not be removed ({{why}}). Nothing of yours is in it; remove it by hand when you can.",
+    "openFailed": "ART could not open a working folder for this card, so nothing was started: {{message}}",
+    "detail": {
+      "written": "{{files}} files, {{bytes}}"
+    },
+    "manifest": "Manifest written beside the image: {{path}}",
+    "agreeWaiting": "Waiting for you: tick the Kickstart images that may be placed, then press Continue. Ticking none is allowed.",
+    "agreeContinue": "Continue with these Kickstart images"
+  },
   "preload": {
     "heading": "Prepare the card's Amiga volumes",
     "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",
@@ -2220,6 +2479,7 @@
       "noBackup": "This plan changes the card's RDB — choose where its backup goes first.",
       "nothingChosen": "Choose at least one partition to prepare.",
       "blankName": "{{drive}} needs a volume name.",
+      "checkingName": "ART is checking whether {{drive}}'s volume name is one AmigaDOS accepts.",
       "badName": "{{drive}}'s volume name contains ':' or '/', which separate paths on the Amiga and cannot appear in a name.",
       "longName": "{{drive}}'s volume name is longer than {{max}} characters, which is where AmigaDOS names stop.",
       "notPlanned": "Preview it first — nothing is formatted before you have seen what would be."
@@ -2552,6 +2812,14 @@
       "taken": "ART will not write here: this is not a new or empty folder. Choose another.",
       "tree": "This folder holds a tree ART built: {{release}}, {{count}} files.",
       "fresh": "ART can write here: a new tree will be created."
+    },
+    "destinationKind": {
+      "label": "Where the build goes",
+      "folder": "Folder",
+      "card": "Card image",
+      "cardSize": "Card size",
+      "cardSizeSummary": "{{gb}} GB card — {{billions}} billion bytes",
+      "cardPlaceholder": "The card's partitions and sources go here."
     },
     "layer": {
       "base32": "AmigaOS 3.2 base media",
@@ -2946,6 +3214,50 @@
     "verbatim": "{{sentence}}\n\nError ID: {{id}}",
     "treeDestinationOccupied": "'{{path}}' already has something in it. ART never builds a distribution tree over a folder that is not empty — choose an empty folder, or make a new one.\n\nError ID: ART-SAFETY-REFUSED",
     "packageWrongArchive": "'{{archive}}' is not the archive this package's installer lives in: it carries no '{{expected}}' drawer. What it does hold: {{found}}.\n\nError ID: ART-INPUT-INVALID",
+    "cardSourceUnusable": {
+      "missing": "'{{source}}' in {{partition}} will not be copied: it does not exist any more. Remove it from {{partition}}, or put the folder or archive back where ART found it.\n\nError ID: {{id}}",
+      "unreadable": "'{{source}}' in {{partition}} will not be copied: ART could not read it ({{detail}}). Remove it from {{partition}}, or close whatever else has it open and try again.\n\nError ID: {{id}}",
+      "archiveUnreadable": "'{{source}}' in {{partition}} will not be copied: ART could not read the archive ({{detail}}). Remove it from {{partition}}, or get a fresh copy of the archive.\n\nError ID: {{id}}",
+      "hardfileNotWhdload": "'{{source}}' in {{partition}} will not be copied: it is a hard file, but not one a WHDLoad installer built ({{detail}}). Remove it from {{partition}}, or choose a hardfile a WHDLoad installer built.\n\nError ID: {{id}}",
+      "notAnAmigaSource": "'{{source}}' in {{partition}} will not be copied: it is not a folder, an archive, a WHDLoad hardfile or a floppy image ({{detail}}). Remove it from {{partition}}, or choose one of those four kinds.\n\nError ID: {{id}}",
+      "notAFolder": "System's tree in {{partition}} will not be copied: it must be a folder, and '{{source}}' is not one. Remove it from {{partition}}, or point System at the folder ART built.\n\nError ID: {{id}}"
+    },
+    "pfs3DriverNotFound": {
+      "missing": "The card will not be built: no PFS3 driver was found in {{searched}}. Put pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself.\n\nError ID: {{id}}",
+      "missingUnreadable": "The card will not be built: no PFS3 driver was found in {{searched}}, and ART could not read {{unreadable}}. Put a working pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself.\n\nError ID: {{id}}"
+    },
+    "whdloadNotFound": "{{titles}} WHDLoad title(s) on this card will not start: no WHDLoad was found anywhere ART looked ({{searched}}). Put WHDLoad_usr.lha (from whdload.de) in one of your material folders and prepare the card again.\n\nError ID: {{id}}",
+    "kickstartNotProposed": {
+      "notNamed": "'{{name}}' will not be placed on the card: this proposal does not name it at all. Prepare the card again, and agree only to what its proposal offers.\n\nError ID: {{id}}",
+      "notOffered": "'{{name}}' will not be placed on the card: ART did not offer it, because nothing in your collection matches it. Put that ROM file in one of your material folders and prepare the card again.\n\nError ID: {{id}}",
+      "rtbMissing": "'{{name}}' will not be placed on the card: its .RTB file was not found in any material folder. Put {{package}} in one of them and prepare the card again.\n\nError ID: {{id}}"
+    },
+    "cardNamesNeedHst": {
+      "noMore": "{{partition}} will not be written: it holds names ART's own PFS3 writer cannot write ({{paths}}). Point ART at hst-imager in Settings, or rename those files to ASCII, and prepare the card again.\n\nError ID: {{id}}",
+      "withMore": "{{partition}} will not be written: it holds names ART's own PFS3 writer cannot write ({{paths}}, and {{more}} more). Point ART at hst-imager in Settings, or rename those files to ASCII, and prepare the card again.\n\nError ID: {{id}}"
+    },
+    "cardDoesNotFit": {
+      "doesNotFit": "These partitions will not fit this card: they need {{needed}} bytes and the card has {{available}}. Move some of {{largest}} to another card, or choose a larger card.\n\nError ID: {{id}}",
+      "doesNotFitNoPartition": "These partitions will not fit this card: they need {{needed}} bytes and the card has {{available}}. Choose a larger card.\n\nError ID: {{id}}",
+      "partitionTooLarge": "{{volumeName}} will not fit on this card: it would need {{bytes}} bytes, more than one PFS3 partition can hold. Split its sources across two partitions.\n\nError ID: {{id}}",
+      "cardTooSmall": "This card will not hold System and the RDB: a {{cardGb}} GB card is too small. Choose a larger card.\n\nError ID: {{id}}",
+      "partitionContentDoesNotFit": "{{volumeName}} will not hold its own tree: the tree needs {{neededBlocks}} blocks and {{volumeName}} has room for {{availableBlocks}}. Take something out of the tree, and prepare the card again.\n\nError ID: {{id}}",
+      "systemAdditionsDoNotFit": "System will not hold everything this card adds to it: it needs {{neededBlocks}} blocks and has room for {{availableBlocks}} — the tree by itself needs {{treeBlocks}}. The Kickstarts affected are {{kickstarts}}; take what this card does not need out of your material folders, and prepare again.\n\nError ID: {{id}}",
+      "systemAdditionsDoNotFitWithWhdload": "System will not hold everything this card adds to it: it needs {{neededBlocks}} blocks and has room for {{availableBlocks}} — the tree by itself needs {{treeBlocks}}. What is being added is WHDLoad ({{whdload}}) and the Kickstarts {{kickstarts}}; take what this card does not need out of your material folders, and prepare again.\n\nError ID: {{id}}"
+    },
+    "notEnoughSpace": {
+      "image": "'{{place}}' will not receive this card: it has {{available}} bytes free and the build needs {{needed}}. Free some space there, or choose another folder for the card image, and prepare again.\n\nError ID: {{id}}",
+      "scratch": "'{{place}}' will not hold the build's staging: it has {{available}} bytes free and the build needs {{needed}}. Free some space there, or choose another scratch folder in Settings, and prepare again.\n\nError ID: {{id}}",
+      "imageAndScratch": "'{{place}}' will not hold both the card image and the build's staging: it has {{available}} bytes free and the build needs {{needed}} there. Free some space there, or choose another folder for the image, or another scratch folder in Settings, and prepare again.\n\nError ID: {{id}}"
+    },
+    "cardCheckFailed": "This card image will not be finished: it failed {{failures}} of its checks ({{checks}}). Build it again; if it fails the same way, keep the operation log so it can be looked at.\n\nError ID: {{id}}",
+    "hstImagerUnusable": {
+      "noTool": "{{partitions}} will not be written: they hold names only hst-imager can write, and no hst.imager.exe was given to this build. Point ART at a working hst.imager.exe in Settings, or rename those names to ASCII, and prepare the card again.\n\nError ID: {{id}}",
+      "toolUnusable": "{{partitions}} will not be written: they hold names only hst-imager can write, and '{{path}}' cannot be used as hst-imager ({{why}}). Point ART at a working hst.imager.exe in Settings, or rename those names to ASCII, and prepare the card again.\n\nError ID: {{id}}"
+    },
+    "kickstartSourceChanged": "'{{name}}' will not be placed: '{{path}}' is no longer the file the card was prepared with ({{why}}). Prepare the card again, so its proposal offers what is there now.\n\nError ID: {{id}}",
+    "cardPartitionTooManyEntries": "'{{partition}}' will not be written: it would hold {{entries}} files and folders, more than the {{bound}} ART can read back off a finished card. Move some of what it holds to another partition, and prepare again.\n\nError ID: {{id}}",
+    "cardPartialExists": "This card will not be built: '{{path}}' is a half-built image from an earlier run. Delete it yourself, or choose another image name, and build again.\n\nError ID: {{id}}",
     "verbatimNoId": "{{sentence}}"
   },
   "network": {

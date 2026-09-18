@@ -66,6 +66,20 @@ const firstbootPreviewMock = vi.hoisted(() => vi.fn());
 const awaitJobResultMock = vi.hoisted(() => vi.fn());
 const jobCancelMock = vi.hoisted(() => vi.fn());
 const onJobProgressMock = vi.hoisted(() => vi.fn());
+const cardOpenMock = vi.hoisted(() => vi.fn());
+const cardCloseMock = vi.hoisted(() => vi.fn());
+const cardPrepareMock = vi.hoisted(() => vi.fn());
+const cardBuildMock = vi.hoisted(() => vi.fn());
+const onCardPhaseMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/lib/cardOs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cardOs")>()),
+  cardOsOpen: cardOpenMock,
+  cardOsClose: cardCloseMock,
+  cardOsPrepare: cardPrepareMock,
+  cardOsBuild: cardBuildMock,
+  onCardOsPhase: onCardPhaseMock,
+}));
 
 vi.mock("@/lib/osinstall", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/osinstall")>()),
@@ -113,6 +127,84 @@ const { BuildTab } = await import("@/components/osbuilder/BuildTab");
 const { RunLockContext } = await import("@/lib/runLock");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { OSINSTALL_EVENT, refusalPhrase } = await import("@/lib/osinstall");
+const { CARD_OS_BUILD_EVENT, CARD_OS_PREPARE_EVENT } = await import("@/lib/cardOs");
+const { jobStatusLabel, JobFailed } = await import("@/lib/jobs");
+
+// ---------------------------------------------------------------------------
+// The card lane's own answers (round 4, task 10)
+// ---------------------------------------------------------------------------
+
+const CARD_SESSION = 4;
+const CARD_TREE = "E:\\amiga\\ProjeART\\build\\tmp\\art-card-4\\tree";
+const CARD_IMAGE = "E:\\amiga\\kart.img";
+
+const PROPOSAL = {
+  items: [
+    {
+      name: "kick40068.A1200",
+      titles: ["Games/Turrican/Turrican.slave"],
+      titlesMore: 0,
+      offer: {
+        outcome: "supplied" as const,
+        wanted: { name: "kick40068.A1200", crc16: 1234, size: 524_288 },
+        by: {
+          path: "E:\\roms\\kick40068.A1200",
+          name: "kick40068.A1200",
+          sizeDisagrees: null,
+        },
+      },
+      rtb: { kind: "loose" as const, path: "E:\\roms\\kick40068.A1200.RTB" },
+    },
+  ],
+  unreadableSlaves: [],
+  rtbMissing: false,
+};
+
+const PREPARED = { kickstarts: PROPOSAL } as unknown as import("@/lib/cardOs").PreparedCard;
+
+const HEALTH: import("@/lib/cardBuild").HealthReport = {
+  items: [
+    { check: { kind: "boot-partition-first" }, state: "pass" },
+    { check: { kind: "every-partition-can-mount", unmountable: 0 }, state: "pass" },
+  ],
+  by_hand: [{ kind: "flash-the-card" }],
+};
+
+function cardResult(
+  ending: import("@/lib/cardOs").CardOsEnding
+): import("@/lib/cardOs").CardOsBuildResult {
+  return {
+    jobId: 13,
+    session: CARD_SESSION,
+    image: CARD_IMAGE,
+    ending,
+    whdload: null,
+    kickstarts: [],
+    steps: [],
+    manifestPath:
+      ending.ending === "succeeded" ? `${CARD_IMAGE}.art-manifest.json` : null,
+    health: ending.ending === "succeeded" ? HEALTH : null,
+    partial:
+      ending.ending === "succeeded"
+        ? { outcome: "not-created" }
+        : { outcome: "removed", path: `${CARD_IMAGE}.partial` },
+    scratchLeft: null,
+  };
+}
+
+/** What `card-os-build-result` will carry — the subject of half the card
+ *  cases, so it is settable per test. */
+let cardAnswer = cardResult({ ending: "succeeded" });
+
+/** What `card-os-prepare-result` will carry. A refusal is `card_os_prepare`'s
+ *  own **answer** now, on its own event, exactly as `card_os_measure`'s is —
+ *  so it is settable per test too (final review, C2). */
+let prepareAnswer: import("@/lib/cardOs").CardOsPrepareResult = {
+  jobId: 12,
+  session: CARD_SESSION,
+  prepared: PREPARED,
+  refusal: null,
+};
 
 // ---------------------------------------------------------------------------
 // What the core answers with
@@ -403,6 +495,8 @@ let order: string[] = [];
 /** The one live `onJobProgress` handler, so a test can deliver an update the
  *  way the backend would. */
 let report: ((job: JobProgress) => void) | null = null;
+/** The one live `onCardOsPhase` handler, likewise. */
+let cardPhaseSaid: ((event: import("@/lib/cardOs").CardOsPhaseEvent) => void) | null = null;
 
 type Start = () => Promise<number>;
 
@@ -415,7 +509,13 @@ async function settles(
 ): Promise<unknown> {
   await start();
   return extract(
-    event === OSINSTALL_EVENT ? treeResult() : { job_id: 12, outcome: PACKAGE_OUTCOME }
+    event === OSINSTALL_EVENT
+      ? treeResult()
+      : event === CARD_OS_PREPARE_EVENT
+        ? prepareAnswer
+        : event === CARD_OS_BUILD_EVENT
+          ? cardAnswer
+          : { job_id: 12, outcome: PACKAGE_OUTCOME }
   );
 }
 
@@ -500,6 +600,31 @@ beforeEach(() => {
     return () => {};
   });
   awaitJobResultMock.mockReset().mockImplementation(settles);
+  cardAnswer = cardResult({ ending: "succeeded" });
+  prepareAnswer = { jobId: 12, session: CARD_SESSION, prepared: PREPARED, refusal: null };
+  cardOpenMock.mockReset().mockImplementation(async () => {
+    order.push("cardOpen");
+    return { session: CARD_SESSION, tree: CARD_TREE };
+  });
+  cardCloseMock.mockReset().mockImplementation(async () => {
+    order.push("cardClose");
+    return { scratchLeft: null };
+  });
+  cardPrepareMock.mockReset().mockImplementation(async () => {
+    order.push("cardPrepare");
+    return 12;
+  });
+  cardBuildMock.mockReset().mockImplementation(async () => {
+    order.push("cardBuild");
+    return 13;
+  });
+  cardPhaseSaid = null;
+  onCardPhaseMock
+    .mockReset()
+    .mockImplementation(async (handler: (e: import("@/lib/cardOs").CardOsPhaseEvent) => void) => {
+      cardPhaseSaid = handler;
+      return () => {};
+    });
   useSettingsStore.setState({ loaded: false, settings: DEFAULT_SETTINGS });
 });
 
@@ -1954,5 +2079,594 @@ describe("while the plan is still being computed (I5)", () => {
         mediaFacts: null,
       })?.key
     ).toBe("osinstall.blocked.notPlanned");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Card mode (round 4, task 10): the same tab, the card's own run
+// ---------------------------------------------------------------------------
+
+/** The Machine tab's card destination, its image and its partitions — the
+ *  keys `useBuildSession` reads them through, per release (Q2). */
+function cardMode(over: Record<string, unknown> = {}) {
+  seed({
+    ...FIELDS,
+    "osinstall.destinationKind.AmigaOS 3.9": "card-image",
+    // One ticked update, so the card's sequence really carries the OS
+    // Builder's own three phases into the session tree.
+    "buildSession.packages.AmigaOS 3.9": { folder: null, chosen: ["boingbag-39-1"] },
+    "osinstall.cardTarget.AmigaOS 3.9": {
+      sizeGb: 64,
+      image: CARD_IMAGE,
+      emu68Archive: "E:\\emu68\\Emu68-pistorm.zip",
+      pfs3Driver: null,
+      partitions: [
+        { name: "System", sources: [] },
+        { name: "Games", sources: [`${ARCHIVES}\\oyunlar`] },
+        { name: "Work", sources: [] },
+      ],
+    },
+    ...over,
+  });
+}
+
+/** Press the card's Build button, which is the only thing that opens a
+ *  session. */
+async function pressCardBuild() {
+  await screen.findByTestId("card-run");
+  await userEvent.click(screen.getByTestId("build-confirm"));
+  await userEvent.click(screen.getByTestId("card-run"));
+}
+
+/** Through the agreement: tick the one proposed Kickstart and continue. */
+async function agreeAndContinue() {
+  await screen.findByTestId("kickstart-agreement");
+  await userEvent.click(screen.getByTestId("kickstart-check-kick40068.A1200"));
+  await userEvent.click(screen.getByTestId("card-agree-continue"));
+}
+
+function cardRows(): string[] {
+  return screen.getAllByTestId("card-phase-row").map((el) => el.textContent ?? "");
+}
+
+describe("card mode — the card's own run", () => {
+  it("says a card is being built rather than a folder, in the first summary line", async () => {
+    cardMode();
+    renderTab();
+    await screen.findByTestId("card-run");
+    await waitFor(() => expect(summaryLines()[0]).toContain(CARD_IMAGE));
+    expect(summaryLines()[0]).not.toBe(
+      i18n.t("osBuilder.build.summary.tree", { files: 1980, bytes: "", components: "" })
+    );
+  });
+
+  // Q9 / ART-344: a session opened by looking at a tab is a scratch folder
+  // nobody asked for.
+  it("opens no session until the button is pressed", async () => {
+    cardMode();
+    renderTab();
+    await screen.findByTestId("card-run");
+    await flush();
+    expect(cardOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("will not build without an image, and says where to choose one", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 64,
+        image: null,
+        emu68Archive: null,
+        pfs3Driver: null,
+        partitions: [{ name: "System", sources: [] }],
+      },
+    });
+    renderTab();
+    const blocker = await screen.findByTestId("build-blocker");
+    expect(blocker.textContent).toBe(i18n.t("cardRun.blocked.noImage"));
+    expect(screen.queryByTestId("card-run")).toBeNull();
+  });
+
+  // NEW (controller's ruling, Task 10's own concern): a card target the
+  // build cannot possibly finish is refused in the Build button's place,
+  // before a session is even opened — not discovered after the tree, the
+  // updates and the prepare have already run.
+  it("will not build without an Emu68 archive, and says where to choose one", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 64,
+        image: CARD_IMAGE,
+        emu68Archive: null,
+        pfs3Driver: null,
+        partitions: [{ name: "System", sources: [] }],
+      },
+    });
+    renderTab();
+    const blocker = await screen.findByTestId("build-blocker");
+    expect(blocker.textContent).toBe(i18n.t("cardRun.blocked.noArchive"));
+    expect(screen.queryByTestId("card-run")).toBeNull();
+    expect(cardOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("will not build without a card size, and says to choose one", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 0,
+        image: CARD_IMAGE,
+        emu68Archive: "E:\\emu68\\Emu68-pistorm.zip",
+        pfs3Driver: null,
+        partitions: [{ name: "System", sources: [] }],
+      },
+    });
+    renderTab();
+    const blocker = await screen.findByTestId("build-blocker");
+    expect(blocker.textContent).toBe(i18n.t("cardRun.blocked.noSize"));
+    expect(screen.queryByTestId("card-run")).toBeNull();
+  });
+
+  it("will not build a partition the user added but never put anything on, and names it", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 64,
+        image: CARD_IMAGE,
+        emu68Archive: "E:\\emu68\\Emu68-pistorm.zip",
+        pfs3Driver: null,
+        partitions: [
+          { name: "System", sources: [] },
+          { name: "Games", sources: [] },
+          { name: "Work", sources: [] },
+        ],
+      },
+    });
+    renderTab();
+    const blocker = await screen.findByTestId("build-blocker");
+    expect(blocker.textContent).toBe(i18n.t("cardRun.blocked.emptyPartition", { partition: "Games" }));
+    expect(screen.queryByTestId("card-run")).toBeNull();
+  });
+
+  it("builds a plain System-and-Work card with no extra partition, unblocked", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 64,
+        image: CARD_IMAGE,
+        emu68Archive: "E:\\emu68\\Emu68-pistorm.zip",
+        pfs3Driver: null,
+        partitions: [
+          { name: "System", sources: [] },
+          { name: "Work", sources: [] },
+        ],
+      },
+    });
+    renderTab();
+    await screen.findByTestId("card-run");
+    expect(screen.queryByTestId("build-blocker")).toBeNull();
+  });
+
+  it("runs the whole card, shows the manifest and the health checklist", async () => {
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    await waitFor(() => expect(screen.getByTestId("card-manifest")).toBeTruthy());
+    expect(screen.getByTestId("card-manifest").textContent).toContain(
+      `${CARD_IMAGE}.art-manifest.json`
+    );
+    // The lifted `HealthPanel`, drawn by the run rather than by a second copy.
+    expect(screen.getByTestId("card-health")).toBeTruthy();
+    expect(screen.getByTestId("card-health").textContent).toContain(
+      i18n.t("cardBuilder.health.check.bootFirst")
+    );
+    expect(order).toEqual([
+      "cardOpen",
+      "apply",
+      "addPackage",
+      "firstboot",
+      "cardPrepare",
+      "cardBuild",
+    ]);
+    // Rust's own `end_build` removed the session; a close from here would be
+    // a second answer to a settled question.
+    expect(cardCloseMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A card run leaves the folder lane's own remembered tree exactly as it
+   * found it** (round 4 final review, C3).
+   *
+   * The run used to put `card_os_open`'s scratch path into `session.tree` —
+   * a *persisted* key five screens read as the user's own distribution root —
+   * and then set it to `null` in the `finally` that runs on every path,
+   * success included, clearing `firstboot.written` with it. A user who had
+   * built a folder distribution and later built a card found the Appearance
+   * and Network panels, the step banner and `VerifyAgainstCard` all saying
+   * there was no tree, having changed nothing themselves. The run's tree now
+   * lives in a store of its own (`@/lib/cardRunTree`), which is not persisted
+   * and which no folder screen reads.
+   */
+  it("leaves session.tree and firstboot.written untouched across a whole card run", async () => {
+    cardMode({
+      "buildSession.tree": { root: "E:\\Amiga\\dist39", builtHere: true },
+      "buildSession.firstboot": { written: true, askPrefs: true },
+    });
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+    await waitFor(() => expect(screen.getByTestId("card-manifest")).toBeTruthy());
+
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["buildSession.tree"]).toEqual({ root: "E:\\Amiga\\dist39", builtHere: true });
+    expect((bag["buildSession.firstboot"] as { written: boolean }).written).toBe(true);
+  });
+
+  /**
+   * **The preparation is asked with the hst-imager Settings holds** (round 4
+   * fix-wave re-review, N3; the wire I2 added). The build deliberately takes
+   * none — it uses the one its preparation asked (card round 3, I1) — so this
+   * request is the only place the setting can reach the run at all.
+   */
+  it("asks the preparation with the hst-imager Settings holds", async () => {
+    cardMode();
+    useSettingsStore.setState((state) => ({
+      settings: { ...state.settings, hstImagerPath: "E:\\tools\\hst.imager.exe" },
+    }));
+    renderTab();
+    await pressCardBuild();
+    await waitFor(() => expect(cardPrepareMock).toHaveBeenCalled());
+    expect(cardPrepareMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hstImagerPath: "E:\\tools\\hst.imager.exe" })
+    );
+  });
+
+  // **The agreement is a real pause** (Q8, the owner's rule of 2026-08-21).
+  it("does not build until the user has acted on the Kickstart agreement", async () => {
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await screen.findByTestId("kickstart-agreement");
+    await flush();
+    expect(cardBuildMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByTestId("card-agree-continue"));
+    await waitFor(() => expect(cardBuildMock).toHaveBeenCalled());
+  });
+
+  it("closes the session exactly once when the user gives the run up", async () => {
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await screen.findByTestId("kickstart-agreement");
+    await userEvent.click(screen.getByTestId("card-give-up"));
+    await waitFor(() => expect(cardCloseMock).toHaveBeenCalled());
+    expect(cardCloseMock.mock.calls).toEqual([[CARD_SESSION]]);
+    expect(cardBuildMock).not.toHaveBeenCalled();
+  });
+
+  it("renders a refusal's own Turkish sentence and its next step, and never the failure's", async () => {
+    cardAnswer = cardResult({
+      ending: "refused",
+      phase: "card",
+      code: "ART-CARD-SOURCE-UNUSABLE",
+      message: "that source cannot be used",
+      params: { source: `${ARCHIVES}\\kirik.lha`, partition: "Games", reason: "missing" },
+    });
+    await changeLanguage("tr");
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    const refusal = await screen.findByTestId("card-refusal-sentence");
+    expect(refusal.textContent).toBe(
+      i18n.t("errors.cardSourceUnusable.missing", {
+        id: "ART-CARD-SOURCE-UNUSABLE",
+        source: `${ARCHIVES}\\kirik.lha`,
+        partition: "Games",
+      })
+    );
+    const next = screen.getAllByTestId("card-phase-next").at(-1);
+    expect(next?.textContent).toBe(i18n.t("cardRun.next.refused"));
+    expect(next?.textContent).not.toBe(i18n.t("cardRun.next.failed", { image: CARD_IMAGE }));
+    // The build row says refused, not failed.
+    expect(cardRows().at(-1)).toContain(
+      i18n.t("cardRun.phase.build.refused", { code: "ART-CARD-SOURCE-UNUSABLE" })
+    );
+    // And so does the job bar's own row (round 4, Task 1).
+    const bar = jobStatusLabel({
+      id: 13,
+      title: { key: "components.jobBar.title.buildCardOs", params: { target: CARD_IMAGE } },
+      done: 0,
+      total: null,
+      message: "",
+      state: { state: "refused", code: "ART-CARD-SOURCE-UNUSABLE", message: "x" },
+    });
+    expect(i18n.t(bar.key, bar.params)).toBe(i18n.t("components.jobBar.status.refused"));
+    expect(i18n.t(bar.key, bar.params)).not.toBe(
+      i18n.t("components.jobBar.status.failed", { code: "ART-CARD-SOURCE-UNUSABLE" })
+    );
+  });
+
+  /**
+   * **A refusal raised while preparing reaches the screen as a refusal**
+   * (round 4 final review, C2).
+   *
+   * Every card refusal but the three the build itself raises comes out of
+   * `card_os_prepare` — `CardSourceUnusable`, `CardDoesNotFit`,
+   * `Pfs3DriverNotFound`, `CardNamesNeedHstImager`, `NotEnoughSpace`,
+   * `CardPartitionTooManyEntries`, `WhdloadNotFound`. The command used plain
+   * `spawn_job` and returned `Err`, so the job ended **Failed**, the frontend
+   * got one formatted English string with the code in parentheses (which
+   * `parseError` does not read), and the row said *"Preparing the card
+   * failed"* in red with the failure's next step. Owner decision 4 (card
+   * refusals are Turkish), decision 5 (a refusal is never called failed) and
+   * "endings stay distinct" were all broken for the commonest refusal in the
+   * flow. The existing case above proved the same sentence through the
+   * *build*'s result event — a path this error cannot take.
+   */
+  it("says a prepare refusal in Turkish, on a refused row, and never as a failure", async () => {
+    prepareAnswer = {
+      jobId: 12,
+      session: CARD_SESSION,
+      prepared: null,
+      refusal: {
+        code: "ART-CARD-SOURCE-UNUSABLE",
+        message: `'${ARCHIVES}\\oyunlar' in Games cannot be used: it does not exist.`,
+        params: { partition: "Games", source: `${ARCHIVES}\\oyunlar`, reason: "missing" },
+      },
+    };
+    await changeLanguage("tr");
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+
+    const refusal = await screen.findByTestId("card-refusal-sentence");
+    expect(refusal.textContent).toBe(
+      i18n.t("errors.cardSourceUnusable.missing", {
+        id: "ART-CARD-SOURCE-UNUSABLE",
+        source: `${ARCHIVES}\\oyunlar`,
+        partition: "Games",
+      })
+    );
+    // The prepare row itself: refused, with its code — not failed.
+    const prepareRow = cardRows().find((row) =>
+      row.includes(i18n.t("cardRun.phase.prepare.refused", { code: "ART-CARD-SOURCE-UNUSABLE" }))
+    );
+    expect(prepareRow).toBeTruthy();
+    expect(cardRows().join("\n")).not.toContain(
+      i18n.t("cardRun.phase.prepare.failed", { code: "ART-CARD-SOURCE-UNUSABLE" })
+    );
+    // The refusal's next step, not the failure's "where the evidence is".
+    const next = screen.getAllByTestId("card-phase-next").at(-1);
+    expect(next?.textContent).toBe(i18n.t("cardRun.next.refused"));
+    // Nothing was built, and the session was closed exactly once.
+    expect(cardBuildMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(cardCloseMock.mock.calls).toEqual([[CARD_SESSION]]));
+  });
+
+  /**
+   * **And a prepare *failure* reaches it as a failure** (round 4 fix-wave
+   * re-review, N2) — the other arm of the case above, and the one the wave
+   * broke while fixing the first.
+   *
+   * `card_os_prepare`'s Err arm emitted a typed refusal on its own event for
+   * **every** error, including the ones `prepare_refused` deliberately
+   * excludes, and this hook branches on that field's presence alone. So an
+   * unreadable disk mid-staging was drawn as *refused*, with the refusal's
+   * next step (*fix what it names and press Build again*), while the job bar
+   * above it — reading the same command's `JobState::Failed` — said the job
+   * failed, and the failure's own "where the image was being written" sentence
+   * was never shown. Rust now says nothing on the event for a failure, so what
+   * arrives here is the failed job's `JobFailed`, code and all; this case pins
+   * the two sentences that follow from it.
+   */
+  it("says a prepare failure as a failure, with the failure's own next step", async () => {
+    awaitJobResultMock.mockImplementation(
+      async (event: string, start: Start, extract: (payload: unknown) => unknown) => {
+        if (event !== CARD_OS_PREPARE_EVENT) return settles(event, start, extract);
+        await start();
+        // What a failed job's `settleFromProgress` throws when no result
+        // event ever arrives — which is now the whole of a failure's wire.
+        throw new JobFailed("ART-IO", "the disk is unreadable (ART-IO)");
+      }
+    );
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+
+    await waitFor(() =>
+      expect(cardRows().join("\n")).toContain(
+        i18n.t("cardRun.phase.prepare.failed", { code: "ART-IO" })
+      )
+    );
+    expect(cardRows().join("\n")).not.toContain(
+      i18n.t("cardRun.phase.prepare.refused", { code: "ART-IO" })
+    );
+    // The failure's next step — where the image was being written — never the
+    // refusal's "fix what it names and press Build again".
+    const next = screen.getAllByTestId("card-phase-next").at(-1);
+    expect(next?.textContent).toBe(i18n.t("cardRun.next.failed", { image: CARD_IMAGE }));
+    expect(next?.textContent).not.toBe(i18n.t("cardRun.next.refused"));
+    // And the core's own sentence is still on screen, not swallowed.
+    expect(screen.getByTestId("card-refusal-sentence").textContent).toContain(
+      "the disk is unreadable"
+    );
+    expect(cardBuildMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(cardCloseMock.mock.calls).toEqual([[CARD_SESSION]]));
+  });
+
+  /**
+   * **A fallback is news** (round 4 final review, minor). The manual builder
+   * has said which tool wrote which partition, and why ART's own writer could
+   * not, since ART-120; the one-button run dropped `result.steps` entirely, so
+   * a card half-written by hst-imager looked exactly like one ART wrote
+   * itself. Nothing was out-claimed — and the user was not told.
+   */
+  it("names the partition hst-imager wrote and why ART's own writer could not", async () => {
+    cardAnswer = {
+      ...cardResult({ ending: "succeeded" }),
+      steps: [
+        {
+          step: {
+            step: "format-partition",
+            slot: null,
+            index: 0,
+            drive_name: "SDH0",
+            volume_name: "System",
+          },
+          tool: "native",
+          fallback_reason: null,
+        },
+        {
+          step: {
+            step: "format-partition",
+            slot: null,
+            index: 1,
+            drive_name: "SDH1",
+            volume_name: "Games",
+          },
+          tool: "hst-imager 1.2.3",
+          fallback_reason: { reason: "non-ascii-pfs3-names", paths: ["türkçe"], more: 0 },
+        },
+      ] satisfies import("@/lib/preload").StepReport[],
+    };
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    const said = await screen.findByTestId("card-fallbacks");
+    // One line: the step that went the ordinary way is not news.
+    expect(said.querySelectorAll("li").length).toBe(1);
+    expect(said.textContent).toContain("hst-imager");
+    expect(said.textContent).toContain("Games");
+  });
+
+  /**
+   * **No Stop while the run waits at the agreement** (the review's triage of
+   * Task 10's deferred minor): there is no job to cancel, so Stop did what
+   * Give up does and then printed the give-up sentence.
+   */
+  it("offers only Give up at the agreement, never Stop", async () => {
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await screen.findByTestId("kickstart-agreement");
+    expect(screen.queryByTestId("card-stop")).toBeNull();
+    expect(screen.getByTestId("card-give-up")).toBeTruthy();
+  });
+
+  it("says where the evidence is and what became of the .partial when a build fails", async () => {
+    cardAnswer = cardResult({
+      ending: "failed",
+      phase: "partitions",
+      code: "ART-IO",
+      message: "the disk filled up",
+      params: {},
+    });
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    const next = await screen.findByTestId("card-phase-next");
+    expect(next.textContent).toBe(i18n.t("cardRun.next.failed", { image: CARD_IMAGE }));
+    expect(screen.getByTestId("card-partial").textContent).toBe(
+      i18n.t("cardRun.partial.removed", { path: `${CARD_IMAGE}.partial` })
+    );
+  });
+
+  // R2 (card round 3's residual re-review, "New breakage"): the ending says
+  // neither name could be removed when the build finished; the report beside
+  // it, once a later retry actually removed `.partial`, must say both facts
+  // in order rather than flatly contradicting the sentence above it.
+  it("says both, in order, when the .partial was reported unremovable and then removed on a later try", async () => {
+    cardAnswer = cardResult({
+      ending: "failed",
+      phase: "check",
+      code: "ART-CARD-FINISH-LEFT-BOTH-NAMES",
+      message:
+        "ART could not finish naming its card: neither the .partial name nor the new name could be removed.",
+      params: { image: CARD_IMAGE, partial: `${CARD_IMAGE}.partial`, why: "held by a scanner" },
+    });
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    await screen.findByTestId("card-phase-next");
+    const partial = screen.getByTestId("card-partial");
+    expect(partial.textContent).toBe(
+      i18n.t("cardRun.partial.removedAfterBothNamesLeft", { path: `${CARD_IMAGE}.partial` })
+    );
+    expect(partial.textContent).not.toBe(
+      i18n.t("cardRun.partial.removed", { path: `${CARD_IMAGE}.partial` })
+    );
+  });
+
+  it("says which phase a stopped build stopped in", async () => {
+    cardAnswer = cardResult({ ending: "stopped", phase: "partitions" });
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    await waitFor(() =>
+      expect(cardRows().at(-1)).toContain(i18n.t("cardRun.phase.build.stopped"))
+    );
+    expect(screen.getByTestId("card-stopped-phase").textContent).toBe(
+      i18n.t("cardRun.sub.partitions")
+    );
+  });
+
+  // CLAUDE.md's bar rule: a fixed width over a total nobody stated looks like
+  // progress and carries none.
+  it("advances the count from the job and draws no bar when the total is unknown", async () => {
+    const job = pending();
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await flush();
+
+    await act(async () => {
+      cardPhaseSaid?.({
+        jobId: 11,
+        session: CARD_SESSION,
+        phase: "partitions",
+        done: 0,
+        total: null,
+        unit: "files",
+      });
+      report?.({
+        id: 11,
+        title: { key: "components.jobBar.title.buildCardOs", params: { target: CARD_IMAGE } },
+        done: 4812,
+        total: null,
+        message: "",
+        state: { state: "running" },
+      });
+    });
+
+    expect(screen.getByTestId("card-phase-count").textContent).toBe(
+      i18n.t("cardRun.count.soFar", { done: 4812 })
+    );
+    expect(screen.queryByTestId("card-phase-bar")).toBeNull();
+    expect(screen.getByTestId("card-phase-now").textContent).toBe(
+      i18n.t("cardRun.sub.partitions")
+    );
+
+    await act(async () => {
+      report?.({
+        id: 11,
+        title: { key: "components.jobBar.title.buildCardOs", params: { target: CARD_IMAGE } },
+        done: 4812,
+        total: 9216,
+        message: "",
+        state: { state: "running" },
+      });
+    });
+    expect(screen.getByTestId("card-phase-count").textContent).toBe(
+      i18n.t("cardRun.count.of", { done: 4812, total: 9216 })
+    );
+    expect(screen.getByTestId("card-phase-bar")).toBeTruthy();
+    job.resolve(treeResult());
   });
 });

@@ -112,6 +112,31 @@ describe("the job bar", () => {
     expect(screen.getByText("Installing AmigaOS 3.2 into Tree")).toBeTruthy();
   });
 
+  it("keeps a refused job on screen with its own tone, never the failed word (round 4, Task 1)", async () => {
+    render(<JobBar />);
+    await act(async () => {});
+
+    await send(running(1, INSTALL));
+    expect(screen.getByText("Installing AmigaOS 3.2 into Tree")).toBeTruthy();
+
+    await send({
+      ...running(1, INSTALL),
+      state: {
+        state: "refused",
+        code: "ART-KICKSTART-NOT-PROPOSED",
+        message: "no Kickstart image was agreed to",
+      },
+    });
+
+    // Stays on screen, same as a failure or a cancellation would.
+    expect(screen.getByText("Installing AmigaOS 3.2 into Tree")).toBeTruthy();
+    // Its own word — "Refused" — never "Failed".
+    expect(screen.getByText("Refused")).toBeTruthy();
+    expect(screen.queryByText(/Failed/)).toBeNull();
+    // The refusal's own message is shown, exactly as a failure's is.
+    expect(screen.getByText("no Kickstart image was agreed to")).toBeTruthy();
+  });
+
   it("wires its Stop button to jobCancel with that row's own id", async () => {
     // The owner reported that stopping "started a new job". It did not: the
     // button was always wired to `jobCancel`, and what produced the new job
@@ -157,5 +182,25 @@ describe("the job bar", () => {
     expect(screen.getByText("Adding 1 package to Work.hdf")).toBeTruthy();
     expect(screen.getByText("Adding 2 packages to Work.hdf")).toBeTruthy();
     expect(screen.queryByText(/\(s\)/)).toBeNull();
+  });
+  /**
+   * **A bar only when there is something to measure** (round 4 final review,
+   * minor). It drew a fixed 25 % sliver for a job whose total is unknown,
+   * which CLAUDE.md names as the same defect as a fake bar: it looks like
+   * progress and carries no information. `CardPhaseRow` has done this right
+   * since the round began; the bar above it had not.
+   */
+  it("draws no bar at all for a job with no total, and one when there is a total", async () => {
+    render(<JobBar />);
+    await act(async () => {});
+
+    await send(running(1, INSTALL));
+    expect(screen.getByText("Installing AmigaOS 3.2 into Tree")).toBeTruthy();
+    expect(screen.queryByTestId("job-bar-progress")).toBeNull();
+    // The honest form of the same information is still there.
+    expect(screen.getByText(/101/)).toBeTruthy();
+
+    await send({ ...running(1, INSTALL), done: 50, total: 200 });
+    expect(screen.getByTestId("job-bar-progress")).toBeTruthy();
   });
 });

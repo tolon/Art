@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Outlet, useBlocker } from "react-router-dom";
 
@@ -14,6 +14,7 @@ import {
   ZOOM_DEFAULT,
 } from "@/lib/appZoom";
 import { setupDragDrop, type DropHandler } from "@/lib/dnd";
+import type { DropContext, LastDrop } from "@/lib/dropContext";
 import { subscribeSafely } from "@/lib/jobs";
 import { RunLockContext } from "@/lib/runLock";
 import { useRecentFilesStore } from "@/stores/recentFilesStore";
@@ -30,6 +31,26 @@ import type { DroppedAnalysis } from "@/types";
 export function Layout() {
   const [dragOver, setDragOver] = useState(false);
   const [analyses, setAnalyses] = useState<DroppedAnalysis[]>([]);
+  // The drop position, CSS pixels, converted once in `dnd.ts`
+  // (`cssPointOf`, experiment-drop-coordinates.md) — carried out to the
+  // outlet context beside `analyses`/`dragOver` so a card row can be hit
+  // without a second listener (round 4 task 6). `null` outside a drag.
+  const [dropPosition, setDropPosition] = useState<{ x: number; y: number } | null>(null);
+  /**
+   * **The last completed drop, as one value** (round 4 final review, I1).
+   *
+   * `dropPosition` above moves on `enter` and `over` too, while `analyses`
+   * changes only on `drop`. A reader that joined the two itself therefore saw
+   * the *previous* drop's paths at the *current* pointer position on every
+   * mouse move of every later drag — and the card section, which acts on that
+   * pair, appended an hour-old path to whichever row the pointer crossed,
+   * before anything had been dropped at all. The position a drop happened at
+   * belongs to that drop, so the two travel together and a reader keys on
+   * `seq`. Cleared on `leave` so a drag that left the window carries nothing
+   * into the next one.
+   */
+  const [lastDrop, setLastDrop] = useState<LastDrop | null>(null);
+  const dropSeq = useRef(0);
   const record = useRecentFilesStore((s) => s.record);
   const reloadRecent = useRecentFilesStore((s) => s.load);
   const { t } = useTranslation();
@@ -135,6 +156,11 @@ export function Layout() {
 
   const widthClasses = shellWidthClasses(viewportWidth, zoom);
 
+  /** What every screen below reads — **annotated, not inferred**, so a field
+   *  this shell stops sending is a build error at the one place that sends
+   *  it rather than `undefined` at the four that read it (C1). */
+  const dropContext: DropContext = { analyses, dragOver, dropPosition, lastDrop };
+
   const stepAppZoom = useCallback(
     (direction: number) => {
       const current = useSettingsStore.getState().settings.appZoom;
@@ -181,10 +207,23 @@ export function Layout() {
 
   useEffect(() => {
     const handler: DropHandler = {
-      onPhase: (phase) => setDragOver(phase === "enter" || phase === "over"),
-      onDrop: (results) => {
+      onPhase: (phase, position) => {
+        setDragOver(phase === "enter" || phase === "over");
+        setDropPosition(position ?? null);
+        // A drag that left the window takes its drop with it: nothing below
+        // may act on it again when the next drag starts.
+        if (phase === "leave") setLastDrop(null);
+      },
+      onDrop: (results, position) => {
         setDragOver(false);
+        setDropPosition(position ?? null);
         setAnalyses(results);
+        dropSeq.current += 1;
+        setLastDrop({
+          paths: results.map((result) => result.path),
+          at: position ?? null,
+          seq: dropSeq.current,
+        });
         // Record successful analyses into recent files.
         for (const r of results) {
           if (r.ok && r.plan) {
@@ -218,7 +257,7 @@ export function Layout() {
                 (ART-196). Renders nothing at all afterwards. */}
             <ScratchRootGate />
             <JobBar />
-            <Outlet context={{ analyses, dragOver }} />
+            <Outlet context={dropContext} />
           </main>
         </div>
         {/* The way back when the sidebar is hidden. Placed on the shell rather

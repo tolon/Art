@@ -28,17 +28,17 @@ where it was taken.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-17 — card round 3 merged into `main` (`d421822`, `--no-ff`, on the owner's word) after its second whole-suite run; the `main`/`origin`, test and "Picking up next session" rows below describe `main` at that merge |
+| **Last updated** | 2026-09-18 — card round 4 (every screen) built on `art-card-round-4` (13 tasks, `51769ad`..`a0b0415`, on top of round 3's merge `d421822`), then its final whole-branch review, one fix wave, a scoped re-review and the residual round that closed the re-review's three findings (N1, N2, N3) and the M2 comment correction its own re-review raised; **unmerged, with ART-059's two whole-suite Rust runs taken at `993ecc9` and green — nothing test-shaped is owed before the merge.** The `main`/`origin` row below still describes `main` as merged through round 3; the test, lint and sweep rows below describe `art-card-round-4` at the residual round, the i18n row at `a0b0415` |
 | **Version** | **0.9.4**, released 2026-09-15 — tag `v0.9.4` (annotated, on `e91f22e`), release run 34969262720 `success`, published on the owner's word with one NSIS and one MSI installer. Its notes are CHANGELOG's `[0.9.4]` section. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` — all `0.9.4`, checked 2026-09-17) and `release.yml` refuses a tag that disagrees with any of them, or a version with no CHANGELOG section |
 | **`main` / `origin`** | **`main` is `d421822`** — card round 3 merged `--no-ff` on 2026-09-17 on the owner's word and `art-card-round-3` deleted; pushed, and CI's result on it is the row below. Round 3 was reviewed (0 Critical, 5 Important, 18 Minor), fixed in one wave, re-reviewed, and its residuals (N1, N2, N5, N6, ART-343's ROM half, M18) fixed (fourteen tasks: `core/cardos/` above `core/card`/`core/preload` — ART-339 — the WHDLoad phase, the Kickstart proposal, `card_os_open`/`prepare`/`build`/`close`, `.partial` output, and the end-to-end card proven against `hst-imager`). One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
-| **Tests — Rust** | `cd src-tauri && cargo test --lib` on the tree merged as `d421822` (the code of `d344b26`), 2026-09-17, run **twice** (ART-059): `test result: ok. 3715 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 517.14s` and again `ok. 3715 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 555.23s` |
-| **Tests — frontend** | `pnpm test` on the fix-wave tree, 2026-09-17: `Test Files 113 passed (113)`, `Tests 1730 passed (1730)` |
-| **Lint, format, clippy** | Clean on the residual-round tree, 2026-09-17: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`). `pnpm lint` last on the fix-wave tree (the residual round changed no TypeScript) |
-| **Sweeps** | Card round 3's residual round, 2026-09-17, all clean: `control-byte-sweep.py` (7 files allow-listed for AmigaDOS DosType data and 7 for deliberate alignment), `scratch-root-sweep.py` (5 named exceptions — `OwnedScratch::create_in(root, …)` in `commands/cardos.rs` goes through the root it is given, not flagged), `scratch-guard-sweep.py` (157 guard sources, 2064 call sites, 3 hand-built paths, 9 platform-root arguments, 12 exempt), `contrast-check.py --quiet` (105 pairs, both themes). `rom-table-check.py` re-run: 154 identifiable dumps, "the committed table says exactly what the database says" |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib` on `art-card-round-4` at `993ecc9` (the residual round), 2026-09-18, **twice — ART-059 satisfied**: `test result: ok. 3729 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 537.79s`, then the same result in `500.44s`. The only change committed after those two runs is a corrected doc comment on `card_os_prepare` (the residual round's own re-review, M2), which cannot alter behaviour |
+| **Tests — frontend** | `pnpm test` on `art-card-round-4` at the residual round, 2026-09-18: `Test Files 122 passed (122)`, `Tests 1945 passed (1945)` |
+| **Lint, format, clippy** | Clean on `art-card-round-4` at the residual round, 2026-09-18: `pnpm lint` (both `tsc --noEmit` passes), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (no warnings). `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`) was last run at `a0b0415`; no Cargo file has changed since |
+| **Sweeps** | Card round 4's residual round, 2026-09-18, all four CI-blocking sweeps clean at the current head; the figures below are that run's and match Task 13's: `control-byte-sweep.py` (7 files allow-listed for AmigaDOS DosType data and 7 for deliberate alignment), `scratch-root-sweep.py` (5 named exceptions), `scratch-guard-sweep.py` (157 guard sources, 2070 call sites, 3 hand-built paths, 9 platform-root arguments, 12 exempt), `contrast-check.py --quiet` (105 pairs, both themes). The two non-sweep oracles were last run at Task 13 and not since (nothing they cover changed): `rom-table-check.py`, 154 identifiable dumps, "the committed table says exactly what the database says"; `oracle-check.py`, 53 checks, both directions, "ART and an independent implementation agree, both ways round" |
 | **Build** | CI runs `pnpm tauri build` on every push (last: run 35196578229 on `69d3a40`, `success`), and `release.yml` built 0.9.4's installers. The last local package is 0.9.3, `pnpm tauri build` on `main` at `62f0f81`, 2026-09-13, copied to `E:\amiga\ProjeART\build\`, not code-signed |
-| **i18n** | **2308** leaf strings in each of `src/i18n/en.json` and `tr.json`, counted 2026-09-17 on `docs-cleanup-0917` (no catalogue change since `main`). Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
-| **Open defects** | **8**, counted 2026-09-17 on `art-card-round-3`'s `docs/ISSUES.md` after the fix wave — ART-062, ART-324, ART-328, ART-329, ART-331, ART-342, ART-343, ART-344 ([ISSUES.md](ISSUES.md#open)). ART-339, ART-340 and ART-341 fixed this round (Tasks 1, 3+12 and 2); ART-343 (a prepared card's tree and sources not checked against the disk at build — its ROM half fixed by the residual round) and ART-344 (a session folder left when the app exits) filed by the fix wave as design. Method: `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` |
-| **Feature rows** | **229 marked rows** in [FEATURES.md](FEATURES.md) — **173 ✅, 28 🟡, 20 ⏳, 5 🔩, 3 🅥2** — counted 2026-09-17 on `art-card-round-3` (three rows added by Task 14 for the card's WHDLoad phase, Kickstart proposal and the end-to-end build): one marker per table row, the first cell in the row that is exactly a State marker, the legend table's five rows excluded. **State the method with the number**; counting marker *cells* gives a different figure |
+| **i18n** | **2512** leaf strings in each of `src/i18n/en.json` and `tr.json`, counted 2026-09-18 on `art-card-round-4` at `a0b0415` (up from 2308 on `main`; card round 4 added `cardSection.*`, `cardKickstart.*`, `cardRun.*`, `osinstall.destinationKind.*` and fourteen new `errors.*` entries, among others). Parity — key sets, empty values, interpolation variables — is enforced by `pnpm test`, so count them rather than quoting this |
+| **Open defects** | **10**, re-counted 2026-09-18 on `art-card-round-4`'s `docs/ISSUES.md` at the residual round — ART-062, ART-324, ART-328, ART-329, ART-331, ART-342, ART-343, ART-344, ART-345, ART-346 ([ISSUES.md](ISSUES.md#open)). The last two were filed by round 4's fix wave (this row still said 8, Task 13's figure, until the recount): ART-345, the Machine tab can never show a size in the one-button flow; ART-346, a gate turning on mid-run deletes the card run's report. The re-review's own three findings (N1, N2, N3) were defects **in this unmerged branch's fix diff**, fixed by the residual round rather than filed. ART-343 and ART-344 each gained a note on what round 4's screen now does about them: ART-343's ROM half is rendered in Turkish and one button re-prepares (the tree/sources half stays open); ART-344's exposure is narrowed (`card_os_open` only on the run button, never on mount) though no exit hook or startup sweep was built. Method: `awk '/^## Open/{f=1} /^## Fixed/{f=0} f' docs/ISSUES.md \| grep -c '^\*\*ART-'` |
+| **Feature rows** | **236 marked rows** in [FEATURES.md](FEATURES.md) — **180 ✅, 28 🟡, 20 ⏳, 5 🔩, 3 🅥2** — counted 2026-09-18 on `art-card-round-4` (seven rows added by Task 13 for the card's destination choice, the measured drop conversion, the card section, the Kickstart agreement, the card run, the Turkish refusal table and the Power User–mode gating; the end-to-end card row's own marker stays 🟡, its text updated to say the screen now exists): one marker per table row, the first cell in the row that is exactly a State marker, the legend table's five rows excluded. **State the method with the number**; counting marker *cells* gives a different figure |
 | **amitools oracle** | 53 checks, both directions (`scripts/oracle-check.py`, blocking in CI; last run locally 2026-09-17 at `bca7794`, "ART and an independent implementation agree, both ways round") — including a filesystem driver ART embedded in an RDB and `rdbtool` extracted back out byte-for-byte |
 | **Kickstart table** | 154 dumps (`core/rom/remus.rs::REMUS_ROMS`), generated from amitools' Remus split database and re-verified against it on every CI run (`scripts/rom-table-check.py`, [ART-104](ISSUES.md#fixed)). Licensed Amiga Forever ROMs are first-class input ([ART-128](ISSUES.md#fixed)): decoded with the `rom.key` beside them, then identified like any dump |
 | **Install-media table** | 186 rows (`core/osinstall/media_hashes.json`, counted 2026-09-17), adopted from `rootrootde/emu68hatcher` (MIT). `scripts/media-table-check.py` against the owner's own AmigaOS 3.2 ADFs, 2026-09-06: **35 verified, 151 unverified, 0 conflicting**; the Rust twin agrees. Both fail when a directory verifies nothing ([ART-265](ISSUES.md#fixed)) |
@@ -51,7 +51,7 @@ where it was taken.
 | **MSRV** | 1.93 (raised from 1.77 on 2026-08-12, for a maintained 7z decoder) |
 | **Published** | <https://github.com/tolon/Art> — public, `main`, **GPL-3.0-or-later**. Five releases, v0.9.0 to [v0.9.4](https://github.com/tolon/Art/releases/tag/v0.9.4), each with both installers built by `release.yml` from the tagged commit after CI went green on it. Checked with `gh` on 2026-09-17: no issues filed, 19 installer downloads across the five |
 | **Real hardware** | **Bare metal, 2026-08-12**: `test/art-bootable-test.adf` booted a real **A500/A500+** (Kickstart 3.9) from a **Gotek** to an AmigaDOS CLI. Photographed. In emulation, 2026-08-16: a PFS3 volume ART formatted and filled booted a licensed Kickstart 3.1 to `hello from ART`, and a full AmigaOS 3.2 tree ART built booted a licensed V47 A1200 ROM to a clean Workbench. **No card or hard disk ART built has been recorded booting real hardware**, and physical magnetic media is still untouched — a Gotek is not a mechanical drive |
-| **Seen on a screen** | The ADF, hard-disk, PiStorm, WHDLoad, Files and Settings screens have been opened and driven by a person (2026-08-12 onwards); the Collection's Play path ran real titles on 2026-08-18/21. **[ART-062](ISSUES.md#open)** narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) and to the Turkish catalogue, of which a handful of its 2308 strings have been read by someone who speaks it. A headless browser, 2026-09-14, mounted every top-level route in both languages and measured layout (not meaning) — not the same claim as a person reading the screen |
+| **Seen on a screen** | The ADF, hard-disk, PiStorm, WHDLoad, Files and Settings screens have been opened and driven by a person (2026-08-12 onwards); the Collection's Play path ran real titles on 2026-08-18/21. **[ART-062](ISSUES.md#open)** narrows to the screens still unopened (Aminet, Collection, Gotek, ROM, WinUAE, Tools) and to the Turkish catalogue, of which a handful of its 2512 strings have been read by someone who speaks it. A headless browser, 2026-09-14 and re-run 2026-09-18 on `art-card-round-4` (`scripts/tr-overflow-check.py`, 48 route×width runs, the 16 top-level routes, 0 Turkish-only hits), mounted every top-level route in both languages and measured layout (not meaning) — not the same claim as a person reading the screen. **The new card screens are OS Builder sub-routes** (`/os-builder/makine`, `/os-builder/derle`) that script's own ROUTES list has never reached (the same scope decision `zoom-check.py` makes); a supplementary, uncommitted probe reusing its technique reached both by a real click into card mode and found nothing Turkish-only there either, but the Kickstart agreement step specifically needs a live card-build session (`card_os_open`) a plain browser cannot open, and stays unmeasured this way |
 
 Reproduce the numbers above:
 
@@ -252,7 +252,7 @@ cd src-tauri && \
 on top of it.** What each round did is the [session log](session-log.md); what
 is broken is [ISSUES.md](ISSUES.md).
 
-### Start here (2026-09-17)
+### Start here (2026-09-18)
 
 **Where `main` is.** The one-button card's round 2 is merged (`69d3a40`, pushed,
 CI green): ART's own LZX reader, Amiga protection bits, comments and dates on
@@ -291,21 +291,104 @@ sentence wrong (N1) and three Minors; the residual round (`d344b26`,
 `residual-fix-report.md`) fixed them, split ART-343's ROM half out and fixed it,
 and wrote round 1's cylinder note into CHANGELOG. The second whole-suite run
 (ART-059) came back green and the merge followed. Two wording Minors the
-residual re-review raised are deliberately left for round 4: the
-`KickstartSourceChanged` sentence's phrasing, and a `CardFinishLeftBothNames`
-that can be reported beside a later `PartialRemoval::Removed` (both true, at
-different moments). **Next: round 4** (every
-screen the card needs — it must show the four endings and ART-343/344's
-refusals — plus the owner's own card flashed and booted on a real PiStorm).
+residual re-review raised were left for round 4 and are now fixed there (Task
+12): the `KickstartSourceChanged` sentence's phrasing (the "since the card was
+prepared" trailer now sits inside each `why` clause, next to the verb it
+modifies, rather than appended after the proposal's own number), and
+`CardFinishLeftBothNames` now reads correctly beside a later
+`PartialRemoval::Removed` — the screen states both true facts, at their
+different moments, rather than contradicting itself.
 
-**Open defects** (8): ART-062 (Turkish read on screen), ART-324 (a 4 GiB file
+**Card round 4 — every screen — is built** on `art-card-round-4` (13 tasks,
+`51769ad`..`a0b0415`, on top of round 3's merge): a fourth job ending
+(`refused`, so a refused build is never called failed); a typed phase-and-count
+event (`CARD_OS_PHASE_EVENT`); every card refusal typed with parameters (round
+3's ruling that `CardSourceUnusable.why` was prose reversed); three read-only
+commands (`card_os_measure`/`classify`/`check_volume_name`); `buildSession`'s
+`destinationKind`/`CardTarget` per release (ART-308's last site gone); the one
+global drop listener's position measured before it was converted
+(`experiment-drop-coordinates.md`: physical ÷ `devicePixelRatio` alone 15/15
+across three real Application Sizes, dividing by zoom too 7/15 — ART-101's
+mistake, repeated and this time caught before it shipped); the Machine tab's
+*Folder*/*Card image* choice and one card-size question; the card section
+(partitions, sources, live sizes, an overflow that names the partition); the
+Kickstart agreement step (nothing ticked by ART); the card run itself
+(`useCardOsRun`, four endings, one session opened only on the run button and
+closed exactly once on every path, which found and fixed two real `jobs.ts`
+defects along the way); a 28-row Turkish/English refusal table; and
+`CardBuilder`/`VolumePreload` moved behind Power User mode with a pre-run
+blocker. Task 13 ran the whole suite twice, every CI-blocking script and
+`oracle-check.py`, all green; the Turkish measurement found nothing
+Turkish-only on the 16 top-level routes or (by a supplementary, uncommitted
+probe) on the new card section and the card run's own button — the Kickstart
+agreement specifically needs a live session a plain browser cannot open, and
+stays unmeasured this way.
+
+**The final whole-branch review and its one fix wave are in** (`.superpowers/sdd/2026-09-18-card-round-4/`,
+`final-review.md` and `fix-wave-report.md`): 3 Critical, 5 Important, 9 Minor.
+The wave fixed C1 (the OS Builder rendered `<Outlet />` with no `context`, and
+react-router provides `undefined` unconditionally, so the per-row drop never
+fired in the running app while every test mocked `useOutletContext` and crossed
+nothing — held now by a test that renders the real route tree unmocked), C2
+(every refusal `card_os_prepare` raises ended the job *Failed* and reached the
+screen as English with the code in parentheses; it now answers a typed
+`CardRefusal` on its own event and ends `JobState::Refused`), C3 (a card run
+wrote its scratch tree into the persisted `session.tree` and erased it, with
+`firstboot.written`, on every path — the run's tree now lives in
+`src/lib/cardRunTree.ts`, which nothing persists and no folder screen reads),
+I1 (dragging *over* a row added the previous drop's paths: one `lastDrop`
+value with its own `seq`), I2 (`hstImagerPath` forwarded to measure and
+prepare), I3 (the catalogue's card parameters and Rust's `details()` were two
+hand copies; a check in `errorText.test.ts` reads `core/error.rs` per code in
+both directions, and found one dropped parameter on its first run), I4's
+unmount half (the agreement's promise is rejected on unmount, so the session
+closes) and all nine Minors. **I5 and I4's remainder are filed as
+[ART-345](ISSUES.md) and [ART-346](ISSUES.md)** — both flow questions for the
+owner rather than fixes.
+
+**The scoped re-review and the residual round that closed it are in**
+(`fix-wave-re-review.md`, `residual-fix-report.md`). The re-review verdicted
+every original finding ADDRESSED or FILED-FAIR and found three new defects in
+the wave's own diff; all three are now fixed. **N1** (Critical):
+`VolumePreload`'s volume-name check held the names in flight in `useState`
+*and* in the effect's own dependency list, so each ask re-ran the effect, whose
+cleanup cancelled the answer already on its way — the answer was then
+discarded, which removed the name, which asked again: `card_os_check_volume_name`
+in a loop at IPC rate, with no verdict ever stored, so a bad name never blocked
+Run. The suite was green over it only because a mocked promise resolves as a
+microtask; the set is now a ref, nothing cancels an answer, and the new case
+answers on a macrotask. **N2** (Important): the prepare job emitted its typed
+refusal event for *every* `Err`, including the ones `prepare_refused` excludes,
+and the screen branches on that field alone — so an I/O failure read as
+*refused*, with a refusal's next step, while the job bar said *failed*. The
+event now goes through `prepare_refusal_event`, which answers `Some` only for a
+refusal; a failure settles through `JobFailed { code }`, and both arms are
+pinned. **N3** (Minor): `hstImagerPath`'s forwarding to measure and prepare is
+asserted in the two files that already mock those commands. That round's own
+re-review raised one Minor (M2), also fixed: `card_os_prepare`'s doc comment
+still read as though every ending travelled on its event, which N2 had just
+made false. **Unmerged, and nothing test-shaped is owed** — ART-059's two
+whole-suite Rust runs were taken at `993ecc9` and came back green (3729 each).
+**Next is the merge, and after it the owner's own card, built through these
+screens, flashed and booted on a real PiStorm.**
+
+**Open defects** (10, after round 4's fix wave filed two): ART-062 (Turkish read on screen), ART-324 (a 4 GiB file
 on a largefile PFS3 volume, which ART never formats), ART-328 and ART-329
 (unreachable), ART-331 (a PFS3 directory block without the `DB` id skipped
 silently, only on a damaged card), ART-342 (`core/whdload` ⇄ `core/gameindex`
 import each other, found by round 3's research; nothing broken by it), ART-343
 (a prepared card's tree and sources not checked against the disk when it is
-built; its ROM half fixed) and ART-344 (a card session's scratch left when the
-app exits) — both filed by the fix wave as design. ART-339, ART-340 and ART-341
+built; its ROM half fixed, and round 4's screen renders that refusal in the
+user's own language and offers a one-press re-run — the tree/sources half
+stays open) and ART-344 (a card session's scratch left when the
+app exits; round 4's screen narrows the exposure by opening the session only
+on the run button, but built no exit hook or startup sweep; its `session.tree`
+half is closed by the fix wave's C3) — both still filed as design. Round 4's
+fix wave added ART-345 (in the one-button flow the Machine tab can never show
+a size, a total or an overflow, because the card's tree exists only inside a
+run and the tab is locked while one runs) and ART-346 (a gate turning on
+mid-run deletes the card run's report from the screen; the session-leak half
+of it is fixed). ART-339, ART-340 and ART-341
 (the round's own three) are fixed on `art-card-round-3`, not yet on `main`.
 
 **First boot phase 4** (packages) is not built and is narrowed to the two
@@ -340,8 +423,15 @@ is in [testing.md](testing.md#real-material-and-the-ignored-hooks).
   an LZX match running past a block end (never met in real material).
 - **Card round 3, not proven:** every claim above is a fixture card built in a
   test, or `hst-imager` reading it back — **no card round 3 built has been
-  flashed or booted**, and there is no screen yet for a person to drive; both
-  are round 4's.
+  flashed or booted**. Round 4 built the screen; it did not build the proof.
+- **Card round 4, not proven:** every screen exists and every unit test is
+  green, but no card has yet been built end to end **through the screen** by a
+  person, let alone flashed or booted — that is the owner's own run, still
+  owed. The Kickstart agreement step's own Turkish has not been read on screen
+  either (it needs a live session a headless browser cannot open); the card
+  section and the run button's own text were measured clean by a supplementary
+  probe (`.superpowers/sdd/2026-09-18-card-round-4/task-13-report.md`), which
+  is not the same claim as a person reading it.
 - **ART-062:** the Turkish catalogue read on screen; `hardDisk.bootablePri` and
   job status "Done"/"Failed" need a live Tauri session; with Turkish chosen,
   start a job and read the bar.
@@ -370,8 +460,9 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
 
 - **The PiStorm card path** — SD-0, SD-1, SD-2 and SD-4 are built, SD-3's two
   named gaps are merged, SD-5 is part-built. The one-button card has rounds 1
-  and 2 on `main`; round 3 is built on `art-card-round-3`, unmerged, awaiting
-  the final review; round 4 (every screen) is next after that. The gaps still
+  and 2 on `main`; rounds 3 and 4 (every screen) are built on `art-card-round-3`
+  and `art-card-round-4`, both unmerged, awaiting one final whole-branch review
+  over the two together. The gaps still
   open are one line each in the stage table below. What is left in SD-1 is
   **not code**: a card flashed and an A500 booted, which is also the project's
   1.0 bar.
@@ -392,7 +483,7 @@ per-defect state is [ISSUES.md](ISSUES.md), per-round narrative is the
   rounds. Five have landed on `main`: prefs and wallpaper (1), drawer icons
   (2), refusal evidence (3), media identification by hash (4), and first boot
   phases 1–3 (5); the one-button card is the sixth, rounds 1–2 merged and
-  round 3 built on `art-card-round-3`, unmerged.
+  rounds 3 and 4 built on `art-card-round-3`/`art-card-round-4`, unmerged.
 - **Releases in the community's hands** — reading what came back is still the
   first thing a session does: issues on the repository, and whatever the owner
   was told directly. A report that went *well* counts: the gaps the README

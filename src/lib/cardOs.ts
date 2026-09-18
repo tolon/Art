@@ -183,13 +183,26 @@ export interface PreparedCard {
 
 export const CARD_OS_PREPARE_EVENT = "card-os-prepare-result";
 
+/**
+ * What the preparation answered — **a plan or a typed refusal, never both**,
+ * the shape `card_os_measure` already uses (final review, C2).
+ *
+ * A refusal is `card_os_prepare`'s own answer: the sources it was given do not
+ * exist, the card is too small, no PFS3 driver was found, a name needs
+ * hst-imager. Those are the user's next step, not ART failing, and they carry
+ * the `ART-*` code and the typed parameters both catalogues build a sentence
+ * from. They used to come back as a plain `Err`, which `spawn_job` turned into
+ * a **failed** job and one formatted English string.
+ */
 export interface CardOsPrepareResult {
   jobId: number;
   session: number;
-  prepared: PreparedCard;
+  prepared: PreparedCard | null;
+  refusal: CardRefusal | null;
 }
 
-/** Prepare the session's card. Returns a job id; a refusal ends the job. */
+/** Prepare the session's card. Returns a job id; the answer — a prepared card
+ *  or a typed refusal — arrives on {@link CARD_OS_PREPARE_EVENT}. */
 export async function cardOsPrepare(request: CardOsPrepareRequest): Promise<number> {
   return invoke<number>("card_os_prepare", { request });
 }
@@ -222,14 +235,26 @@ export interface CardOsBuildRequest {
 export type BuildPhase = "whdload" | "card" | "partitions" | "check";
 
 /**
+ * A card refusal's `ART-*` code, its English sentence (for the log), and the
+ * typed parameters both catalogues build a sentence from (round 4, task 3 —
+ * this reverses round 3's ruling that a refusal's reason was prose). Shared
+ * by `CardOsEnding`'s `refused` and `failed` variants.
+ */
+export interface CardRefusal {
+  code: string;
+  message: string;
+  params: Record<string, string>;
+}
+
+/**
  * Four endings, kept apart: a refusal (before anything of the image was
  * written; its next step is the user's) is never a failure, and a stop is
  * never either.
  */
 export type CardOsEnding =
   | { ending: "succeeded" }
-  | { ending: "refused"; phase: BuildPhase; code: string; message: string }
-  | { ending: "failed"; phase: BuildPhase; code: string; message: string }
+  | ({ ending: "refused"; phase: BuildPhase } & CardRefusal)
+  | ({ ending: "failed"; phase: BuildPhase } & CardRefusal)
   | { ending: "stopped"; phase: BuildPhase };
 
 export type TreeWrite =
@@ -282,4 +307,125 @@ export async function onCardOsBuildResult(
   handler: (result: CardOsBuildResult) => void
 ): Promise<UnlistenFn> {
   return listen<CardOsBuildResult>(CARD_OS_BUILD_EVENT, (event) => handler(event.payload));
+}
+
+// ---------------------------------------------------------------------------
+// Phase and count
+// ---------------------------------------------------------------------------
+
+/** A build's four phases, plus the preparation's own. */
+export type CardOsPhaseName = BuildPhase | "prepare";
+
+/** What a phase's count is measured in. */
+export type PhaseUnit = "files" | "steps";
+
+export const CARD_OS_PHASE_EVENT = "card-os-phase";
+
+/**
+ * How far a build (or a preparation) has got in one of its phases, so the
+ * screen can say "Bölümler: 4 812 / 9 216 dosya" instead of nothing.
+ * Emitted when a phase starts (`done: 0`) and as it advances.
+ *
+ * `total: null` when the phase cannot know its total — draw a count then,
+ * never a bar (a bar of a guessed width carries no information).
+ */
+export interface CardOsPhaseEvent {
+  jobId: number;
+  session: number;
+  phase: CardOsPhaseName;
+  done: number;
+  total: number | null;
+  unit: PhaseUnit;
+}
+
+export async function onCardOsPhase(
+  handler: (event: CardOsPhaseEvent) => void
+): Promise<UnlistenFn> {
+  return listen<CardOsPhaseEvent>(CARD_OS_PHASE_EVENT, (event) => handler(event.payload));
+}
+
+// ---------------------------------------------------------------------------
+// Measure (round 4, task 4): sizes and the sizing refusal only, without
+// staging anything or opening a session (R1) — the free-space question stays
+// in `cardOsPrepare`.
+// ---------------------------------------------------------------------------
+
+export interface CardOsMeasureRequest {
+  cardGb: number;
+  /** The tree, already built (by the OS Builder, into a session opened separately). */
+  tree: string;
+  partitions: PartitionInput[];
+  material: string[];
+  pfs3Driver?: string | null;
+  hstImagerPath?: string;
+}
+
+export const CARD_OS_MEASURE_EVENT = "card-os-measure-result";
+
+export interface CardOsMeasureResult {
+  jobId: number;
+  measured: MeasuredCard | null;
+  /** Anything `measure_card` refused — never a failed job: a preview's own
+   *  refusal is its answer. */
+  refusal: CardRefusal | null;
+}
+
+/** Measure a whole card without staging anything. Returns a job id; the
+ *  answer arrives on `CARD_OS_MEASURE_EVENT`. */
+export async function cardOsMeasure(request: CardOsMeasureRequest): Promise<number> {
+  return invoke<number>("card_os_measure", { request });
+}
+
+export async function onCardOsMeasureResult(
+  handler: (result: CardOsMeasureResult) => void
+): Promise<UnlistenFn> {
+  return listen<CardOsMeasureResult>(CARD_OS_MEASURE_EVENT, (event) => handler(event.payload));
+}
+
+// ---------------------------------------------------------------------------
+// Classify (round 4, task 4): what a dropped path is as a card source, or why
+// it cannot be one — the same call the drop pipeline makes (Q6).
+// ---------------------------------------------------------------------------
+
+/** Why a source cannot be used, each with its own next step — mirrors
+ *  `core::error::UnusableSource`. */
+export type UnusableSource =
+  | { reason: "missing" }
+  | { reason: "unreadable"; detail: string }
+  | { reason: "archive-unreadable"; detail: string }
+  | { reason: "hardfile-not-whdload"; detail: string }
+  | { reason: "not-an-amiga-source"; formatHint: string }
+  | { reason: "not-a-folder" };
+
+export interface ClassifiedSource {
+  path: string;
+  kind: SourceKind | null;
+  why: UnusableSource | null;
+}
+
+/** Classify every path as a card source. Read-only and synchronous: nothing
+ *  is written, and every path is answered whether or not an earlier one
+ *  could not be used. */
+export async function cardOsClassify(paths: string[]): Promise<ClassifiedSource[]> {
+  return invoke<ClassifiedSource[]>("card_os_classify", { paths });
+}
+
+// ---------------------------------------------------------------------------
+// Check a volume name (round 4, task 4): the core's own AmigaDOS name rule
+// (`core::volume::write::dir::check_name`), replacing `preload.ts`'s two
+// restated copies (Q7).
+// ---------------------------------------------------------------------------
+
+export type VolumeNameVerdict =
+  | { ok: true }
+  | {
+      ok: false;
+      why: "empty" | "too-long" | "reserved-character";
+      maxChars: number;
+    };
+
+/** Check a volume name against AmigaDOS's own rule. Synchronous; never
+ *  re-derived on the screen. */
+export async function cardOsCheckVolumeName(name: string): Promise<VolumeNameVerdict> {
+  return invoke<VolumeNameVerdict>("card_os_check_volume_name", { name });
 }

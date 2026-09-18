@@ -15,7 +15,8 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: listenMock,
 }));
 
-const { awaitJobResult, fraction, jobStatusLabel } = await import("./jobs");
+const { awaitJobResult, fraction, isJobCancellation, JobRefused, jobStatusLabel } =
+  await import("./jobs");
 
 // Every `listen(event, handler)` call this test drives registers into here,
 // keyed by event name — `awaitJobResult` opens two at once (its own result
@@ -85,6 +86,16 @@ describe("jobStatusLabel — a cancelled job says what it left behind (ART-058)"
     );
     expect(failed.key).toBe("components.jobBar.status.failed");
     expect(failed.params).toEqual({ code: "ART-IO" });
+  });
+
+  it("answers its own key for a refused job — never the failed key (round 4, Task 1)", () => {
+    const refused = jobStatusLabel(
+      job({
+        state: { state: "refused", code: "ART-KICKSTART-NOT-PROPOSED", message: "x" },
+      })
+    );
+    expect(refused.key).toBe("components.jobBar.status.refused");
+    expect(refused.key).not.toBe("components.jobBar.status.failed");
   });
 });
 
@@ -186,5 +197,101 @@ describe("awaitJobResult — the fast-path race (N1, Task 7's re-review)", () =>
     startResolve(9);
 
     await expect(promise).rejects.toThrow("disk full (ART-IO)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The fourth ending (round 4, Task 1) reaching the one function that waits
+// ---------------------------------------------------------------------------
+
+describe("awaitJobResult — a refused job (round 4, Task 10)", () => {
+  // `settleFromProgress` knew three job states and `refused` was not one of
+  // them, so a job that ended refused with no result event left the promise
+  // unsettled for ever: no timeout, both listeners leaked, and the screen
+  // sitting on a spinner with nothing to say. Task 1 carried this forward.
+  it("settles rather than hanging when the job ends refused", async () => {
+    const promise = awaitJobResult<TestResult, string>(
+      "test-result-refused",
+      () => Promise.resolve(5),
+      (payload) => payload.value
+    );
+    await Promise.resolve();
+    emit("job-progress", {
+      id: 5,
+      title: { key: "components.jobBar.title.buildCardOs", params: { target: "E:\kart.img" } },
+      done: 0,
+      total: null,
+      message: "",
+      state: { state: "refused", code: "ART-KICKSTART-NOT-PROPOSED", message: "not proposed" },
+    });
+    await expect(promise).rejects.toThrow("not proposed");
+  });
+
+  // **A refusal is never a failure and never a cancellation**: its next step
+  // is the user's, so the rejection has to be tellable apart by its type and
+  // has to carry the `ART-*` code the screen builds its sentence from.
+  it("rejects with the refusal's own code, apart from a failure and a cancellation", async () => {
+    const promise = awaitJobResult<TestResult, string>(
+      "test-result-refused-code",
+      () => Promise.resolve(6),
+      (payload) => payload.value
+    );
+    await Promise.resolve();
+    emit("job-progress", {
+      id: 6,
+      title: { key: "components.jobBar.title.buildCardOs", params: { target: "E:\kart.img" } },
+      done: 0,
+      total: null,
+      message: "",
+      state: { state: "refused", code: "ART-CARD-DOES-NOT-FIT", message: "it does not fit" },
+    });
+    const error = await promise.then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(error).toBeInstanceOf(JobRefused);
+    expect((error as InstanceType<typeof JobRefused>).code).toBe("ART-CARD-DOES-NOT-FIT");
+    expect(isJobCancellation(error)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The card commands answer camelCase (round 4, Task 10)
+// ---------------------------------------------------------------------------
+
+interface CamelResult {
+  jobId: number;
+  value: string;
+}
+
+describe("awaitJobResult — a result event whose id is camelCase", () => {
+  // `card_os_prepare` and `card_os_build` serialise with
+  // `#[serde(rename_all = "camelCase")]`, so their result events carry
+  // `jobId`, not `job_id`. Filtering on `job_id` alone read `undefined` for
+  // every one of them: a payload that could never match its own job, and a
+  // promise that never settled.
+  it("matches the job by `jobId` as readily as by `job_id`", async () => {
+    const promise = awaitJobResult<CamelResult, string>(
+      "card-os-build-result",
+      () => Promise.resolve(13),
+      (payload) => payload.value
+    );
+    await Promise.resolve();
+    emit("card-os-build-result", { jobId: 13, value: "card" });
+    await expect(promise).resolves.toBe("card");
+  });
+
+  it("still ignores another job's camelCase payload", async () => {
+    let startResolve!: (id: number) => void;
+    const start = () => new Promise<number>((resolve) => (startResolve = resolve));
+    const promise = awaitJobResult<CamelResult, string>(
+      "card-os-prepare-result",
+      start,
+      (payload) => payload.value
+    );
+    emit("card-os-prepare-result", { jobId: 99, value: "not this one" });
+    startResolve(13);
+    emit("card-os-prepare-result", { jobId: 13, value: "this one" });
+    await expect(promise).resolves.toBe("this one");
   });
 });

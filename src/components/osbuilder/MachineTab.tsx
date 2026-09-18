@@ -23,8 +23,11 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 
+import { CardSection } from "@/components/osbuilder/CardSection";
 import { Field } from "@/components/osbuilder/Field";
 import { hostAmigaForeverFolders } from "@/lib/api";
+import { cardImageBytes } from "@/lib/cardBuild";
+import { CARD_SIZES_GB } from "@/lib/cardTarget";
 import { keymapsIn, rememberedComponentKey } from "@/lib/osinstall";
 import { isFlag, isText, isTextOrNothing } from "@/lib/remembered";
 import { useBuildSession } from "@/lib/useBuildSession";
@@ -34,11 +37,25 @@ import { useRemembered } from "@/lib/useRemembered";
 import { useRomIdentity } from "@/lib/useRomIdentity";
 
 export function MachineTab() {
-  const { t } = useTranslation();
-  const { session, setRom, setComponents } = useBuildSession();
+  const { t, i18n } = useTranslation();
+  const { session, setRom, setComponents, setDestinationKind, setCardTarget } = useBuildSession();
   const release = session.release;
   const romPath = session.rom.path;
   const { rom, unreadable: romError } = useRomIdentity(romPath);
+
+  /**
+   * **Folder or Card image** (round 4 task 7, design § 3; owner decision 2).
+   *
+   * A choice that sits beside `osinstall.destination`, never inside it: the
+   * key keeps its present meaning either way (pre-flight ruling R2), and in
+   * *Card image* it is neither read for a value shown on screen nor written
+   * — the folder row below simply does not render, so nothing here can
+   * write it. `CardBuilder.tsx` and `VolumePreload.tsx` stay behind Power
+   * User mode (context.md decision 6); this choice does not, because the
+   * one-button card is the default flow and not the advanced one.
+   */
+  const destinationKind = session.destinationKind;
+  const cardTarget = session.cardTarget;
 
   /**
    * Where the tree goes — per release, and through the very key the install
@@ -51,6 +68,32 @@ export function MachineTab() {
     null
   );
   const { taken, tree } = useDestinationCheck(destination);
+
+  /**
+   * **Q1: one card size, printed decimal.** `cardImageBytes` is the single
+   * source of truth for what a label's bytes really are (ART-308) — a card
+   * sold as "64 GB" is built a little under 64 × 10⁹ bytes, not 64 GiB, and
+   * this is the last site in the OS Builder that still did the GiB
+   * arithmetic itself (`OsBuilder.tsx`'s own fix, this same task). `null`
+   * until Rust answers, so the sentence beneath the picker never prints a
+   * number nobody computed.
+   */
+  const [cardBytes, setCardBytes] = useState<number | null>(null);
+  useEffect(() => {
+    if (destinationKind !== "card-image") return;
+    let current = true;
+    setCardBytes(null);
+    void cardImageBytes(cardTarget.sizeGb)
+      .then((bytes) => {
+        if (current) setCardBytes(bytes);
+      })
+      .catch(() => {
+        if (current) setCardBytes(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [destinationKind, cardTarget.sizeGb]);
 
   /**
    * **The keyboard the finished system boots with** (ART-226's other half).
@@ -216,58 +259,148 @@ export function MachineTab() {
         </p>
       )}
 
-      <Field
-        label={t("osinstall.destination.label")}
-        value={destination}
-        empty={t("osinstall.destination.none")}
-        onChoose={() => void chooseDestination()}
-        choose={t("common.browse")}
-        hint={t("osinstall.destination.hint")}
-        testId="osinstall-destination-field"
-        // `tree` is null whenever the path is — `useDestinationCheck`'s own
-        // rule — so the fresh id is never named for an unrendered paragraph.
-        describedBy={
-          taken
-            ? "osinstall-destination-taken"
-            : tree
-              ? tree.isTree
-                ? "osinstall-destination-tree"
-                : "osinstall-destination-fresh"
-              : undefined
-        }
-      />
-      {/* Two sentences, never one: the refusal is what `apply` would say;
-          the tree line is what is there. Both can be true of one folder,
-          and until round 4 decides update mode the refusal is the last word. */}
-      {taken && (
-        <p
-          id="osinstall-destination-taken"
-          data-testid="osinstall-destination-taken"
-          className="badge badge-err"
-          style={{ fontSize: 11, margin: "0 0 6px", display: "inline-block" }}
-        >
-          {t("osinstall.destination.taken")}
-        </p>
+      {/* **Folder or Card image** (round 4 task 7). Always on screen, in
+          both modes — this is the choice, not part of what it chooses
+          between. Two radios rather than a select: there are exactly two,
+          and a radio's checked state is what the "defaults to Folder" test
+          reads back without asking the DOM to render a menu first. */}
+      <div data-testid="osinstall-destinationKind" style={{ marginBottom: 12 }}>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+          {t("osinstall.destinationKind.label")}
+        </div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+            <input
+              type="radio"
+              name="osinstall-destinationKind"
+              data-testid="osinstall-destinationKind-folder"
+              checked={destinationKind === "folder"}
+              onChange={() => setDestinationKind("folder")}
+            />
+            {t("osinstall.destinationKind.folder")}
+          </label>
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+            <input
+              type="radio"
+              name="osinstall-destinationKind"
+              data-testid="osinstall-destinationKind-card"
+              checked={destinationKind === "card-image"}
+              onChange={() => setDestinationKind("card-image")}
+            />
+            {t("osinstall.destinationKind.card")}
+          </label>
+        </div>
+      </div>
+
+      {destinationKind === "folder" && (
+        <>
+          <Field
+            label={t("osinstall.destination.label")}
+            value={destination}
+            empty={t("osinstall.destination.none")}
+            onChoose={() => void chooseDestination()}
+            choose={t("common.browse")}
+            hint={t("osinstall.destination.hint")}
+            testId="osinstall-destination-field"
+            // `tree` is null whenever the path is — `useDestinationCheck`'s
+            // own rule — so the fresh id is never named for an unrendered
+            // paragraph.
+            describedBy={
+              taken
+                ? "osinstall-destination-taken"
+                : tree
+                  ? tree.isTree
+                    ? "osinstall-destination-tree"
+                    : "osinstall-destination-fresh"
+                  : undefined
+            }
+          />
+          {/* Two sentences, never one: the refusal is what `apply` would say;
+              the tree line is what is there. Both can be true of one folder,
+              and until round 4 decides update mode the refusal is the last
+              word. */}
+          {taken && (
+            <p
+              id="osinstall-destination-taken"
+              data-testid="osinstall-destination-taken"
+              className="badge badge-err"
+              style={{ fontSize: 11, margin: "0 0 6px", display: "inline-block" }}
+            >
+              {t("osinstall.destination.taken")}
+            </p>
+          )}
+          {tree?.isTree && (
+            <p
+              id="osinstall-destination-tree"
+              data-testid="osinstall-destination-tree"
+              className="faint"
+              style={{ fontSize: 11, margin: "0 0 12px" }}
+            >
+              {t("osinstall.destination.tree", { release: tree.release ?? "", count: tree.files })}
+            </p>
+          )}
+          {destination && !taken && tree && !tree.isTree && (
+            <p
+              id="osinstall-destination-fresh"
+              data-testid="osinstall-destination-fresh"
+              className="faint"
+              style={{ fontSize: 11, margin: "0 0 12px" }}
+            >
+              {t("osinstall.destination.fresh")}
+            </p>
+          )}
+        </>
       )}
-      {tree?.isTree && (
-        <p
-          id="osinstall-destination-tree"
-          data-testid="osinstall-destination-tree"
-          className="faint"
-          style={{ fontSize: 11, margin: "0 0 12px" }}
-        >
-          {t("osinstall.destination.tree", { release: tree.release ?? "", count: tree.files })}
-        </p>
-      )}
-      {destination && !taken && tree && !tree.isTree && (
-        <p
-          id="osinstall-destination-fresh"
-          data-testid="osinstall-destination-fresh"
-          className="faint"
-          style={{ fontSize: 11, margin: "0 0 12px" }}
-        >
-          {t("osinstall.destination.fresh")}
-        </p>
+
+      {/* **Card image** (round 4 task 7, design § 3). The folder row above
+          is absent rather than disabled — `osinstall.destination` is
+          neither read for a value shown here nor written by anything in
+          this branch (owner decision 2; R2). Q1's one card-size question is
+          this task's own; the partitions and sources under it are Task 8's
+          `CardSection.tsx`, standing in for now as a placeholder so this
+          task lands the choice without pretending to land the rows. */}
+      {destinationKind === "card-image" && (
+        <div data-testid="card-destination-section" style={{ marginBottom: 12 }}>
+          <label style={{ display: "flex", flexDirection: "column", gap: 4, maxWidth: "16em" }}>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {t("osinstall.destinationKind.cardSize")}
+            </span>
+            <select
+              className="input"
+              data-testid="card-size-select"
+              value={cardTarget.sizeGb}
+              onChange={(e) => setCardTarget({ ...cardTarget, sizeGb: Number(e.target.value) })}
+            >
+              {CARD_SIZES_GB.map((gb) => (
+                <option key={gb} value={gb}>
+                  {gb} GB
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* Q1: "the card row prints both" — the printed size and the real
+              decimal bytes `cardImageBytes` answered, absent until Rust has. */}
+          {cardBytes !== null && (
+            <p
+              data-testid="osinstall-destinationKind-summary"
+              className="faint"
+              style={{ fontSize: 11, margin: "6px 0 0" }}
+            >
+              {t("osinstall.destinationKind.cardSizeSummary", {
+                gb: cardTarget.sizeGb,
+                billions: (cardBytes / 1_000_000_000).toLocaleString(i18n.language, {
+                  minimumFractionDigits: 1,
+                  maximumFractionDigits: 1,
+                }),
+              })}
+            </p>
+          )}
+          {/* The card's own partitions, their sources, their live sizes and
+              the one line that says whether it all fits (task 8). It reads
+              the same session this tab does, so the size chosen above and
+              the partitions below are one card. */}
+          <CardSection />
+        </div>
       )}
 
       {/* **ART-226's other half: choose the keyboard, having placed it.**

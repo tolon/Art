@@ -627,6 +627,57 @@ what it created in the run at hand (P3). Endings stay distinct — succeeded, fa
 phase, stopped in a named phase — and every ending says what became of the `.partial` file, the
 same rule "the failure that does not crash" states for everything else in this codebase.
 
+### The screen's own session mirrors the core's, one level up
+
+Card round 4 put a session on the frontend too, and it opens late and closes once on purpose.
+`src/lib/useCardOsRun.ts` calls `card_os_open` **only when the user presses the Build tab's run
+button** — nothing on mount — which is the round's answer to ART-344's exposure (Q9): a session
+cannot leak by opening a tab that is never used, mutation-checked (`opens no session until the
+button is pressed`). The hook then runs the OS Builder's own three phases (tree, package,
+first-boot) into the session's own `tree/`, waits for a real answer at the Kickstart agreement —
+nothing is ticked by ART — and only then calls `card_os_prepare`/`card_os_build` with the names
+the user agreed to. `card_os_close` runs **exactly once on every path**: success, a refusal, a
+failure, the user's own Stop, or giving up at the agreement. Once `card_os_build` resolves a job
+id the hook marks the session **not its own to close**, because Rust's `end_build` has already
+removed it on every ending (above) — a close from the screen at that point would be a second
+answer to a question the core already settled.
+
+A partition row's live phase name comes from `CARD_OS_PHASE_EVENT` (`report.now`, card round 4
+Task 2); its live count comes from the job's own progress stream, and the two are **joined on the
+screen**, not threaded through another command — Task 2's own ruling, made once so Task 10 did
+not have to invent a second answer. The build's four endings are `JobState::Refused`'s new arm
+(`core/jobs`, card round 4 Task 1) plus the three the job bar already knew — succeeded, failed
+naming its phase, stopped naming its phase — and never *failed* for a refusal. Building this
+found two real defects in `src/lib/jobs.ts`, not simulated: `awaitJobResult` had no arm for
+`refused` and its promise never settled (the same gap `superseded` was already known to have);
+and every card result event serialises `#[serde(rename_all = "camelCase")]`, so its payload
+carries `jobId`, while the matcher compared `job_id` alone and matched nothing. Both are fixed and
+covered by their own test cases.
+
+### The drop position: one conversion, measured before it was built
+
+A partition row's own drop target (`data-card-row` on `CardPartitionRow`) reads the **same**
+global listener everything else in ART drops onto (`Layout.tsx` via `lib/dnd.ts`) — no second
+listener, and rows do not subscribe to anything themselves; they carry the attribute and read the
+converted position off the outlet context. The physical-to-CSS conversion
+(`src/lib/dropTarget.ts::cssPointOf`) is one division, `position / window.devicePixelRatio`, with
+**no second division by the shell's own `--app-zoom`** — the intuitive-looking mistake ART-101
+already made once, in a different place.
+
+That was not assumed; it was measured, because reading the code has produced a wrong answer here
+three times running (the rule this project's research discipline exists to enforce). A controlled
+experiment (`.superpowers/sdd/2026-09-17-card-round-4/experiment-drop-coordinates.md`) drove the
+real `pnpm dev`, held `devicePixelRatio` constant at 1.5 as the one variable, and hit-tested five
+synthetic rows against three candidate conversions at three real Application Sizes (100 %, 130 %,
+200 %): raw physical (**0/15**), physical ÷ `devicePixelRatio` alone (**15/15**), and physical ÷
+(`devicePixelRatio` × zoom) (**7/15** — right only at 100 % and at the row nearest the origin,
+which is why a control placed there cannot by itself distinguish the two: a multiplicative error
+is zero at the origin and grows with distance from it). `getBoundingClientRect()` already reports
+a zoomed element's box in real viewport pixels, so dividing by zoom a second time undershoots
+every row that is not the control, worse the farther the drop lands from the window's corner.
+`cardRowAt(point)` then walks `document.elementFromPoint(point.x, point.y)` up with
+`.closest("[data-card-row]")` to the row's own index.
+
 ## Installing an OS: a component is a set of paths
 
 `core/osinstall/` (`recipe.rs`, `source.rs`, `scan.rs`, `plan.rs`, `apply.rs`,

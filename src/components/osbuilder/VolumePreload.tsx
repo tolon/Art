@@ -22,11 +22,12 @@
 // setting beside `winuaePath`, and this screen can set it too so somebody who
 // arrives here first is not sent to Settings and back.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { cardOpen, type CardReport } from "@/lib/card";
+import { cardOsCheckVolumeName, type VolumeNameVerdict } from "@/lib/cardOs";
 import {
   backupDefaultName,
   embedDetailPhrases,
@@ -116,6 +117,14 @@ export function VolumePreload() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PreloadResult | null>(null);
+  /**
+   * `card_os_check_volume_name`'s own verdict, by the trimmed name asked
+   * (Q7) — never a rule restated on this side. Keyed by the name itself
+   * rather than by drive, since the verdict is a pure function of the string;
+   * a name with no entry yet has simply not come back, and `preloadBlocker`
+   * treats that as "not yet known" rather than as a refusal.
+   */
+  const [nameVerdicts, setNameVerdicts] = useState<Record<string, VolumeNameVerdict>>({});
 
   // Re-read whatever card was remembered, so one since deleted or unplugged is
   // noticed rather than shown as still there.
@@ -159,6 +168,96 @@ export function VolumePreload() {
       setConfirmed(false);
     }
   }, [fingerprint]);
+
+  /**
+   * The names whose round trip is in flight — what blocks Run while it is
+   * (round 4 final review, minor) and what stops a second ask for a name
+   * already being asked about.
+   *
+   * **A ref, not state** (round 4 fix-wave re-review, N1). Held in `useState`
+   * it was in the checking effect's own dependency list, and the effect's
+   * first act was to add to it — always a new array, so never a bail-out. So
+   * asking re-ran the effect, the re-run's cleanup cancelled the answer
+   * already on its way, the answer arrived and was discarded for "not
+   * current", and discarding it removed the name — which re-ran the effect
+   * once more, found the name in neither map, and asked again. In the running
+   * app that is `card_os_check_volume_name` in a loop at IPC rate for as long
+   * as a name is chosen, with `nameVerdicts` never receiving an entry, so a
+   * name the core refuses never blocks Run at all. The suite was green over it
+   * because a mocked promise resolves as a microtask — before the re-render
+   * React has already scheduled — which an `invoke` round trip cannot do.
+   *
+   * The ref carries the truth; `noteChecking` below is a bare render trigger
+   * so the blocker's *"checking…"* sentence follows it.
+   */
+  const namesChecking = useRef<Set<string>>(new Set());
+  const [, noteChecking] = useReducer((count: number) => count + 1, 0);
+
+  /** Every chosen, non-empty, trimmed name — the whole of what this screen
+   *  ever has an opinion about. */
+  const chosenNames = useMemo(
+    () => [
+      ...new Set(
+        picks
+          .filter((pick) => pick.chosen)
+          .map((pick) => pick.volumeName.trim())
+          .filter((name) => name.length > 0)
+      ),
+    ],
+    [picks]
+  );
+  const chosenKey = JSON.stringify(chosenNames);
+
+  // Q7: the core's own name rule, asked live as a chosen partition's name
+  // changes — never restated here. A name already answered, or already being
+  // asked about, is not asked again.
+  //
+  // **The map is pruned to the names now chosen** (final review, minor). It
+  // used to keep every prefix of everything ever typed — one entry per
+  // keystroke, for the life of the screen — which is an unbounded map of
+  // answers to questions nobody is asking any more. Pruning is stable: after
+  // it, every chosen name has an entry, so the effect's own `names` list is
+  // empty and it does not run again.
+  useEffect(() => {
+    const inFlight = namesChecking.current;
+    const names = chosenNames.filter((name) => !(name in nameVerdicts) && !inFlight.has(name));
+    if (names.length === 0) {
+      setNameVerdicts((prev) => {
+        const kept = Object.keys(prev).filter((name) => chosenNames.includes(name));
+        if (kept.length === Object.keys(prev).length) return prev;
+        return Object.fromEntries(kept.map((name) => [name, prev[name]]));
+      });
+      return;
+    }
+    for (const name of names) inFlight.add(name);
+    noteChecking();
+    const done = () => {
+      for (const name of names) inFlight.delete(name);
+      noteChecking();
+    };
+    void Promise.all(
+      names.map((name) => cardOsCheckVolumeName(name).then((verdict) => [name, verdict] as const))
+    )
+      .then((entries) => {
+        // **The answer is kept whatever has re-rendered since** (N1): it is a
+        // verdict on a string, not on this render, and nothing but an answer
+        // can end the asking. A verdict for a name nobody has chosen any more
+        // is dropped by the prune branch above on the next pass.
+        setNameVerdicts((prev) => {
+          const next = { ...prev };
+          for (const [name, verdict] of entries) next[name] = verdict;
+          return next;
+        });
+        done();
+      })
+      .catch(() => {
+        // A round trip that failed leaves the name unanswered and Run live:
+        // the core refuses it again at run time, and a screen that blocked
+        // for ever on a question it could not ask has no way out. Disclosed
+        // in `preloadBlocker`'s own comment.
+        done();
+      });
+  }, [chosenKey, chosenNames, nameVerdicts]);
 
   // G9: the ROM question is about the card and the folders going onto it —
   // one verdict per folder, since the screen takes one folder per partition
@@ -293,7 +392,14 @@ export function VolumePreload() {
     }
   }
 
-  const blocker = preloadBlocker({ image: imagePath, rdbBackup, picks, plan });
+  const blocker = preloadBlocker({
+    image: imagePath,
+    rdbBackup,
+    picks,
+    plan,
+    nameVerdicts,
+    namesChecking: [...namesChecking.current],
+  });
   const erases = plan ? formatCount(plan) : 0;
 
   return (

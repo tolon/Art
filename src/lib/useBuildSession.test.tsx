@@ -31,7 +31,16 @@ function seed(remembered: Record<string, unknown>) {
 }
 
 function Probe() {
-  const { session, setTree, setRom, setCard, setFirstBoot } = useBuildSession();
+  const {
+    session,
+    setTree,
+    setRom,
+    setCard,
+    setFirstBoot,
+    setDestinationKind,
+    setCardTarget,
+    setRelease,
+  } = useBuildSession();
   return (
     <div>
       <span data-testid="rom">{session.rom.path ?? "(none)"}</span>
@@ -46,11 +55,33 @@ function Probe() {
       <span data-testid="mediaFolder">{session.media.folder ?? "(none)"}</span>
       <span data-testid="firstboot-written">{String(session.firstboot.written)}</span>
       <span data-testid="firstboot-wanted">{String(session.firstboot.wanted)}</span>
+      <span data-testid="destinationKind">{session.destinationKind}</span>
+      <span data-testid="cardTargetSizeGb">{session.cardTarget.sizeGb}</span>
+      <span data-testid="cardTargetPartitions">
+        {session.cardTarget.partitions.map((p) => p.name).join(",")}
+      </span>
       <button onClick={() => setTree({ root: "E:\\picked", builtHere: false })}>pick</button>
       <button onClick={() => setTree({ root: "E:\\other", builtHere: false })}>pick other</button>
       <button onClick={() => setTree({ builtHere: true })}>mark built</button>
       <button onClick={() => setFirstBoot({ written: true })}>first boot written</button>
       <button onClick={() => setFirstBoot({ wanted: false })}>first boot not wanted</button>
+      <button onClick={() => setDestinationKind("card-image")}>choose card image</button>
+      <button
+        onClick={() =>
+          setCardTarget({
+            ...session.cardTarget,
+            sizeGb: 128,
+            partitions: [
+              { name: "System", sources: [] },
+              { name: "Games", sources: ["E:\\whd\\Games"] },
+              { name: "Work", sources: [] },
+            ],
+          })
+        }
+      >
+        add a games partition
+      </button>
+      <button onClick={() => setRelease("AmigaOS 3.9")}>switch to 3.9</button>
     </div>
   );
 }
@@ -625,5 +656,89 @@ describe("a folder taken out of the material list is out of the build (F10)", ()
       bag["buildSession.packages"]) as { folder?: string };
     expect(stored.folder).toBe("E:\\archives");
     expect(screen.getByTestId("packagesFolder").textContent).toBe("E:\\archives");
+  });
+});
+
+describe("the destination kind and the card target, per release (round 4, task 5)", () => {
+  it("defaults to Folder, and the card target to System and Work with no image", () => {
+    seed({});
+    render(<Probe />);
+    expect(screen.getByTestId("destinationKind").textContent).toBe("folder");
+    expect(screen.getByTestId("cardTargetSizeGb").textContent).toBe("64");
+    expect(screen.getByTestId("cardTargetPartitions").textContent).toBe("System,Work");
+  });
+
+  it("remembers a choice of Card image", async () => {
+    seed({});
+    render(<Probe />);
+    await userEvent.click(screen.getByText("choose card image"));
+    expect(screen.getByTestId("destinationKind").textContent).toBe("card-image");
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["osinstall.destinationKind.AmigaOS 3.2"]).toBe("card-image");
+  });
+
+  it("round-trips a stored card target with a partition added", async () => {
+    seed({});
+    render(<Probe />);
+    await userEvent.click(screen.getByText("add a games partition"));
+    expect(screen.getByTestId("cardTargetSizeGb").textContent).toBe("128");
+    expect(screen.getByTestId("cardTargetPartitions").textContent).toBe("System,Games,Work");
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["osinstall.cardTarget.AmigaOS 3.2"]).toEqual({
+      sizeGb: 128,
+      image: null,
+      emu68Archive: null,
+      pfs3Driver: null,
+      partitions: [
+        { name: "System", sources: [] },
+        { name: "Games", sources: ["E:\\whd\\Games"] },
+        { name: "Work", sources: [] },
+      ],
+    });
+  });
+
+  /// **A stored value that does not match the guard is rejected whole**
+  /// (task 5's own brief) — a partition with a broken `sources` does not lose
+  /// just itself, the whole target falls back to the default.
+  it("rejects a stored card target whole when one partition's sources is broken", () => {
+    seed({
+      "osinstall.cardTarget.AmigaOS 3.2": {
+        sizeGb: 64,
+        image: "E:\\amiga\\card.img",
+        emu68Archive: null,
+        pfs3Driver: null,
+        partitions: [
+          { name: "System", sources: [] },
+          { name: "Games", sources: "not-an-array" },
+        ],
+      },
+    });
+    render(<Probe />);
+    expect(screen.getByTestId("cardTargetPartitions").textContent).toBe("System,Work");
+    expect(screen.getByTestId("cardTargetSizeGb").textContent).toBe("64");
+  });
+
+  /// Owner decision Q2: a 3.9 card and a 3.2.2 card are two cards. Neither
+  /// key name mentions the release — the release lives in the key itself.
+  it("keeps one release's destination kind and card target apart from another's", async () => {
+    seed({
+      "osinstall.destinationKind.AmigaOS 3.2": "card-image",
+      "osinstall.cardTarget.AmigaOS 3.2": {
+        sizeGb: 128,
+        image: null,
+        emu68Archive: null,
+        pfs3Driver: null,
+        partitions: [{ name: "System", sources: [] }],
+      },
+    });
+    render(<Probe />);
+    expect(screen.getByTestId("destinationKind").textContent).toBe("card-image");
+    expect(screen.getByTestId("cardTargetSizeGb").textContent).toBe("128");
+
+    await userEvent.click(screen.getByText("switch to 3.9"));
+
+    expect(screen.getByTestId("destinationKind").textContent).toBe("folder");
+    expect(screen.getByTestId("cardTargetSizeGb").textContent).toBe("64");
+    expect(screen.getByTestId("cardTargetPartitions").textContent).toBe("System,Work");
   });
 });

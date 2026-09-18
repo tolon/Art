@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::archive;
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::error::{CoreError, CoreResult, KickstartNotProposedWhy};
 use crate::core::gameindex::readers::slave::read_slave;
 use crate::core::gameindex::record::KickstartNeed;
 use crate::core::jobs::{cancelled_error, ProgressSink};
@@ -474,12 +474,12 @@ pub fn check_agreed<'a>(
             .find(|item| &item.name == name)
             .ok_or_else(|| CoreError::KickstartNotProposed {
                 name: name.clone(),
-                why: "ART's proposal does not name it".into(),
+                why: KickstartNotProposedWhy::NotNamed,
             })?;
         let Offer::Supplied { by, .. } = &item.offer else {
             return Err(CoreError::KickstartNotProposed {
                 name: name.clone(),
-                why: "ART did not offer it — nothing in the collection matches it".into(),
+                why: KickstartNotProposedWhy::NotOffered,
             });
         };
         recheck_source(name, item.offer.wanted(), by)?;
@@ -490,9 +490,9 @@ pub fn check_agreed<'a>(
             };
             return Err(CoreError::KickstartNotProposed {
                 name: name.clone(),
-                why: format!(
-                    "its .RTB was not found in any material folder — put {package} in one"
-                ),
+                why: KickstartNotProposedWhy::RtbMissing {
+                    package: package.to_string(),
+                },
             });
         }
         validated.push((item, by));
@@ -518,23 +518,36 @@ fn recheck_source(
     };
     let info = match crate::core::rom::identify_rom(path) {
         Ok(info) => info,
-        Err(_) if !path.exists() => return Err(changed("is no longer there".into())),
-        Err(err) => return Err(changed(format!("can no longer be read ({err})"))),
+        Err(_) if !path.exists() => {
+            return Err(changed(
+                "is no longer there since the card was prepared".into(),
+            ))
+        }
+        Err(err) => {
+            return Err(changed(format!(
+                "can no longer be read since the card was prepared ({err})"
+            )))
+        }
     };
     if let Some(offered) = wanted.crc16 {
         match info.whdload_crc16 {
             Some(now) if now == offered => {}
+            // R1 (card round 3's residual re-review): "since the card was
+            // prepared" sits right after the verb it modifies — what
+            // changed — never trailing the number the proposal offered,
+            // which reads as though the offer itself were dated.
             Some(now) => {
                 return Err(changed(format!(
-                    "has changed: its WHDLoad checksum is ${now:04X}, and the proposal offered \
-                     ${offered:04X}"
+                    "has changed since the card was prepared: its WHDLoad checksum is now \
+                     ${now:04X}, where the proposal offered ${offered:04X}"
                 )))
             }
             None => {
                 return Err(changed(format!(
-                    "can no longer be checked: ART cannot compute its WHDLoad checksum (an \
-                     encrypted Amiga Forever ROM without its rom.key beside it), and the proposal \
-                     offered ${offered:04X}"
+                    "can no longer be checked since the card was prepared: ART cannot compute \
+                     its WHDLoad checksum (an encrypted Amiga Forever ROM without its rom.key \
+                     beside it) — put rom.key back beside it, so the proposal can offer \
+                     ${offered:04X} again"
                 )))
             }
         }
@@ -546,7 +559,8 @@ fn recheck_source(
         let now = info.size_bytes as u64;
         if now != offered {
             return Err(changed(format!(
-                "has changed: it is {now} bytes, and the proposal offered {offered}"
+                "has changed since the card was prepared: it is now {now} bytes, where the \
+                 proposal offered {offered}"
             )));
         }
     }
@@ -1070,6 +1084,68 @@ mod tests {
         assert!(message.contains(&rom.display().to_string()), "{message}");
         assert!(message.contains("no longer there"), "{message}");
         assert!(!tree.join("Devs").exists(), "nothing was written");
+    }
+
+    /// Round 3's residual re-review, R1 (`.superpowers/sdd/2026-09-17-
+    /// one-button-card-round-3/residual-fix-re-review.md`, "New breakage"):
+    /// each `why` reads as its own sentence, and "since the card was
+    /// prepared" always modifies *what changed*, never dangles after the
+    /// number the proposal offered. The encrypted-without-its-key case also
+    /// gets its own direct next step, not only "prepare the card again".
+    #[test]
+    fn the_source_changed_sentence_reads_naturally_for_every_reason() {
+        let (_guard, dir) = scratch("source-changed-wording");
+        let rom = dir.join("a.rom");
+        let wanted = WantedImage {
+            name: "kick34005.A500".into(),
+            crc16: Some(0x1234),
+            size: None,
+        };
+        let by = crate::core::rom::offer::SuppliedBy {
+            path: rom.display().to_string(),
+            name: "Kickstart".into(),
+            size_disagrees: None,
+        };
+
+        // 1. Gone: "since the card was prepared" reads as when it went.
+        let err = recheck_source("kick34005.A500", &wanted, &by).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("is no longer there since the card was prepared"),
+            "{message}"
+        );
+
+        // 2. Checksum changed: "since the card was prepared" must modify
+        //    "has changed", never dangle after the number the proposal
+        //    offered — round 3's own defect.
+        std::fs::write(&rom, vec![0xACu8; 4096]).unwrap();
+        let now = crate::core::hashing::crc16_arc(&vec![0xACu8; 4096]);
+        let err = recheck_source("kick34005.A500", &wanted, &by).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(&format!(
+                "has changed since the card was prepared: its WHDLoad checksum is now \
+                 ${now:04X}, where the proposal offered $1234"
+            )),
+            "{message}"
+        );
+        assert!(
+            !message.contains("$1234 since the card was prepared"),
+            "the offered value must never be what 'since the card was prepared' trails: \
+             {message}"
+        );
+
+        // 3. Encrypted without its key: the direct next step is named.
+        let mut encrypted = b"AMIROMTYPE1".to_vec();
+        encrypted.extend(std::iter::repeat_n(0u8, 64));
+        std::fs::write(&rom, &encrypted).unwrap();
+        let err = recheck_source("kick34005.A500", &wanted, &by).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("can no longer be checked since the card was prepared"),
+            "{message}"
+        );
+        assert!(message.contains("put rom.key back beside it"), "{message}");
     }
 
     #[test]

@@ -491,3 +491,78 @@ textarea:disabled {
   margin-top: 10px;
   flex-wrap: wrap;
 }
+
+/* ---- The card section's rows (round 4, task 8) ------------------------
+   The mock-up's `.prow` (research-ux § 4.2): a dense 28 px grid row, its
+   size cell right-aligned in tabular figures, with a matching 28 px head.
+   Written against the theme's own tokens — no colour is spelled out here,
+   so `contrast-check.py` keeps answering for these rows through
+   `theme.css`. */
+.card-prow {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 110px 90px auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 0 6px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.card-pane-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.card-prow-size {
+  text-align: right;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.card-source-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 16px;
+}
+.card-source-row {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.card-row-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  margin: 2px 0 2px 16px;
+  padding: 4px;
+  width: max-content;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.card-floor {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 4px 16px;
+  font-size: 11px;
+}
+.card-floor input {
+  width: 8em;
+}
+/* The mock-up's `.pane-status`: 28 px, 12 px, a rule above it, carrying
+   used-against-total in one sentence and never a bar. */
+.card-pane-status {
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  margin: 8px 0 0;
+  padding-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.card-total-err {
+  color: var(--err-text);
+  font-weight: 600;
+}

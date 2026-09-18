@@ -27,7 +27,7 @@
 //! failure, and every ending says what became of `<image>.partial`
 //! ([`PartialRemoval`]): ART removes only the file this run created (P3).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -44,19 +44,20 @@ use crate::core::card::manifest::{
     describe_card, manifest_path_for, render_manifest, PartitionContent,
 };
 use crate::core::card::read_card;
+use crate::core::cardos::content::{classify, Classified, SourceKind};
 use crate::core::cardos::kickstarts::{check_agreed, place_agreed, PlacedKickstart};
 use crate::core::cardos::partial::{
     finish_partial, partial_path_for, refuse_partial_destination, remove_partial, PartialRemoval,
 };
 use crate::core::cardos::prepare::{
-    check_free_space, measure_card, space_needs, stage_card, HstImagerState, PartitionInput,
-    PartitionWriter, PreparedCard,
+    check_free_space, measure_card, space_needs, stage_card, to_unusable_source, HstImagerState,
+    MeasuredCard, PartitionInput, PartitionWriter, PreparedCard,
 };
 use crate::core::cardos::readback::{count_pfs3_partition, PartitionCount};
 use crate::core::cardos::whdload::{install_whdload, WhdloadInstalled};
 use crate::core::clock::AmigaClock;
-use crate::core::error::{CoreError, CoreResult};
-use crate::core::jobs::{JobId, JobTitle, ProgressSink};
+use crate::core::error::{CoreError, CoreResult, UnusableSource};
+use crate::core::jobs::{JobId, JobOutcome, JobTitle, ProgressSink};
 use crate::core::oplog::{JsonlOperationLog, OperationOutcome, OperationRecord};
 use crate::core::osinstall::apply::{DistributionManifest, MANIFEST_FILE_NAME};
 use crate::core::pistorm::firmware::FirmwareConfig;
@@ -67,10 +68,11 @@ use crate::core::preload::{plan, PreloadPartition, PreloadRequest, PreloadStep, 
 use crate::core::rom::place::PlaceOutcome;
 use crate::core::safety::{atomic_create_new, Created};
 use crate::core::scratch_guard::{LeftBehind, OwnedScratch};
+use crate::core::volume::write::dir::{check_name, MAX_NAME_LEN};
 use crate::error::AppResult;
 use crate::tools::hst_imager::HstImager;
 
-use super::jobs::{spawn_job, JobRegistry};
+use super::jobs::{spawn_job, spawn_job_with_outcome, JobRegistry};
 use super::oplog::{user_operation, write_to_path};
 
 /// The session's folders, inside its [`OwnedScratch`].
@@ -289,7 +291,17 @@ pub const CARD_OS_PREPARE_EVENT: &str = "card-os-prepare-result";
 pub struct CardOsPrepareResult {
     pub job_id: JobId,
     pub session: u64,
-    pub prepared: PreparedCard,
+    /// The prepared card, or `None` when the preparation refused.
+    pub prepared: Option<PreparedCard>,
+    /// **A refusal is this command's own answer, typed** (round 4 final
+    /// review, C2) — the shape `CardOsMeasureResult` already had, and for the
+    /// same reason. All but three of the card's `ART-*` refusals are raised
+    /// here, and returning them as a plain `Err` ended the job `Failed` and
+    /// handed the screen one formatted English string: the code went into
+    /// parentheses, where `parseError` does not look, and the typed
+    /// parameters both catalogues need were lost entirely. Never `Some` at
+    /// the same time as `prepared`.
+    pub refusal: Option<CardRefusal>,
 }
 
 /// Empty one of the session's own folders: its contents are ART's, from this
@@ -411,8 +423,63 @@ fn prepare_record(
     }
 }
 
-/// Prepare the session's card. Returns a job id; the result arrives on
-/// [`CARD_OS_PREPARE_EVENT`], and a refusal ends the job with its code.
+/// Whether an error raised while preparing is a **refusal** — something ART's
+/// own rules stopped it doing, whose next step is the user's — rather than a
+/// failure (round 4 final review, C2).
+///
+/// This is the same distinction `run_phases` makes for the build, made where
+/// the preparation raises it. The family is closed and named rather than
+/// derived from "anything that is not I/O": every one of these is decided
+/// **before** a byte of the image exists, from what the user gave — a source
+/// that is not there, a card too small, no PFS3 driver in the material, a name
+/// PFS3 cannot hold, not enough room to stage, too many entries for one
+/// partition, no WHDLoad for the titles asked for. Anything else — an
+/// unreadable disk, a permission, a bug — is a failure, and a failure's next
+/// step is not the user's.
+fn prepare_refused(error: &CoreError) -> bool {
+    matches!(
+        error,
+        CoreError::CardSourceUnusable { .. }
+            | CoreError::CardDoesNotFit(_)
+            | CoreError::Pfs3DriverNotFound { .. }
+            | CoreError::CardNamesNeedHstImager { .. }
+            | CoreError::NotEnoughSpace { .. }
+            | CoreError::CardPartitionTooManyEntries { .. }
+            | CoreError::WhdloadNotFound { .. }
+            | CoreError::HstImagerUnusable { .. }
+            | CoreError::PartialImageExists { .. }
+            | CoreError::SafetyRefused(_)
+    )
+}
+
+/// What the preparation's `Err` arm puts on [`CARD_OS_PREPARE_EVENT`]: a typed
+/// refusal, or **nothing at all** (round 4 fix-wave re-review, N2).
+///
+/// The event is the *refusal's* channel, not the error's. Emitting it for
+/// every `Err` made the screen read an unclassified failure — an unreadable
+/// disk, a permission, a bug — as *refused*, because the frontend branches on
+/// the field's presence alone; the same job then ended `Failed`, so the job bar
+/// said one thing and the row above it said another, and the failure's own
+/// "where the copy is" sentence never appeared. That is the screen out-claiming
+/// the core, in the wave built to stop it. A failure loses nothing by staying
+/// silent here: the job ends `Failed` with its `ART-*` code, and
+/// `settleFromProgress` turns that into a `JobFailed` carrying the code.
+fn prepare_refusal_event(error: &CoreError) -> Option<CardRefusal> {
+    prepare_refused(error).then(|| card_refusal_from(error))
+}
+
+/// Prepare the session's card. Returns a job id.
+///
+/// **Two of the three endings travel on [`CARD_OS_PREPARE_EVENT`]** — a
+/// prepared card **or** a typed refusal, never both — and a refusal also ends
+/// the job [`JobState::Refused`] with its own code, never `Failed`.
+///
+/// **A failure says nothing on that event** (fix-wave re-review, N2; see
+/// [`prepare_refusal_event`]). It reaches the screen as the job's own
+/// [`JobState::Failed`], carrying the same `ART-*` code, which
+/// `settleFromProgress` turns into a `JobFailed` the run renders as a failure.
+/// Emitting the event for a failure too made the row say *refused*, with a
+/// refusal's next step, over a job the bar above it called failed.
 #[tauri::command]
 pub fn card_os_prepare(
     request: CardOsPrepareRequest,
@@ -432,7 +499,27 @@ pub fn card_os_prepare(
     let target = image.display().to_string();
     let title = JobTitle::new("components.jobBar.title.prepareCardOs").text("target", &target);
 
-    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+    let id = spawn_job_with_outcome(&app, registry, title, move |job_id, progress| {
+        // Task 2: the screen's phase-and-count, before the (possibly slow)
+        // preparation itself starts — the source count is known from the
+        // request alone.
+        let source_count = request
+            .partitions
+            .iter()
+            .map(|partition| partition.sources.len() as u64)
+            .sum::<u64>();
+        let _ = emit_app.emit(
+            CARD_OS_PHASE_EVENT,
+            CardOsPhaseEvent {
+                job_id,
+                session: request.session,
+                phase: CardOsPhase::Prepare,
+                done: 0,
+                // Never `Some(0)` standing in for "unknown" (the bar rule).
+                total: (source_count > 0).then_some(source_count),
+                unit: PhaseUnit::Files,
+            },
+        );
         let outcome = prepare_card(
             &request,
             &image,
@@ -469,14 +556,41 @@ pub fn card_os_prepare(
                     CardOsPrepareResult {
                         job_id,
                         session: request.session,
-                        prepared,
+                        prepared: Some(prepared),
+                        refusal: None,
                     },
                 );
-                Ok(())
+                JobOutcome::Finished
             }
             Err(err) => {
                 sessions.end_prepare(request.session, None);
-                Err(err)
+                // **The refusal is the answer, and it travels typed** (C2).
+                // Emitted on this command's own event with its code and its
+                // `details()` — the screen builds the Turkish sentence from
+                // those, exactly as it does for the build's ending. The job
+                // state below carries the same decision to the job bar, so a
+                // refusal is never drawn as a failure there either.
+                //
+                // **And only a refusal travels here** (N2): a failure says
+                // nothing on this event and is settled by its job's own
+                // `Failed` state, which carries the same `ART-*` code. The
+                // two endings stay distinct on both wires.
+                if let Some(refusal) = prepare_refusal_event(&err) {
+                    let _ = emit_app.emit(
+                        CARD_OS_PREPARE_EVENT,
+                        CardOsPrepareResult {
+                            job_id,
+                            session: request.session,
+                            prepared: None,
+                            refusal: Some(refusal),
+                        },
+                    );
+                }
+                if prepare_refused(&err) {
+                    JobOutcome::Refused(err)
+                } else {
+                    JobOutcome::Other(err)
+                }
             }
         }
     });
@@ -525,15 +639,22 @@ pub enum CardOsEnding {
     Succeeded,
     /// Refused before anything of the image was written: its next step is
     /// the user's (a name, a file, a setting), not "build again" (I3).
+    ///
+    /// `params` is `error.details()` (round 4, task 3): the screen's own
+    /// catalogue builds a Turkish sentence from these instead of carrying
+    /// `message`, which stays English for the log and for whatever `params`
+    /// does not yet cover a key for.
     Refused {
         phase: BuildPhase,
         code: String,
         message: String,
+        params: BTreeMap<String, String>,
     },
     Failed {
         phase: BuildPhase,
         code: String,
         message: String,
+        params: BTreeMap<String, String>,
     },
     Stopped {
         phase: BuildPhase,
@@ -558,6 +679,100 @@ impl BuildPhase {
             Self::Partitions => "partitions",
             Self::Check => "check",
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase and count (round 4, Task 2): the screen says "Bölümler: 4 812 /
+// 9 216 dosya" instead of nothing.
+// ---------------------------------------------------------------------------
+
+/// The event a build's or a preparation's phase-and-count arrives on.
+pub const CARD_OS_PHASE_EVENT: &str = "card-os-phase";
+
+/// Every phase the screen can be told about: a build's four, plus the
+/// preparation's own (it is not one of [`BuildPhase`]'s four — a preparation
+/// never reaches the build).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CardOsPhase {
+    Whdload,
+    Card,
+    Partitions,
+    Check,
+    Prepare,
+}
+
+impl From<BuildPhase> for CardOsPhase {
+    fn from(phase: BuildPhase) -> Self {
+        match phase {
+            BuildPhase::Whdload => Self::Whdload,
+            BuildPhase::Card => Self::Card,
+            BuildPhase::Partitions => Self::Partitions,
+            BuildPhase::Check => Self::Check,
+        }
+    }
+}
+
+/// What a phase's count is measured in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PhaseUnit {
+    Files,
+    Steps,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardOsPhaseEvent {
+    pub job_id: JobId,
+    pub session: u64,
+    pub phase: CardOsPhase,
+    pub done: u64,
+    /// `None` when this phase cannot know its total — the screen then draws
+    /// a count and never a bar (the bar rule, T §1.4). Never `Some(0)`
+    /// standing in for "unknown".
+    pub total: Option<u64>,
+    pub unit: PhaseUnit,
+}
+
+/// Where a build's (or a preparation's) phase-and-count goes. [`build_card_os`]
+/// takes this as a trait object, never an `AppHandle`, so it stays testable
+/// without Tauri — the job closure supplies the real emitter
+/// ([`EmittingPhaseSink`]).
+pub(crate) trait PhaseSink: Send + Sync {
+    fn phase(&self, phase: CardOsPhase, done: u64, total: Option<u64>, unit: PhaseUnit);
+}
+
+/// No phase-and-count event — for a caller, or a test, that does not care.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct NoPhaseSink;
+
+impl PhaseSink for NoPhaseSink {
+    fn phase(&self, _phase: CardOsPhase, _done: u64, _total: Option<u64>, _unit: PhaseUnit) {}
+}
+
+/// The real emitter a build's job closure gives [`build_card_os`]: every
+/// `phase()` call becomes a [`CARD_OS_PHASE_EVENT`] on the webview.
+struct EmittingPhaseSink<'a> {
+    app: &'a AppHandle,
+    job_id: JobId,
+    session: u64,
+}
+
+impl PhaseSink for EmittingPhaseSink<'_> {
+    fn phase(&self, phase: CardOsPhase, done: u64, total: Option<u64>, unit: PhaseUnit) {
+        let _ = self.app.emit(
+            CARD_OS_PHASE_EVENT,
+            CardOsPhaseEvent {
+                job_id: self.job_id,
+                session: self.session,
+                phase,
+                done,
+                total,
+                unit,
+            },
+        );
     }
 }
 
@@ -933,6 +1148,7 @@ fn run_phases(
     native: &dyn VolumeFormatter,
     fallback: Option<HstFallback<'_>>,
     progress: &dyn ProgressSink,
+    phases: &dyn PhaseSink,
     built: &mut BuiltCardOs,
     written: &mut Written,
 ) -> PhaseResult<()> {
@@ -940,6 +1156,7 @@ fn run_phases(
 
     // 1. WHDLoad and the agreed Kickstarts, into the tree.
     gate(Whdload, progress)?;
+    phases.phase(Whdload.into(), 0, None, PhaseUnit::Files);
     built.kickstarts = place_agreed(&prepared.kickstarts, &request.agreed_kickstarts, tree)
         .map_err(at(Whdload))?;
     if let Some(choice) = &prepared.whdload {
@@ -950,6 +1167,7 @@ fn run_phases(
     //    again: the Whdload phase took time, and a file that appeared meanwhile
     //    is still a refusal, not a failure.
     gate(Card, progress)?;
+    phases.phase(Card.into(), 0, None, PhaseUnit::Files);
     refuse_partial_destination(image).map_err(at(Card))?;
     let partial = partial_path_for(image);
     let CardImageInputs {
@@ -969,11 +1187,22 @@ fn run_phases(
         }
     }
 
-    // 3. Every partition formatted, and filled from its roots.
+    // 3. Every partition formatted, and filled from its roots. The total file
+    //    count is only known once every copy has run (`CopySummary`'s own
+    //    tally) — reported as the phase's tally, not a live per-file count.
     gate(Partitions, progress)?;
+    phases.phase(Partitions.into(), 0, None, PhaseUnit::Files);
     let made = plan(&preload_request_for(prepared, tree, &partial)).map_err(at(Partitions))?;
     match run_with_fallback(&made, native, fallback.map(|f| f.tool), progress) {
-        Ok((_outcome, steps)) => built.steps = steps,
+        Ok((outcome, steps)) => {
+            built.steps = steps;
+            let copied = outcome.copied.files;
+            // Never `Some(0)` standing in for "unknown" — a phase that truly
+            // copied nothing says so with `None`, same as one that cannot
+            // know its total at all (the bar rule).
+            let total = (copied > 0).then_some(copied);
+            phases.phase(Partitions.into(), copied, total, PhaseUnit::Files);
+        }
         Err(stopped) => {
             let stopped = *stopped;
             built.steps = stopped.steps;
@@ -981,13 +1210,24 @@ fn run_phases(
         }
     }
 
-    // 4. Counted, described, checked, named — and only then its manifest.
+    // 4. Counted, described, checked, named — and only then its manifest. The
+    //    partition count is known before the read-back starts, so the screen
+    //    sees each partition's check land in turn.
     gate(Check, progress)?;
     let card = read_card(&partial).map_err(at(Check))?;
-    let counts = (0..prepared.measured.plan.partitions.len())
-        .map(|index| count_pfs3_partition(&partial, &card, 0, index))
-        .collect::<CoreResult<Vec<_>>>()
-        .map_err(at(Check))?;
+    let total_partitions = prepared.measured.plan.partitions.len() as u64;
+    phases.phase(Check.into(), 0, Some(total_partitions), PhaseUnit::Steps);
+    let mut counts = Vec::with_capacity(prepared.measured.plan.partitions.len());
+    for index in 0..prepared.measured.plan.partitions.len() {
+        let count = count_pfs3_partition(&partial, &card, 0, index).map_err(at(Check))?;
+        counts.push(count);
+        phases.phase(
+            Check.into(),
+            (index + 1) as u64,
+            Some(total_partitions),
+            PhaseUnit::Steps,
+        );
+    }
     let manifest = describe_card(
         &partial,
         facts,
@@ -1074,17 +1314,40 @@ fn ending_for(phase: BuildPhase, error: &CoreError, refused: bool) -> CardOsEndi
             phase,
             code: other.code().to_string(),
             message: other.to_string(),
+            params: other
+                .details()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
         },
         other => CardOsEnding::Failed {
             phase,
             code: other.code().to_string(),
             message: other.to_string(),
+            params: other
+                .details()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect(),
         },
+    }
+}
+
+/// What the build's job ends with, from what it built (round 4 Task 1). The
+/// ending is already decided — this only carries `CardOsEnding::Refused`'s
+/// own decision through to the job bar, which would otherwise turn every
+/// non-success into `Failed` and call a refusal what it is not.
+fn job_outcome(ending: &CardOsEnding, error: Option<CoreError>) -> JobOutcome {
+    match (ending, error) {
+        (CardOsEnding::Refused { .. }, Some(err)) => JobOutcome::Refused(err),
+        (_, Some(err)) => JobOutcome::Other(err),
+        (_, None) => JobOutcome::Finished,
     }
 }
 
 /// The build, without Tauri: what `card_os_build` runs on its job thread and
 /// Task 13 runs in a test.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_card_os(
     prepared: &PreparedCard,
     tree: &Path,
@@ -1093,6 +1356,7 @@ pub(crate) fn build_card_os(
     native: &dyn VolumeFormatter,
     fallback: Option<HstFallback<'_>>,
     progress: &dyn ProgressSink,
+    phases: &dyn PhaseSink,
 ) -> BuiltCardOs {
     let mut built = BuiltCardOs {
         ending: CardOsEnding::Succeeded,
@@ -1124,6 +1388,7 @@ pub(crate) fn build_card_os(
         native,
         fallback,
         progress,
+        phases,
         &mut built,
         &mut written,
     );
@@ -1241,13 +1506,18 @@ pub fn card_os_build(
     let image = ticket.image.display().to_string();
     let title = JobTitle::new("components.jobBar.title.buildCardOs").text("target", &image);
 
-    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+    let id = spawn_job_with_outcome(&app, registry, title, move |job_id, progress| {
         let native = NativeFormatter::new(&crate::tools::local_time::LOCAL_TIME);
         // I1: the hst-imager the preparation asked, never a second path.
         let hst = ticket
             .hst_imager
             .as_ref()
             .map(|path| (path, HstImager::at(path)));
+        let phase_sink = EmittingPhaseSink {
+            app: &emit_app,
+            job_id,
+            session: request.session,
+        };
         let built = build_card_os(
             &ticket.prepared,
             &ticket.tree,
@@ -1259,6 +1529,7 @@ pub fn card_os_build(
                 tool: tool as &dyn VolumeFormatter,
             }),
             progress,
+            &phase_sink,
         );
 
         // After every ending, the session and its folder go.
@@ -1278,6 +1549,11 @@ pub fn card_os_build(
             partial,
             error,
         } = built;
+        // Computed before `ending` moves into the emitted event below — the
+        // decision `ending_for` already made, carried to the job bar rather
+        // than re-derived (round 4 Task 1: a refused build is never called
+        // failed).
+        let outcome = job_outcome(&ending, error);
         let _ = emit_app.emit(
             CARD_OS_BUILD_EVENT,
             CardOsBuildResult {
@@ -1294,10 +1570,7 @@ pub fn card_os_build(
                 scratch_left,
             },
         );
-        match error {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
+        outcome
     });
 
     Ok(id)
@@ -1322,6 +1595,269 @@ pub fn card_os_close(
     Ok(CardOsClosed {
         scratch_left: sessions.close(session)?,
     })
+}
+
+// ---------------------------------------------------------------------------
+// Measure (round 4, task 4): sizes and the sizing refusal only — no session,
+// no staging, no free-space question (R1; that stays in `card_os_prepare`,
+// where the staging bytes are real).
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardOsMeasureRequest {
+    pub card_gb: u32,
+    /// The tree, already built (by the OS Builder, into a session opened
+    /// separately). Never a `session` id (R1): this command opens no
+    /// session and touches none.
+    pub tree: String,
+    pub partitions: Vec<PartitionInput>,
+    pub material: Vec<String>,
+    #[serde(default)]
+    pub pfs3_driver: Option<String>,
+    #[serde(default)]
+    pub hst_imager_path: String,
+}
+
+/// A card refusal's `ART-*` code, its English sentence (for the log), and the
+/// typed parameters both catalogues build a sentence from — the same shape
+/// `card_os_build`'s `Refused` and `Failed` endings carry (round 4, task 3).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardRefusal {
+    pub code: String,
+    pub message: String,
+    pub params: BTreeMap<String, String>,
+}
+
+fn card_refusal_from(error: &CoreError) -> CardRefusal {
+    CardRefusal {
+        code: error.code().to_string(),
+        message: error.to_string(),
+        params: error
+            .details()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+    }
+}
+
+pub const CARD_OS_MEASURE_EVENT: &str = "card-os-measure-result";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardOsMeasureResult {
+    pub job_id: JobId,
+    pub measured: Option<MeasuredCard>,
+    /// Anything `measure_card` refused — a size that does not fit, a source
+    /// that cannot be used, a name that needs hst-imager — arrives here, not
+    /// as a failed job: a preview's own refusal is its answer (I3 applies to
+    /// a build, not to asking "would this fit").
+    pub refusal: Option<CardRefusal>,
+}
+
+/// The measurement, without Tauri: a scratch folder for the driver, made and
+/// removed here — `card_os_measure` writes nothing else.
+fn measure_card_command(
+    request: &CardOsMeasureRequest,
+    scratch_root: &Path,
+    clock: &dyn AmigaClock,
+    hst_probe: impl Fn(&Path) -> Result<(), String>,
+    progress: &dyn ProgressSink,
+) -> CoreResult<MeasuredCard> {
+    let hst_imager = match given_path(Some(&request.hst_imager_path)) {
+        None => HstImagerState::NotConfigured,
+        Some(tool) => match hst_probe(&tool) {
+            Ok(()) => HstImagerState::Usable,
+            Err(why) => HstImagerState::Unusable {
+                path: tool.display().to_string(),
+                why,
+            },
+        },
+    };
+    let scratch = OwnedScratch::create_in(scratch_root, "card-os-measure")?;
+    let driver_stage = scratch.path().join(DRIVER);
+    std::fs::create_dir_all(&driver_stage)?;
+
+    let tree = PathBuf::from(request.tree.trim());
+    let material: Vec<PathBuf> = request
+        .material
+        .iter()
+        .filter_map(|m| given_path(Some(m)))
+        .collect();
+    let explicit_driver = given_path(request.pfs3_driver.as_deref());
+
+    let result = measure_card(
+        request.card_gb,
+        &tree,
+        &request.partitions,
+        &material,
+        explicit_driver.as_deref(),
+        &driver_stage,
+        &hst_imager,
+        clock,
+        progress,
+    );
+    // Removed whatever the outcome: nothing of a measurement is kept.
+    if let Err(left) = scratch.finish() {
+        log::warn!("card_os_measure: {} not removed ({})", left.path, left.why);
+    }
+    result
+}
+
+/// Measure a whole card without staging anything. Returns a job id (reading
+/// an archive's listing can be slow); the answer arrives on
+/// [`CARD_OS_MEASURE_EVENT`], as a plan or as a typed refusal — never both,
+/// and the job itself always finishes (a refusal is this command's own
+/// legitimate answer, not a failure of the job that produced it).
+#[tauri::command]
+pub fn card_os_measure(
+    request: CardOsMeasureRequest,
+    app: AppHandle,
+    registry: State<'_, Arc<JobRegistry>>,
+) -> AppResult<JobId> {
+    let root = crate::scratch::root()?;
+    let registry = Arc::clone(&registry);
+    let emit_app = app.clone();
+    let target = request.tree.trim().to_string();
+    let title = JobTitle::new("components.jobBar.title.measureCardOs").text("target", &target);
+
+    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+        let outcome = measure_card_command(
+            &request,
+            &root,
+            &crate::tools::local_time::LOCAL_TIME,
+            |tool: &Path| {
+                HstImager::at(tool)
+                    .probe()
+                    .map(|_| ())
+                    .map_err(|err| err.to_string())
+            },
+            progress,
+        );
+        let result = match outcome {
+            Ok(measured) => CardOsMeasureResult {
+                job_id,
+                measured: Some(measured),
+                refusal: None,
+            },
+            Err(err) => CardOsMeasureResult {
+                job_id,
+                measured: None,
+                refusal: Some(card_refusal_from(&err)),
+            },
+        };
+        let _ = emit_app.emit(CARD_OS_MEASURE_EVENT, result);
+        Ok(())
+    });
+
+    Ok(id)
+}
+
+// ---------------------------------------------------------------------------
+// Classify (round 4, task 4): what a dropped path is as a card source, or
+// why it cannot be one — the same call the drop pipeline makes (Q6),
+// answered synchronously and without opening a session.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClassifiedSource {
+    pub path: String,
+    pub kind: Option<SourceKind>,
+    pub why: Option<UnusableSource>,
+}
+
+/// Classify every path as a card source. Reads a header and a listing, never
+/// a payload — nothing is written, and every path is answered whether or not
+/// an earlier one could not be used.
+#[tauri::command]
+pub fn card_os_classify(paths: Vec<String>) -> Vec<ClassifiedSource> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let classified = classify(Path::new(&path), &crate::tools::local_time::LOCAL_TIME);
+            match classified {
+                Classified::Usable { kind } => ClassifiedSource {
+                    path,
+                    kind: Some(kind),
+                    why: None,
+                },
+                Classified::NotUsable { why } => ClassifiedSource {
+                    path,
+                    kind: None,
+                    why: Some(to_unusable_source(why)),
+                },
+            }
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Check a volume name (round 4, task 4): the core's own AmigaDOS name rule
+// (`core::volume::write::dir::check_name`), replacing `preload.ts`'s two
+// restated copies (Q7) — a third copy would be a third answer.
+// ---------------------------------------------------------------------------
+
+/// Why a name was refused, categorised for the screen's own sentence.
+/// `check_name` itself carries no more than an English message (it refuses
+/// several distinct things through one `CoreError::InvalidInput`), so this
+/// reads the same two conditions it checks first — in the same order, against
+/// the same [`MAX_NAME_LEN`] — and folds every other rule it enforces (a `:`
+/// or `/`, a control character, a character outside Latin-1) into
+/// `ReservedCharacter`: the one rule `check_name` is still solely responsible
+/// for deciding is *whether* a name is legal, never *why* one was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VolumeNameProblem {
+    Empty,
+    TooLong,
+    ReservedCharacter,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeNameVerdict {
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<VolumeNameProblem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The bound `check_name` enforces — **characters, not bytes** (round 4
+    /// final review, minor). It was `max_bytes`, and it never was: the check
+    /// is `name.chars().count() > MAX_NAME_LEN`, and both catalogues' Turkish
+    /// already said *karakter*. Only the field name lied, which is the kind
+    /// of thing the next caller believes.
+    pub max_chars: Option<u32>,
+}
+
+fn volume_name_problem(name: &str) -> VolumeNameProblem {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        VolumeNameProblem::Empty
+    } else if trimmed.chars().count() > MAX_NAME_LEN {
+        VolumeNameProblem::TooLong
+    } else {
+        VolumeNameProblem::ReservedCharacter
+    }
+}
+
+/// Check a volume name against AmigaDOS's own rule. Never re-derived on the
+/// screen (Q7): this calls `check_name` and only categorises the refusal it
+/// already made.
+#[tauri::command]
+pub fn card_os_check_volume_name(name: String) -> VolumeNameVerdict {
+    match check_name(&name) {
+        Ok(_) => VolumeNameVerdict {
+            ok: true,
+            why: None,
+            max_chars: None,
+        },
+        Err(_) => VolumeNameVerdict {
+            ok: false,
+            why: Some(volume_name_problem(&name)),
+            max_chars: Some(MAX_NAME_LEN as u32),
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1645,6 +2181,7 @@ pub(crate) mod test_support {
 mod tests {
     use super::test_support::*;
     use super::*;
+    use crate::core::clock::UtcClock;
     use crate::core::jobs::NoProgress;
     use crate::core::preload::{CopySummary, ToolVersion};
     use std::sync::atomic::AtomicBool;
@@ -1766,6 +2303,7 @@ mod tests {
             &failing,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         assert!(
@@ -1788,6 +2326,14 @@ mod tests {
         // System was formatted and filled before SDH1 failed, and says so.
         assert_eq!(built.steps.len(), 2, "{:?}", built.steps);
         assert!(built.error.is_some());
+
+        // Round 4 Task 1: any other error still ends the job `Other`
+        // (`Failed`, once `into_state` runs), never `Refused` — a failure
+        // partway through is not a refusal decided before harm.
+        match job_outcome(&built.ending, built.error) {
+            JobOutcome::Other(_) => {}
+            other => panic!("expected a plain (failed) outcome, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1805,6 +2351,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &sink,
+            &NoPhaseSink,
         );
 
         assert!(
@@ -1843,6 +2390,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         // I3: a refusal is its own ending, never a failure.
@@ -1856,6 +2404,14 @@ mod tests {
         assert_eq!(built.partial, PartialRemoval::NotCreated);
         assert!(!partial_path_for(&image).exists() && !image.exists());
         assert_eq!(listing(&tree), before, "the tree is unchanged");
+
+        // Round 4 Task 1: the job bar's own fourth ending — the refusal
+        // `ending_for` already decided reaches the job outcome unchanged,
+        // carrying the refusal's own code, never a generic one.
+        match job_outcome(&built.ending, built.error) {
+            JobOutcome::Refused(err) => assert_eq!(err.code(), "ART-KICKSTART-NOT-PROPOSED"),
+            other => panic!("expected a refused outcome, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1875,6 +2431,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         // M11: the archive's own refusal, not any Card-phase ending.
@@ -1883,6 +2440,7 @@ mod tests {
                 phase: BuildPhase::Card,
                 code,
                 message,
+                ..
             } => {
                 assert_eq!(code, built.error.as_ref().unwrap().code());
                 assert!(message.contains("not-there.zip"), "{message}");
@@ -1965,12 +2523,14 @@ mod tests {
                 &NativeFormatter::UTC,
                 fallback,
                 &NoProgress,
+                &NoPhaseSink,
             );
             match &built.ending {
                 CardOsEnding::Refused {
                     phase: BuildPhase::Partitions,
                     code,
                     message,
+                    ..
                 } => {
                     assert_eq!(code, "ART-HST-IMAGER-UNUSABLE", "{arm}");
                     assert!(message.contains("Stuff"), "{arm}: {message}");
@@ -2025,6 +2585,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         match &built.ending {
@@ -2032,10 +2593,14 @@ mod tests {
                 phase: BuildPhase::Whdload,
                 code,
                 message,
+                params,
             } => {
                 assert_eq!(code, "ART-KICKSTART-SOURCE-CHANGED", "{message}");
                 assert!(message.contains(&rom.display().to_string()), "{message}");
                 assert!(message.contains("prepare the card again"), "{message}");
+                // Round 4, task 3: the same facts, typed, for the screen.
+                assert_eq!(params.get("name"), Some(&"kick34005.A500".to_string()));
+                assert_eq!(params.get("path"), Some(&rom.display().to_string()));
             }
             other => panic!("expected a Whdload refusal, got {other:?}"),
         }
@@ -2085,6 +2650,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &sink,
+            &NoPhaseSink,
         );
 
         assert!(
@@ -2155,6 +2721,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
 
         match &built.ending {
@@ -2275,6 +2842,7 @@ mod tests {
                     phase: BuildPhase::Card,
                     code: "ART-X".into(),
                     message: "x".into(),
+                    params: BTreeMap::new(),
                 },
                 PartialRemoval::NotCreated,
             ),
@@ -2293,6 +2861,114 @@ mod tests {
             writer_name("1.6.616+a91fa4ca"),
             "hst-imager 1.6.616+a91fa4ca"
         );
+    }
+
+    /// **Every refusal the preparation can raise ends the job refused, and
+    /// nothing else does** (round 4 final review, C2).
+    ///
+    /// `card_os_prepare` used plain `spawn_job`, so `JobOutcome::from` routed
+    /// every `Err` to `JobState::Failed` — and all but three of the card's
+    /// `ART-*` refusals are raised in here, not in the build. The list below
+    /// is the family the user can act on, each checked as the state it really
+    /// ends with rather than as a bare boolean, and an I/O error beside it
+    /// shown still failing: a predicate that answered `true` for everything
+    /// would satisfy half a test and break the distinction the round exists
+    /// for.
+    #[test]
+    fn a_preparation_s_own_refusals_end_the_job_refused_and_an_io_error_does_not() {
+        let refusals = [
+            CoreError::CardSourceUnusable {
+                partition: "Games".into(),
+                source_path: "E:\\demos".into(),
+                why: UnusableSource::Missing,
+            },
+            CoreError::CardDoesNotFit(crate::core::error::SizingRefusal::CardTooSmall {
+                card_gb: 8,
+            }),
+            CoreError::Pfs3DriverNotFound {
+                searched: vec!["E:\\media".into()],
+                unreadable: vec![],
+            },
+            CoreError::CardNamesNeedHstImager {
+                partition: "Games".into(),
+                paths: vec!["türkçe".into()],
+                more: 0,
+            },
+            CoreError::NotEnoughSpace {
+                place: "E:\\".into(),
+                needed: 2,
+                available: 1,
+                what: crate::core::error::SpacePlace::Image,
+            },
+            CoreError::CardPartitionTooManyEntries {
+                partition: "Games".into(),
+                entries: 2,
+                bound: 1,
+            },
+            CoreError::WhdloadNotFound {
+                titles: 3,
+                searched: vec!["E:\\media".into()],
+            },
+        ];
+        for err in refusals {
+            let code = err.code().to_string();
+            let message = err.to_string();
+            assert!(prepare_refused(&err), "{code} must be a refusal");
+            assert_eq!(
+                JobOutcome::Refused(err).into_state(),
+                crate::core::jobs::JobState::Refused { code, message },
+            );
+        }
+
+        let failure = CoreError::Io(std::io::Error::other("the disk is unreadable"));
+        assert!(
+            !prepare_refused(&failure),
+            "an I/O error is a failure, not a refusal"
+        );
+        assert!(matches!(
+            JobOutcome::Other(failure).into_state(),
+            crate::core::jobs::JobState::Failed { .. }
+        ));
+    }
+
+    /// **Only a refusal is answered on the prepare event** (round 4 fix-wave
+    /// re-review, N2).
+    ///
+    /// The Err arm used to emit `refusal: Some(card_refusal_from(&err))` for
+    /// every error, including the ones `prepare_refused` deliberately
+    /// excludes, and `useCardOsRun` branches on that field's presence alone.
+    /// So an `Io` raised while staging was drawn as a refusal, with the
+    /// refusal's next step (*fix what it names and press Build again*), while
+    /// the job the same command spawned ended `Failed` and the job bar said
+    /// so. Two endings, one run, and the screen out-claiming the core.
+    ///
+    /// The case above pins the *job state*; this one pins what travels on the
+    /// event, which is what the row says. A predicate that answered `Some`
+    /// for everything — the defect verbatim — fails the second half.
+    #[test]
+    fn only_a_refusal_travels_on_the_prepare_event() {
+        let refusal = CoreError::CardSourceUnusable {
+            partition: "Games".into(),
+            source_path: "E:\\demos".into(),
+            why: UnusableSource::Missing,
+        };
+        let said = prepare_refusal_event(&refusal).expect("a refusal is the preparation's answer");
+        assert_eq!(said.code, "ART-CARD-SOURCE-UNUSABLE");
+        assert_eq!(
+            said.params.get("partition").map(String::as_str),
+            Some("Games")
+        );
+
+        for failure in [
+            CoreError::Io(std::io::Error::other("the disk is unreadable")),
+            CoreError::NonUtf8Path,
+        ] {
+            assert!(
+                prepare_refusal_event(&failure).is_none(),
+                "{} is a failure: it must reach the screen as one",
+                failure.code()
+            );
+        }
     }
 
     /// M7: an image path the screen did not fill in, or one relative to
@@ -2433,6 +3109,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
         assert!(
             matches!(built.ending, CardOsEnding::Succeeded),
@@ -2533,6 +3210,108 @@ mod tests {
         );
     }
 
+    /// One `phase()` call: what phase, how far, out of what, in what unit.
+    type PhaseEvent = (CardOsPhase, u64, Option<u64>, PhaseUnit);
+
+    /// Records every `phase()` call, in the order it arrived — Task 2's own
+    /// double, so a build can be driven without Tauri and still checked for
+    /// what it told the screen.
+    #[derive(Default)]
+    struct RecordingPhaseSink {
+        events: Mutex<Vec<PhaseEvent>>,
+    }
+
+    impl PhaseSink for RecordingPhaseSink {
+        fn phase(&self, phase: CardOsPhase, done: u64, total: Option<u64>, unit: PhaseUnit) {
+            self.events.lock().unwrap().push((phase, done, total, unit));
+        }
+    }
+
+    /// Task 2: a whole build tells the screen its four phases, in order, with
+    /// counts that never exceed their total and never a `total` of `0`
+    /// standing in for "unknown" (the bar rule, T §1.4) — and nothing arrives
+    /// after `build_card_os` has returned its ending.
+    #[test]
+    fn a_build_reports_its_four_phases_in_order_with_counts_that_never_exceed_their_total() {
+        let (_guard, dir) = scratch("phase-events");
+        let (prepared, tree) = small_prepared_card(&dir);
+        let image = dir.join("card.img");
+        let sink = RecordingPhaseSink::default();
+
+        let built = build_card_os(
+            &prepared,
+            &tree,
+            &image,
+            &request_agreeing(&dir, &["kick34005.A500"]),
+            &NativeFormatter::UTC,
+            None,
+            &NoProgress,
+            &sink,
+        );
+        assert!(
+            matches!(built.ending, CardOsEnding::Succeeded),
+            "{:?} {:?}",
+            built.ending,
+            built.error
+        );
+
+        let events = sink.events.into_inner().unwrap();
+        assert!(!events.is_empty(), "a whole build must report something");
+
+        // Exactly one phase-start (done: 0) per phase, in this order — a
+        // reversal is a defect the screen would show as going backwards.
+        let starts: Vec<CardOsPhase> = events
+            .iter()
+            .filter(|(_, done, ..)| *done == 0)
+            .map(|(phase, ..)| *phase)
+            .collect();
+        assert_eq!(
+            starts,
+            vec![
+                CardOsPhase::Whdload,
+                CardOsPhase::Card,
+                CardOsPhase::Partitions,
+                CardOsPhase::Check,
+            ],
+            "{events:?}"
+        );
+
+        // The bar rule: a `total` is either unknown (`None`) or a real,
+        // positive count — never `Some(0)` standing in for "unknown" — and a
+        // `done` never runs ahead of its own `total`.
+        for (phase, done, total, _unit) in &events {
+            if let Some(total) = total {
+                assert_ne!(
+                    *total, 0,
+                    "{phase:?}: 0 must be None, not a total: {events:?}"
+                );
+                assert!(
+                    done <= total,
+                    "{phase:?}: {done} exceeds {total}: {events:?}"
+                );
+            }
+        }
+
+        // The Check phase counted each of the card's four partitions in
+        // turn, ending at the total it opened with.
+        let check: Vec<(u64, Option<u64>)> = events
+            .iter()
+            .filter(|(phase, ..)| *phase == CardOsPhase::Check)
+            .map(|(_, done, total, _)| (*done, *total))
+            .collect();
+        assert_eq!(
+            check,
+            vec![
+                (0, Some(4)),
+                (1, Some(4)),
+                (2, Some(4)),
+                (3, Some(4)),
+                (4, Some(4)),
+            ],
+            "{events:?}"
+        );
+    }
+
     /// Decision 1, the other direction: a Kickstart the proposal supplies but
     /// the user did not agree to never reaches the card.
     #[test]
@@ -2559,6 +3338,7 @@ mod tests {
             &NativeFormatter::UTC,
             None,
             &NoProgress,
+            &NoPhaseSink,
         );
         assert!(
             matches!(built.ending, CardOsEnding::Succeeded),
@@ -2623,6 +3403,7 @@ mod tests {
                 tool: tool as &dyn VolumeFormatter,
             }),
             &NoProgress,
+            &NoPhaseSink,
         );
         assert!(
             matches!(built.ending, CardOsEnding::Succeeded),
@@ -2671,5 +3452,228 @@ mod tests {
         )
         .unwrap();
         println!("wrote {} and {}", image.display(), listing_path.display());
+    }
+
+    // -----------------------------------------------------------------------
+    // Round 4, task 4: measure, classify, check a volume name.
+    // -----------------------------------------------------------------------
+
+    /// System's tree and one small `Games` folder — a card `measure_card`
+    /// answers for at 16 GB and refuses at 1 GB, the same set both times (one
+    /// variable: `card_gb`).
+    fn small_measure_request(dir: &Path, card_gb: u32) -> CardOsMeasureRequest {
+        let tree = small_tree(dir);
+        let material = material_with_driver(dir);
+        let games = folder_with(dir, "Games", &[("Turrican/readme", b"not a slave\n")]);
+        CardOsMeasureRequest {
+            card_gb,
+            tree: tree.display().to_string(),
+            partitions: vec![PartitionInput {
+                volume_name: "Games".into(),
+                sources: vec![games],
+                floor_bytes: 0,
+            }],
+            material: vec![material.display().to_string()],
+            pfs3_driver: None,
+            hst_imager_path: String::new(),
+        }
+    }
+
+    fn usable_hst_probe(_tool: &Path) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[test]
+    fn a_measurement_answers_a_plan_for_a_small_card_that_fits() {
+        let (_guard, dir) = scratch("measure-fits");
+        let request = small_measure_request(&dir, 16);
+        let scratch_root = dir.join("scratch-root");
+        std::fs::create_dir_all(&scratch_root).unwrap();
+
+        let measured = measure_card_command(
+            &request,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap();
+
+        assert_eq!(measured.system.drive_name, "SDH0");
+        assert_eq!(measured.partitions[0].volume_name, "Games");
+        assert!(
+            !measured.plan.partitions.is_empty(),
+            "a plan came back with the card"
+        );
+    }
+
+    /// The same partitions past the card's own size: `measure_card` refuses
+    /// with `ART-CARD-DOES-NOT-FIT`, typed (not a bare string), and answers
+    /// no plan.
+    #[test]
+    fn a_measurement_past_the_card_s_size_is_refused_typed_and_answers_no_plan() {
+        let (_guard, dir) = scratch("measure-too-small");
+        let request = small_measure_request(&dir, 1);
+        let scratch_root = dir.join("scratch-root");
+        std::fs::create_dir_all(&scratch_root).unwrap();
+
+        let err = measure_card_command(
+            &request,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap_err();
+
+        assert_eq!(err.code(), "ART-CARD-DOES-NOT-FIT", "{err}");
+        let refusal = card_refusal_from(&err);
+        assert_eq!(refusal.code, "ART-CARD-DOES-NOT-FIT");
+        assert!(!refusal.message.is_empty());
+    }
+
+    /// `measure_card` writes only a driver-unpacking folder, and
+    /// `measure_card_command` removes it before answering — whether it
+    /// succeeded or was refused. Nothing else is created: no `staging`, no
+    /// `tree` of its own (round 4, task 4's own guard; the mutation in the
+    /// task report points it at `stage_card`'s folders instead).
+    #[test]
+    fn a_measurement_leaves_nothing_behind_on_success_or_on_refusal() {
+        let (_guard, dir) = scratch("measure-clean");
+        let scratch_root = dir.join("scratch-root");
+        std::fs::create_dir_all(&scratch_root).unwrap();
+
+        let fits = small_measure_request(&dir, 16);
+        measure_card_command(
+            &fits,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_dir(&scratch_root).unwrap().count(),
+            0,
+            "nothing was left behind by a successful measurement"
+        );
+
+        let refused = small_measure_request(&dir, 1);
+        measure_card_command(
+            &refused,
+            &scratch_root,
+            &UtcClock,
+            usable_hst_probe,
+            &NoProgress,
+        )
+        .unwrap_err();
+        assert_eq!(
+            std::fs::read_dir(&scratch_root).unwrap().count(),
+            0,
+            "nothing was left behind by a refused measurement"
+        );
+        assert!(!scratch_root.join(STAGING).exists(), "no staging folder");
+    }
+
+    /// Every path answered, whichever it is: a folder, an archive, a WHDLoad
+    /// hardfile, a floppy image, and one that is none of those — never a bare
+    /// string, always the typed `SourceKind` or `UnusableSource`.
+    #[test]
+    fn classify_answers_every_path_as_a_card_source_or_why_not() {
+        let (_guard, dir) = scratch("classify");
+        let folder = folder_with(&dir, "Stuff", &[("readme", b"x")]);
+        let archive = dir.join("pack.lha");
+        std::fs::write(
+            &archive,
+            crate::core::lha::tests::make_lha_with(&[("Pack/file", b"x")]),
+        )
+        .unwrap();
+        let hdf = dir.join("Turrican.hdf");
+        let slave = crate::core::gameindex::readers::slave::tests_support::build_slave(
+            "Turrican", "2026 ART", 16,
+        );
+        crate::core::cardos::content::test_support::build_hdf(
+            &hdf,
+            &["C", "S", "Turrican"],
+            &[
+                ("C/WHDLoad", &whdload_bytes("18.0")),
+                ("S/Startup-Sequence", b"WHDLoad Turrican.slave\n"),
+                ("Turrican/Turrican.slave", &slave),
+                ("Turrican.info", b"icon"),
+            ],
+        );
+        let adf = dir.join("disk.adf");
+        std::fs::write(&adf, vec![0u8; 901_120]).unwrap();
+        let text = dir.join("notes.txt");
+        std::fs::write(&text, b"just notes\n").unwrap();
+        let missing = dir.join("NotThere");
+
+        let paths = [&folder, &archive, &hdf, &adf, &text, &missing]
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>();
+
+        let answers = card_os_classify(paths.clone());
+
+        assert_eq!(answers.len(), 6, "one answer per path");
+        assert_eq!(answers[0].path, paths[0]);
+        assert_eq!(answers[0].kind, Some(SourceKind::Folder));
+        assert_eq!(answers[0].why, None);
+        assert_eq!(
+            answers[1].kind,
+            Some(SourceKind::Archive {
+                format: "lha".into()
+            })
+        );
+        assert_eq!(answers[2].kind, Some(SourceKind::WhdloadHardfile));
+        assert_eq!(answers[3].kind, Some(SourceKind::Adf));
+        assert_eq!(answers[4].kind, None);
+        assert_eq!(
+            answers[4].why,
+            Some(UnusableSource::NotAnAmigaSource {
+                format_hint: "unknown".into()
+            })
+        );
+        assert_eq!(answers[5].kind, None);
+        assert_eq!(answers[5].why, Some(UnusableSource::Missing));
+    }
+
+    /// The core's own AmigaDOS name rule, never re-derived on the screen:
+    /// `Games` is accepted; `Work:1` (a reserved character), an empty name
+    /// and a 31-character name are each refused, typed and with the bound.
+    #[test]
+    fn check_volume_name_accepts_a_good_name_and_types_every_refusal() {
+        assert_eq!(
+            card_os_check_volume_name("Games".into()),
+            VolumeNameVerdict {
+                ok: true,
+                why: None,
+                max_chars: None,
+            }
+        );
+        assert_eq!(
+            card_os_check_volume_name("Work:1".into()),
+            VolumeNameVerdict {
+                ok: false,
+                why: Some(VolumeNameProblem::ReservedCharacter),
+                max_chars: Some(30),
+            }
+        );
+        assert_eq!(
+            card_os_check_volume_name("".into()),
+            VolumeNameVerdict {
+                ok: false,
+                why: Some(VolumeNameProblem::Empty),
+                max_chars: Some(30),
+            }
+        );
+        assert_eq!(
+            card_os_check_volume_name("a".repeat(31)),
+            VolumeNameVerdict {
+                ok: false,
+                why: Some(VolumeNameProblem::TooLong),
+                max_chars: Some(30),
+            }
+        );
     }
 }

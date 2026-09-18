@@ -60,6 +60,69 @@ pub enum SizingRefusal {
     },
 }
 
+impl SizingRefusal {
+    /// The parameters a screen needs for `CoreError::CardDoesNotFit`
+    /// (round 4, task 3). `kind` is the same tag [`Self`]'s own `Serialize`
+    /// would write under `refusal`.
+    fn details(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::DoesNotFit {
+                needed,
+                available,
+                largest,
+            } => {
+                let mut d = vec![
+                    ("kind", "does-not-fit".to_string()),
+                    ("needed", needed.to_string()),
+                    ("available", available.to_string()),
+                ];
+                if let Some(largest) = largest {
+                    d.push(("largest", largest.clone()));
+                }
+                d
+            }
+            Self::PartitionTooLarge { volume_name, bytes } => vec![
+                ("kind", "partition-too-large".to_string()),
+                ("volumeName", volume_name.clone()),
+                ("bytes", bytes.to_string()),
+            ],
+            Self::CardTooSmall { card_gb } => vec![
+                ("kind", "card-too-small".to_string()),
+                ("cardGb", card_gb.to_string()),
+            ],
+            Self::PartitionContentDoesNotFit {
+                volume_name,
+                needed_blocks,
+                available_blocks,
+            } => vec![
+                ("kind", "partition-content-does-not-fit".to_string()),
+                ("volumeName", volume_name.clone()),
+                ("neededBlocks", needed_blocks.to_string()),
+                ("availableBlocks", available_blocks.to_string()),
+            ],
+            Self::SystemAdditionsDoNotFit {
+                needed_blocks,
+                available_blocks,
+                tree_blocks,
+                whdload,
+                kickstarts,
+            } => {
+                let mut d = vec![
+                    ("kind", "system-additions-do-not-fit".to_string()),
+                    ("neededBlocks", needed_blocks.to_string()),
+                    ("availableBlocks", available_blocks.to_string()),
+                    ("treeBlocks", tree_blocks.to_string()),
+                    ("kickstarts", kickstarts.join(", ")),
+                ];
+                if let Some(whdload) = whdload {
+                    d.push(("whdload", whdload.clone()));
+                }
+                d
+            }
+        }
+    }
+}
+
 /// Which of a card build's places a free-space refusal is about — each has
 /// its own next step: the image's folder is chosen on the card screen, the
 /// scratch folder in Settings.
@@ -70,6 +133,162 @@ pub enum SpacePlace {
     Scratch,
     /// The image and the scratch folder are on one volume, summed.
     ImageAndScratch,
+}
+
+impl SpacePlace {
+    /// The tag [`Self`]'s own `Serialize` would write.
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Scratch => "scratch",
+            Self::ImageAndScratch => "image-and-scratch",
+        }
+    }
+}
+
+/// Why one of a card partition's sources cannot be used
+/// (`CoreError::CardSourceUnusable`). Declared here, not in `core::cardos`
+/// (round 4, task 3): this module sits below every other `core/` module and
+/// `core::independence` forbids it importing upward. `core::cardos::content`
+/// declares its own `Unusable`, with the same five reasons a real source is
+/// classified into, and `core::cardos::prepare` maps one onto the other at
+/// the boundary. `NotAFolder` has no `content::Unusable` counterpart — it is
+/// `measure_card`'s own check that a partition's sources are a folder, said
+/// before `content::classify` is ever asked.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "reason",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum UnusableSource {
+    Missing,
+    Unreadable { detail: String },
+    ArchiveUnreadable { detail: String },
+    HardfileNotWhdload { detail: String },
+    NotAnAmigaSource { format_hint: String },
+    NotAFolder,
+}
+
+impl UnusableSource {
+    /// The parameters a screen needs to say this reason in its own language
+    /// — `reason` is the same tag [`Self`]'s own `Serialize` would write, so
+    /// the two never drift apart silently.
+    fn details(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::Missing => vec![("reason", "missing".to_string())],
+            Self::Unreadable { detail } => {
+                vec![
+                    ("reason", "unreadable".to_string()),
+                    ("detail", detail.clone()),
+                ]
+            }
+            Self::ArchiveUnreadable { detail } => vec![
+                ("reason", "archive-unreadable".to_string()),
+                ("detail", detail.clone()),
+            ],
+            Self::HardfileNotWhdload { detail } => vec![
+                ("reason", "hardfile-not-whdload".to_string()),
+                ("detail", detail.clone()),
+            ],
+            Self::NotAnAmigaSource { format_hint } => vec![
+                ("reason", "not-an-amiga-source".to_string()),
+                ("detail", format_hint.clone()),
+            ],
+            Self::NotAFolder => vec![("reason", "not-a-folder".to_string())],
+        }
+    }
+}
+
+/// Why a Kickstart name the caller agreed to cannot be placed — **typed, not
+/// prose** (round 4 final review, minor: *one English clause is the
+/// sentence*).
+///
+/// `KickstartNotProposed.why` used to be a `String`, and the catalogue
+/// interpolated it: the Turkish sentence read *"… değil (its .RTB was not
+/// found in any material folder — put Aminet util/boot/skick346 in one)"* —
+/// the actionable half, in English, inside the parentheses meant for an
+/// aside. There are exactly three reasons and all three are ART's own, so
+/// each gets its own tag and its own sentence in both catalogues. `package`
+/// is the one value a user acts on.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "reason",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum KickstartNotProposedWhy {
+    /// The proposal holds no item under this name at all.
+    NotNamed,
+    /// Named, but never offered: nothing in the collection matches it.
+    NotOffered,
+    /// Offered, but its `.RTB` was not found — and this is where to get it.
+    RtbMissing { package: String },
+}
+
+impl KickstartNotProposedWhy {
+    /// The typed parameters the screen builds its own sentence from.
+    fn details(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::NotNamed => vec![("reason", "not-named".to_string())],
+            Self::NotOffered => vec![("reason", "not-offered".to_string())],
+            Self::RtbMissing { package } => vec![
+                ("reason", "rtb-missing".to_string()),
+                ("package", package.clone()),
+            ],
+        }
+    }
+}
+
+/// The English clause inside [`CoreError::KickstartNotProposed`]'s sentence —
+/// unchanged from when it was a `String`, because that sentence is what the
+/// operation log keeps.
+impl std::fmt::Display for KickstartNotProposedWhy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotNamed => write!(f, "ART's proposal does not name it"),
+            Self::NotOffered => write!(
+                f,
+                "ART did not offer it — nothing in the collection matches it"
+            ),
+            Self::RtbMissing { package } => write!(
+                f,
+                "its .RTB was not found in any material folder — put {package} in one"
+            ),
+        }
+    }
+}
+
+/// The sentence for a source's [`UnusableSource`] reason, said inside
+/// [`CoreError::CardSourceUnusable`] — kept apart from that variant's other
+/// two fields because it is also what the operation log gets through
+/// `Display` (round 4, task 3: the English wording is unchanged from round
+/// 3's `core::cardos::prepare::unusable_sentence`, which this replaces).
+fn unusable_sentence(why: &UnusableSource) -> String {
+    match why {
+        UnusableSource::Missing => "it does not exist".to_string(),
+        UnusableSource::Unreadable { detail } => format!("ART could not read it ({detail})"),
+        UnusableSource::ArchiveUnreadable { detail } => {
+            format!("ART could not read the archive ({detail})")
+        }
+        UnusableSource::HardfileNotWhdload { detail } => detail.clone(),
+        UnusableSource::NotAnAmigaSource { format_hint } => format!(
+            "it is not a folder, an archive, a WHDLoad hardfile or a floppy image ({format_hint})"
+        ),
+        UnusableSource::NotAFolder => "the System tree must be a folder".to_string(),
+    }
+}
+
+/// The sentence for [`CoreError::CardSourceUnusable`].
+fn card_source_unusable_message(
+    source_path: &str,
+    partition: &str,
+    why: &UnusableSource,
+) -> String {
+    format!(
+        "'{source_path}' in {partition} cannot be used: {}. Remove it from {partition} or fix it.",
+        unusable_sentence(why)
+    )
 }
 
 /// The most items a card refusal lists by name before it says "and N more".
@@ -750,20 +969,22 @@ pub enum CoreError {
         "'{name}' cannot be placed: {why}. Prepare the card again and agree only to what the \
          proposal offers."
     )]
-    KickstartNotProposed { name: String, why: String },
+    KickstartNotProposed {
+        name: String,
+        why: KickstartNotProposedWhy,
+    },
 
     /// One of a card partition's sources cannot be used
-    /// (`core::cardos::prepare::measure_card`). `why` is the sentence for the
-    /// source's `Unusable` reason, rendered by `core::cardos` — this module
-    /// sits below `core/cardos` and does not import its types (ART-339).
-    #[error(
-        "'{source_path}' in {partition} cannot be used: {why}. Remove it from {partition} or fix \
-         it."
-    )]
+    /// (`core::cardos::prepare::measure_card`). `why` is the typed reason
+    /// (round 4, task 3 — this reverses round 3's ruling that it was prose):
+    /// `core::cardos::prepare` maps its own `content::Unusable` onto
+    /// [`UnusableSource`] at the boundary, because this module sits below
+    /// `core/cardos` and does not import its types (ART-339).
+    #[error("{}", card_source_unusable_message(source_path, partition, why))]
     CardSourceUnusable {
         partition: String,
         source_path: String,
-        why: String,
+        why: UnusableSource,
     },
 
     /// A card partition holds non-ASCII names and no hst-imager is set up:
@@ -817,8 +1038,8 @@ pub enum CoreError {
     /// of ART-343). The file the user agreed to is the file placed, so the
     /// build is refused before anything is written.
     #[error(
-        "'{name}' cannot be placed: '{path}' {why} since the card was prepared. Nothing was \
-         written — prepare the card again, so the proposal offers what is there now."
+        "'{name}' cannot be placed: '{path}' {why}. Nothing was written — prepare the card \
+         again, so the proposal offers what is there now."
     )]
     KickstartSourceChanged {
         name: String,
@@ -1144,6 +1365,97 @@ impl CoreError {
         }
     }
 
+    /// The typed parameters behind this refusal's sentence — the card
+    /// screens' own catalogue key builds a Turkish sentence from these
+    /// instead of carrying Rust's English prose (round 4, task 3, reversing
+    /// round 3's ruling that `CardSourceUnusable.why` is prose). Every card
+    /// error names in
+    /// `.superpowers/sdd/2026-09-17-card-round-4/research-tree.md` §2.5 has
+    /// its own arm; everything else answers empty, which is never worse than
+    /// today (`errors.verbatim` still has the English).
+    pub fn details(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::PartialImageExists { path } => vec![("path", path.clone())],
+            Self::Pfs3DriverNotFound {
+                searched,
+                unreadable,
+            } => vec![
+                ("searched", searched.join(", ")),
+                ("unreadable", unreadable.join(", ")),
+            ],
+            Self::WhdloadNotFound { titles, searched } => vec![
+                ("titles", titles.to_string()),
+                ("searched", searched.join(", ")),
+            ],
+            Self::KickstartNotProposed { name, why } => {
+                let mut d = vec![("name", name.clone())];
+                d.extend(why.details());
+                d
+            }
+            Self::CardSourceUnusable {
+                partition,
+                source_path,
+                why,
+            } => {
+                let mut d = vec![
+                    ("partition", partition.clone()),
+                    ("source", source_path.clone()),
+                ];
+                d.extend(why.details());
+                d
+            }
+            Self::CardNamesNeedHstImager {
+                partition,
+                paths,
+                more,
+            } => vec![
+                ("partition", partition.clone()),
+                ("paths", paths.join(", ")),
+                ("more", more.to_string()),
+            ],
+            Self::CardDoesNotFit(refusal) => refusal.details(),
+            Self::NotEnoughSpace {
+                place,
+                needed,
+                available,
+                what,
+            } => vec![
+                ("place", place.clone()),
+                ("needed", needed.to_string()),
+                ("available", available.to_string()),
+                ("what", what.tag().to_string()),
+            ],
+            Self::CardCheckFailed { failures, checks } => vec![
+                ("failures", failures.to_string()),
+                ("checks", checks.clone()),
+            ],
+            Self::HstImagerUnusable {
+                partitions,
+                path,
+                why,
+            } => vec![
+                ("partitions", partitions.join(", ")),
+                ("path", path.clone()),
+                ("why", why.clone()),
+            ],
+            Self::KickstartSourceChanged { name, path, why } => vec![
+                ("name", name.clone()),
+                ("path", path.clone()),
+                ("why", why.clone()),
+            ],
+            Self::CardPartitionTooManyEntries {
+                partition,
+                entries,
+                bound,
+            } => vec![
+                ("partition", partition.clone()),
+                ("entries", entries.to_string()),
+                ("bound", bound.to_string()),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
     /// The message a user should see: what went wrong, then how to refer to it.
     ///
     /// Technical detail belongs in the log, not in front of the user (§68).
@@ -1362,12 +1674,14 @@ mod tests {
             },
             CoreError::KickstartNotProposed {
                 name: "x".into(),
-                why: "x".into(),
+                why: KickstartNotProposedWhy::RtbMissing {
+                    package: "Aminet util/boot/skick346".into(),
+                },
             },
             CoreError::CardSourceUnusable {
                 partition: "x".into(),
                 source_path: "x".into(),
-                why: "x".into(),
+                why: UnusableSource::Missing,
             },
             CoreError::CardNamesNeedHstImager {
                 partition: "x".into(),
@@ -1421,6 +1735,113 @@ mod tests {
         let msg = e.user_message();
         assert!(msg.contains("the original was not modified"));
         assert!(msg.contains("Error ID: ART-SAFETY-REFUSED"));
+    }
+
+    /// Round 4, task 3, step 1 (RED): a source that does not exist refuses
+    /// typed — `why` is `UnusableSource::Missing`, not a sentence — and
+    /// `details()` carries `partition` and `source` for the screen, while the
+    /// English sentence (round 3's own wording) is unchanged for the log.
+    #[test]
+    fn a_missing_card_source_refuses_typed_and_the_sentence_is_unchanged() {
+        let err = CoreError::CardSourceUnusable {
+            partition: "Games".into(),
+            source_path: "E:\\amiga\\NotThere".into(),
+            why: UnusableSource::Missing,
+        };
+        match &err {
+            CoreError::CardSourceUnusable { why, .. } => assert_eq!(*why, UnusableSource::Missing),
+            other => panic!("expected CardSourceUnusable, got {other:?}"),
+        }
+
+        let details = err.details();
+        assert!(
+            details.contains(&("partition", "Games".to_string())),
+            "{details:?}"
+        );
+        assert!(
+            details.contains(&("source", "E:\\amiga\\NotThere".to_string())),
+            "{details:?}"
+        );
+        assert!(
+            details.contains(&("reason", "missing".to_string())),
+            "{details:?}"
+        );
+
+        let msg = err.to_string();
+        assert_eq!(
+            msg,
+            "'E:\\amiga\\NotThere' in Games cannot be used: it does not exist. Remove it from \
+             Games or fix it."
+        );
+    }
+
+    /// Every card error round 4 task 3 names gets typed parameters — a
+    /// `details()` that answered empty would leave the screen with nothing
+    /// to build a Turkish sentence from, which is exactly the regression the
+    /// mutation below puts back.
+    #[test]
+    fn every_card_error_s_details_are_not_empty() {
+        let errors = [
+            CoreError::PartialImageExists { path: "x".into() },
+            CoreError::Pfs3DriverNotFound {
+                searched: vec!["x".into()],
+                unreadable: vec![],
+            },
+            CoreError::WhdloadNotFound {
+                titles: 1,
+                searched: vec!["x".into()],
+            },
+            CoreError::KickstartNotProposed {
+                name: "x".into(),
+                why: KickstartNotProposedWhy::RtbMissing {
+                    package: "Aminet util/boot/skick346".into(),
+                },
+            },
+            CoreError::CardSourceUnusable {
+                partition: "x".into(),
+                source_path: "x".into(),
+                why: UnusableSource::Unreadable { detail: "x".into() },
+            },
+            CoreError::CardNamesNeedHstImager {
+                partition: "x".into(),
+                paths: vec!["x".into()],
+                more: 0,
+            },
+            CoreError::CardDoesNotFit(SizingRefusal::CardTooSmall { card_gb: 1 }),
+            CoreError::NotEnoughSpace {
+                place: "x".into(),
+                needed: 2,
+                available: 1,
+                what: SpacePlace::Image,
+            },
+            CoreError::CardCheckFailed {
+                failures: 1,
+                checks: "x".into(),
+            },
+            CoreError::HstImagerUnusable {
+                partitions: vec!["x".into()],
+                path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::KickstartSourceChanged {
+                name: "x".into(),
+                path: "x".into(),
+                why: "x".into(),
+            },
+            CoreError::CardPartitionTooManyEntries {
+                partition: "x".into(),
+                entries: 2,
+                bound: 1,
+            },
+        ];
+        for err in &errors {
+            assert!(
+                !err.details().is_empty(),
+                "{} ({}) answered no details",
+                err.code(),
+                err
+            );
+        }
     }
 
     /// Every offending path named, the true total (bounded names plus the

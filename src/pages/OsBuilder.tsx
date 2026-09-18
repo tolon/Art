@@ -27,8 +27,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 
+import { cardImageBytes } from "@/lib/cardBuild";
 import {
   distroCheckCard,
   distroMeasureImage,
@@ -45,15 +46,17 @@ import {
   minCardBytes,
   whatYouSupply,
 } from "@/lib/osBuilder";
+import type { DropContext } from "@/lib/dropContext";
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { kindLabelKey, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps";
+import { kindLabelKey, kindOffered, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps";
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
 import { BuildBar } from "@/pages/osbuilder/BuildBar";
 import { useRunLock } from "@/lib/runLock";
+import { usePowerMode } from "@/lib/uxmode";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -83,6 +86,24 @@ export function OsBuilder() {
    * that sets it.
    */
   const { running } = useRunLock();
+
+  /**
+   * **The shell forwards the drop context; an `<Outlet/>` with no `context`
+   * prop erases it** (round 4 final review, C1).
+   *
+   * This is not "the value happens not to be inherited". react-router's
+   * `useOutlet` (7.18.2) wraps the child it renders in
+   * `<OutletContext.Provider value={context}>` **unconditionally**, so an
+   * `<Outlet />` written without the prop actively provides `undefined` to
+   * everything below it — shadowing the Layout's own value, which is one
+   * provider higher. `CardSection`'s per-row drop and `CardBuilder`'s intake
+   * both read that context, and both read `{}` in the running app while every
+   * test mocked `useOutletContext` and crossed nothing.
+   * `src/pages/osbuilder/dropContext.test.tsx` renders this route tree with no
+   * router API mocked at all, which is the only shape of test that could have
+   * caught it.
+   */
+  const dropContext = useOutletContext<DropContext | undefined>();
 
   // A disc dropped on the drop panel routes here (`os.install-from-disc`)
   // carrying the file in router state. Under sub-routes the shell has to
@@ -143,7 +164,7 @@ export function OsBuilder() {
         )}
       </nav>
 
-      <Outlet />
+      <Outlet context={dropContext} />
       <BuildBar />
     </div>
   );
@@ -211,6 +232,7 @@ export function StepHedef() {
   const { t } = useTranslation();
   const { session, setKind } = useBuildSession();
   const navigate = useNavigate();
+  const powerMode = usePowerMode();
 
   const kind = session.kind;
 
@@ -287,15 +309,36 @@ export function StepHedef() {
       .catch(() => setRomMatches(null));
   }, [selected, rom]);
 
+  // ART-308's last site: this used to multiply `cardGb * 1024³` itself — GiB
+  // arithmetic for a card sold in decimal GB — while `cardImageBytes` has
+  // been the single source of truth for what a label's bytes really are
+  // since the card builder's own fix. `null` until Rust answers, so the
+  // card check is asked with a size nobody invented.
+  const [cardBytes, setCardBytes] = useState<number | null>(null);
   useEffect(() => {
-    if (!selected) {
+    let current = true;
+    setCardBytes(null);
+    void cardImageBytes(cardGb)
+      .then((bytes) => {
+        if (current) setCardBytes(bytes);
+      })
+      .catch(() => {
+        if (current) setCardBytes(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [cardGb]);
+
+  useEffect(() => {
+    if (!selected || cardBytes === null) {
       setCardProblem(null);
       return;
     }
-    distroCheckCard(selected.id, cardGb * 1024 * 1024 * 1024)
+    distroCheckCard(selected.id, cardBytes)
       .then(setCardProblem)
       .catch(() => setCardProblem(null));
-  }, [selected, cardGb]);
+  }, [selected, cardBytes]);
 
   async function chooseImage() {
     const picked = await open({
@@ -330,24 +373,34 @@ export function StepHedef() {
       <section className="card" style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osBuilder.what.heading")}</h2>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-          <KindChoice
-            chosen={kind === "boot-card"}
-            onChoose={() => choose("boot-card")}
-            title={t("osBuilder.what.bootCard")}
-            hint={t("osBuilder.what.bootCardHint")}
-          />
+          {/* **Owner's decision 6: behind power mode, hidden rather than
+              disabled.** `CardBuilder` and `VolumePreload` are the advanced,
+              manual lanes the one-button card (Machine tab, `install`)
+              replaces as the default path. A session already on one of these
+              two kinds — a remembered choice, or a direct route — is
+              unaffected: `kindOffered` gates this list alone. */}
+          {kindOffered("boot-card", powerMode) && (
+            <KindChoice
+              chosen={kind === "boot-card"}
+              onChoose={() => choose("boot-card")}
+              title={t("osBuilder.what.bootCard")}
+              hint={t("osBuilder.what.bootCardHint")}
+            />
+          )}
           <KindChoice
             chosen={kind === "install"}
             onChoose={() => choose("install")}
             title={t("osBuilder.what.install")}
             hint={t("osBuilder.what.installHint")}
           />
-          <KindChoice
-            chosen={kind === "prepare-volumes"}
-            onChoose={() => choose("prepare-volumes")}
-            title={t("osBuilder.what.prepareVolumes")}
-            hint={t("osBuilder.what.prepareVolumesHint")}
-          />
+          {kindOffered("prepare-volumes", powerMode) && (
+            <KindChoice
+              chosen={kind === "prepare-volumes"}
+              onChoose={() => choose("prepare-volumes")}
+              title={t("osBuilder.what.prepareVolumes")}
+              hint={t("osBuilder.what.prepareVolumesHint")}
+            />
+          )}
           <KindChoice
             chosen={kind === "distro"}
             onChoose={() => choose("distro")}

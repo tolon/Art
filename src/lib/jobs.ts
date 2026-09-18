@@ -22,6 +22,15 @@ export type JobState =
   | { state: "cancelled"; files_landed: number | null }
   | { state: "failed"; error_code: string; message: string }
   /**
+   * Refused — the fourth ending (card round 4, Task 1). Something ART's own
+   * rules stopped it doing, decided *before* anything was harmed: never
+   * "not succeeded" and never `failed`, because a refused card build's next
+   * step is the user's (a name, a file, a setting), not "try again".
+   * `code` is the refusal's own `ART-*` id, exactly what the refusing
+   * `CoreError` on the Rust side carries.
+   */
+  | { state: "refused"; code: string; message: string }
+  /**
    * Cancelled by ART itself because a newer job in the same lane replaced it
    * (ART-195) — a live preview the screen re-asked for.
    *
@@ -73,6 +82,7 @@ export const JOB_TITLE_KEYS = [
   "components.jobBar.title.installArchivesInto",
   "components.jobBar.title.installOnAmiga",
   "components.jobBar.title.installRelease",
+  "components.jobBar.title.measureCardOs",
   "components.jobBar.title.planArchives",
   "components.jobBar.title.planLayout",
   "components.jobBar.title.prepareCardOs",
@@ -162,6 +172,8 @@ export function jobStatusLabel(job: JobProgress): Phrase {
           };
     case "failed":
       return { key: "components.jobBar.status.failed", params: { code: job.state.error_code } };
+    case "refused":
+      return { key: "components.jobBar.status.refused" };
     case "superseded":
       // Never actually rendered — `JobBar` drops a superseded job rather than
       // showing it — but the switch has to be total, and "cancelled" is the
@@ -259,6 +271,56 @@ export function isJobCancellation(err: unknown): boolean {
 }
 
 /**
+ * The rejection a **refused** job produces — the fourth ending (card round 4,
+ * Task 1) reaching the one function that waits on a job.
+ *
+ * Its own class rather than a message convention, because a refusal is not a
+ * failure and not a cancellation: its next step is the user's, and the screen
+ * builds that sentence from the `ART-*` code, which a formatted message would
+ * have to be parsed back out of. `message` stays the core's own sentence, so
+ * an `errorText` fallback still says something true.
+ *
+ * Added in Task 10 with {@link awaitJobResult}'s `refused` arm: before it,
+ * `settleFromProgress` knew three job states and a job that ended refused
+ * without emitting its result event left the promise unsettled for ever.
+ */
+export class JobRefused extends Error {
+  constructor(
+    readonly code: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "JobRefused";
+  }
+}
+
+/**
+ * The rejection a **failed** job produces, carrying the code it failed with
+ * (round 4 final review, C2).
+ *
+ * The message was — and still is — `"<sentence> (<ART-CODE>)"`, which reads
+ * well in a badge and is unreadable to a recogniser: `parseError` looks for
+ * the `\n\nError ID: ` trailer that `CoreError::user_message` writes, and a
+ * code in parentheses is not it. So an error that travelled this way arrived
+ * at `errorPhrase` with no id at all and was rendered as
+ * `errors.verbatimNoId` — Rust's English, trailer and all. Carrying the code
+ * as a field costs nothing and keeps the `ART-*` id a caller can build a
+ * sentence from, even for a failure nobody has written a recogniser for.
+ *
+ * A sibling of {@link JobRefused}, and deliberately a *different* class: a
+ * failure and a refusal are two endings with two different next steps.
+ */
+export class JobFailed extends Error {
+  constructor(
+    readonly code: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "JobFailed";
+  }
+}
+
+/**
  * Wait for exactly one job to finish, resolving with the value its own
  * result event carries — or rejecting with a readable sentence if the job
  * fails or is cancelled first. `resultEvent` is a Tauri event name whose
@@ -284,7 +346,24 @@ export function isJobCancellation(err: unknown): boolean {
  * `commands/osinstall.rs`'s own module doc comment explains why): this
  * function is the part that hides the job underneath an ordinary promise.
  */
-export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
+/**
+ * Which job a result payload is about.
+ *
+ * Two spellings, because the Rust side has two: the older commands serialise
+ * their result struct as it is written (`job_id`), and everything under
+ * `#[serde(rename_all = "camelCase")]` — the whole card path, `card_os_prepare`
+ * and `card_os_build` among them — sends `jobId`. Filtering on `job_id` alone
+ * read `undefined` for every card event, which matches no job at all: the
+ * promise simply never settled (card round 4, Task 10).
+ */
+function jobIdOf(payload: { job_id: number } | { jobId: number }): number {
+  return "job_id" in payload ? payload.job_id : payload.jobId;
+}
+
+export function awaitJobResult<
+  TPayload extends { job_id: number } | { jobId: number },
+  TValue,
+>(
   resultEvent: string,
   start: () => Promise<number>,
   extract: (payload: TPayload) => TValue
@@ -307,17 +386,30 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
     /** `"finished"` is not itself a rejection or a resolution — the result
      *  event is what carries the actual value, and it is expected to arrive
      *  at essentially the same moment (the Rust side emits it immediately
-     *  before returning `Ok(())`). Only the two failure states settle here. */
+     *  before returning `Ok(())`). Only the three ending states settle here,
+     *  and they settle **apart**: a failure, a cancellation and a refusal are
+     *  three different things to tell somebody. */
     function settleFromProgress(job: JobProgress) {
       if (settled || job.state.state === "running") return;
       if (job.state.state === "failed") {
         settled = true;
         cleanup();
-        reject(new Error(`${job.state.message} (${job.state.error_code})`));
+        // The same sentence as before — 134 callers render `String(e)` — plus
+        // the code as a field, for the ones that can do better with it (C2).
+        reject(new JobFailed(job.state.error_code, `${job.state.message} (${job.state.error_code})`));
       } else if (job.state.state === "cancelled") {
         settled = true;
         cleanup();
         reject(new Error(JOB_CANCELLED_MESSAGE));
+      } else if (job.state.state === "refused") {
+        // Card round 4, Task 10. `card_os_build` emits its own result event
+        // for every ending including this one, so this arm is the safety net
+        // rather than the ordinary path — but without it a refused job whose
+        // result event never arrived left this promise unsettled for ever,
+        // which is a spinner with nothing behind it.
+        settled = true;
+        cleanup();
+        reject(new JobRefused(job.state.code, job.state.message));
       }
     }
 
@@ -329,7 +421,7 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
             bufferedResults.push(event.payload);
             return;
           }
-          if (event.payload.job_id !== jobId) return;
+          if (jobIdOf(event.payload) !== jobId) return;
           settled = true;
           cleanup();
           resolve(extract(event.payload));
@@ -358,7 +450,7 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
         // Catch up on whatever arrived in the gap between subscribing and
         // learning the id — the whole reason this is buffered rather than
         // simply filtered from the start.
-        const matchedResult = bufferedResults.find((payload) => payload.job_id === id);
+        const matchedResult = bufferedResults.find((payload) => jobIdOf(payload) === id);
         if (matchedResult) {
           settled = true;
           cleanup();

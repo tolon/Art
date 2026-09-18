@@ -186,7 +186,8 @@
         "cancelled": "İptal edildi",
         "cancelledPartway_one": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
         "cancelledPartway_other": "İptal edildi — {{count}} dosya çoktan yazılmıştı ve diskte duruyor",
-        "failed": "Başarısız ({{code}})"
+        "failed": "Başarısız ({{code}})",
+        "refused": "Reddedildi"
       },
       "title": {
         "addPackages_one": "{{target}} içine {{count}} paket ekleniyor",
@@ -219,6 +220,7 @@
         "installArchivesInto_other": "{{target}} içine {{count}} arşiv kuruluyor",
         "installOnAmiga": "{{name}} Amiga üzerinde kuruluyor",
         "installRelease": "{{target}} içine {{release}} kuruluyor",
+        "measureCardOs": "{{target}} ölçülüyor",
         "planArchives_one": "{{count}} arşiv planlanıyor",
         "planArchives_other": "{{count}} arşiv planlanıyor",
         "planLayout_one": "{{count}} kaynak için gerekenler hesaplanıyor",
@@ -806,7 +808,9 @@
         "replaces": "{{replaced}} dosyanın yerine geçer (sistemin parçalarında {{fresh}} yeni, {{unchanged}} aynı)",
         "replacesUpdates": "Güncellemeler ağaçtaki {{replaced}} dosyanın yerine geçer",
         "replacesPending": "Henüz önizlenmedi",
-        "checking": "Hedef denetleniyor…"
+        "checking": "Hedef denetleniyor…",
+        "card_one": "{{image}} yolunda {{gb}} GB'lık bir kart imajı, {{count}} bölümlü — sistem ağacı ART'ın kendi çalışma klasöründe kurulur ve onunla birlikte kaldırılır",
+        "card_other": "{{image}} yolunda {{gb}} GB'lık bir kart imajı, {{count}} bölümlü — sistem ağacı ART'ın kendi çalışma klasöründe kurulur ve onunla birlikte kaldırılır"
       },
       "unresolved": "{{name}}: birden fazla dosya taşıyor. Amiga dosyaları sekmesinde birini kullanın (okuma satırı her birini sunar); seçene kadar yazılmaz.",
       "navigationLocked": "Derleme sürüyor — sekmeden ayrılmadan önce Durdur'a basın.",
@@ -2118,6 +2122,261 @@
       }
     }
   },
+  "cardSection": {
+    "heading": "Kartın bölümleri",
+    "headingCost": "Kart imajı dosyası diskte {{size}} yer kaplayacak.",
+    "headingCostPending": "İmajın kendi boyutu, bu yapının ölçülebilecek bir sistem ağacı olduğunda hesaplanır.",
+    "free": "{{total}} içinden {{free}} boş",
+    "needTree": "Boyutlar, bu yapının ölçülebilecek bir sistem ağacı olduğunda görünür.",
+    "measuring": "ölçülüyor…",
+    "notMeasured": "henüz ölçülmedi",
+    "column": {
+      "name": "Bölüm adı",
+      "holds": "İçinde ne var",
+      "size": "Boyutu"
+    },
+    "system": {
+      "role": "işletim sisteminin kendisi"
+    },
+    "work": {
+      "role": "karttan geriye kalan her şey"
+    },
+    "dropFixed": {
+      "system": "System bölümüne bırakılan hiçbir şey alınmaz: onun içeriği, bu yapının yazdığı sistem ağacının kendisidir. Bıraktığınız dosyaları kendi eklediğiniz bölümlerden birinin üzerine bırakın.",
+      "work": "Work bölümüne bırakılan hiçbir şey alınmaz: o, diğer bölümler yerleştikten sonra karttan geriye kalan yerdir. Bıraktığınız dosyaları kendi eklediğiniz bölümlerden birinin üzerine bırakın."
+    },
+    "content": {
+      "none": "üzerine henüz bir şey bırakılmadı",
+      "summary": "Kaynak sayısı: {{sources}} · Dosya sayısı: {{count}}"
+    },
+    "source": {
+      "pending": "ART bu kaynağa henüz bakmadı."
+    },
+    "sourceKind": {
+      "folder": "klasör",
+      "archive": "{{format}} arşivi",
+      "whdloadHardfile": "WHDLoad sabit disk dosyası",
+      "adf": "disket imajı"
+    },
+    "unusable": {
+      "missing": "artık yerinde değil — listeye eklendikten sonra taşınmış ya da silinmiş olmalı.",
+      "unreadable": "okunamıyor: {{detail}}",
+      "archiveUnreadable": "bu arşiv okunamıyor: {{detail}}",
+      "hardfileNotWhdload": "bir sabit disk dosyası ama WHDLoad'ın kullandığı türden değil: {{detail}}",
+      "notAnAmigaSource": "bir kart bölümünün alabileceği türden değil ({{format}}). Bir klasör, bir arşiv, bir WHDLoad sabit disk dosyası ya da bir ADF bu türdendir.",
+      "notAFolder": "bir klasör değil."
+    },
+    "size": {
+      "gb": "{{value}} GB",
+      "mb": "{{value}} MB",
+      "kb": "{{value}} kB",
+      "bytes": "{{value}} bayt"
+    },
+    "total": {
+      "line": "{{total}} GB'lık kart imajının {{used}} GB'ı kullanılıyor — yüzde {{percent}}"
+    },
+    "overflow": {
+      "status": "Bu kart, kendisinden istenenleri almıyor.",
+      "doesNotFit": "{{over}} GB fazla: istenen {{needed}} GB, kart imajının aldığı ise {{available}} GB. İstenenler içinde en büyük bölüm {{partition}} — onun içinden bir şeyler çıkarın ya da daha büyük bir kart seçin.",
+      "doesNotFitNoPartition": "{{over}} GB fazla: istenen {{needed}} GB, kart imajının aldığı ise {{available}} GB. Bölümlerden bir şeyler çıkarın ya da daha büyük bir kart seçin.",
+      "partitionTooLarge": "{{partition}} bölümü {{gb}} GB olurdu — bu, PFS3'ün oluşturabileceğinden büyük. En küçük boyutunu düşürün ya da bölümü ikiye ayırın.",
+      "cardTooSmall": "{{cardGb}} GB'lık bir kart, bir kart imajı için fazla küçük. Daha büyük bir kart seçin.",
+      "partitionContent": "{{partition}} bölümünün içeriği {{needed}} GB, kartın ona verdiği yer ise {{available}} GB. İçinden bir şeyler çıkarın ya da daha büyük bir kart seçin.",
+      "systemAdditions": "System'in ağacı sığıyor ama kartın ona eklediklerine yer kalmıyor: gereken {{needed}} GB, bulunan {{available}} GB, ağacın kendisi {{tree}} GB. Eklenen Kickstart'lar: {{kickstarts}} — bu kartın ihtiyaç duymadığı ROM dosyalarını ART'ın taradığı klasörlerden çıkarın.",
+      "other": "{{sentence}}"
+    },
+    "nameProblem": {
+      "empty": "Bir bölümün adı olmak zorunda.",
+      "tooLong": "Bu ad fazla uzun: AmigaDOS en çok {{max}} karaktere izin veriyor.",
+      "reservedCharacter": "Bu ad, AmigaDOS'un bir birim adında kabul etmediği bir karakter taşıyor.",
+      "duplicate": "Bu kartta {{name}} adında bir bölüm zaten var.",
+      "reserved": "{{name}}, ART'ın bir bölüme kendisinin verdiği adlardan biri: System işletim sistemini taşır, Work ise — büyük olduğunda Work, Work_1 diye bölünerek — karttan geriye kalan her şeydir. Lütfen başka bir ad seçin."
+    },
+    "newName": {
+      "label": "Yeni bölümün adı",
+      "placeholder": "Demos",
+      "add": "Ekle"
+    },
+    "addPartition": "+ Yeni bölüm ekle",
+    "addSource": "Ekle…",
+    "rowMenu": "{{name}} bölümüyle neler yapabilirim?",
+    "removePartition": "{{name}} bölümünü kaldır",
+    "removeSource": "{{name}} kaynağını çıkar",
+    "menu": {
+      "addFolder": "Klasör ekle…",
+      "addFiles": "Dosya ekle…",
+      "removePartition": "Bu bölümü kaldır"
+    },
+    "chooseFolderTitle": "Bu bölüme kopyalanacak klasörü seçin",
+    "chooseFilesTitle": "Bu bölüme kopyalanacak arşivleri, sabit disk dosyalarını ya da disket imajlarını seçin",
+    "tag": {
+      "measured": "ölçüldü",
+      "notMeasured": "ölçülmedi",
+      "overflow": "sığmıyor"
+    },
+    "floor": {
+      "label": "En küçük boyutu",
+      "hint": "MB — bu bir alt sınırdır, kartın kendi toplamını aşmanın yolu değil."
+    },
+    "driver": {
+      "fromArchive": "PFS3 sürücüsü pfs3aio {{version}} — şu arşivden çıkarıldı: {{from}}",
+      "loose": "PFS3 sürücüsü pfs3aio {{version}} — şu yoldaki dosyanın kendisi: {{at}}",
+      "missing": "PFS3 sürücüsü bulunamadı, bu yüzden hiçbir bölüm biçimlendirilemez. pfs3aio.lha dosyasını (Aminet disk/misc/pfs3aio) malzeme klasörlerinden birine koyun ya da sürücü dosyasını kendiniz seçin. ART şuralara baktı: {{searched}}.",
+      "missingUnreadable": "PFS3 sürücüsü bulunamadı, bu yüzden hiçbir bölüm biçimlendirilemez. pfs3aio.lha dosyasını (Aminet disk/misc/pfs3aio) malzeme klasörlerinden birine koyun ya da sürücü dosyasını kendiniz seçin. ART şuralara baktı: {{searched}}; şunları ise okuyamadı: {{unreadable}}."
+    },
+    "image": {
+      "label": "İmaj dosyası",
+      "none": "Henüz bir imaj dosyası seçilmedi.",
+      "chooseTitle": "Kart imajı nereye yazılsın?",
+      "hint": "ART'ın yazacağı .img dosyası. Karta yazma işini, hâlihazırda kullandığınız imaj aracıyla kendiniz yaparsınız.",
+      "blocker": "Bir imaj dosyası seçilmeden yapım başlayamaz."
+    },
+    "emu68": {
+      "label": "Emu68 arşivi",
+      "none": "Henüz bir Emu68 sürümü seçilmedi.",
+      "chooseTitle": "Kendi Emu68 sürüm arşivinizi seçin",
+      "hint": "Emu68 sürümler sayfasından kendi indirdiğiniz dosya — ART bunu sizin yerinize indirmez. Kart oluşturucuda seçtiğiniz dosya burada da önerilir; başka birini seçmeniz yalnızca bu kartı değiştirir."
+    },
+    "pfs3": {
+      "label": "PFS3 sürücüsü (elle seçim)",
+      "none": "Malzeme klasörlerinizde bulunanı kullanıyor.",
+      "chooseTitle": "PFS3 sürücü dosyasını seçin",
+      "hint": "Yalnızca belirli bir pfs3aio kullanmak istiyorsanız gerekir. Dokunmazsanız ART malzeme klasörlerinizde bulduğunu kullanır ve hangisi olduğunu aşağıda yazar."
+    }
+  },
+  "cardKickstart": {
+    "heading": "Kickstart imajları",
+    "intro": "Bu karttaki oyunların her biri ihtiyaç duyduğu bir Kickstart imajını adlandırıyor. Siz kutucuğu işaretlemedikçe hiçbiri karta yerleştirilmez — ART yalnızca öneride bulunur, kararı siz verirsiniz.",
+    "noneNeeded": "Bu karttaki hiçbir oyun bir Kickstart imajına ihtiyaç duymuyor, bu yüzden burada onaylanacak bir şey yok.",
+    "column": {
+      "name": "Adı",
+      "offer": "ART'ın bulduğu",
+      "rtb": ".RTB dosyası"
+    },
+    "titles": {
+      "list": "Bunu isteyen oyunlar: {{list}}",
+      "withMore_one": "Bunu isteyen oyunlar: {{list}} ve {{count}} tanesi daha",
+      "withMore_other": "Bunu isteyen oyunlar: {{list}} ve {{count}} tanesi daha"
+    },
+    "offer": {
+      "supplied": "Elinizde var — {{rom}}",
+      "encrypted": "ART, aradığınız bu olabilecek {{count}} adet Amiga Forever ROM'u buldu; ama ART her birini okuyabilmeden önce yanlarında kendi rom.key dosyalarının bulunması gerekiyor.",
+      "notHere": "ROM klasörünüzde bulunmuyor.",
+      "unmatchable": "Bu oyun tek bir imaj yerine bir liste adlandırıyor, bu yüzden ART onu eşleştiremiyor."
+    },
+    "rtb": {
+      "loose": "Bulundu — {{path}}",
+      "inArchive": "Şu arşivin içinde bulundu: {{archive}}",
+      "missing": "Hiçbir malzeme klasöründe bulunamadı. {{package}} paketini klasörlerden birine koyun — bu paket zaten ART'ın kendi paket kataloğunda bulunuyor."
+    },
+    "tag": {
+      "ready": "hazır",
+      "blocked": "eklenemez"
+    },
+    "agree": "{{name}} bu karta yerleştirilsin mi?",
+    "unreadable": {
+      "heading": "ART'ın okuyamadığı {{count}} adet .slave dosyası var, bu yüzden bunların neye ihtiyaç duyduğunu soramadı:"
+    },
+    "summary": {
+      "none": "Bu karttaki hiçbir oyun bir Kickstart imajı istemiyor.",
+      "line": "{{total}} Kickstart imajından {{agreed}} tanesi karta yerleştirilecek. Geri kalanlar dışarıda bırakılıyor — kendisine gereken imajı alamayan bir oyun WHDLoad altında çalışmayacak."
+    }
+  },
+  "cardRun": {
+    "confirm": "Ne oluşturulacağını okudum; kart imajı yazılabilir.",
+    "fallback": "{{step}} adımını ART'ın kendi yazıcısı değil, {{tool}} yazdı. Nedeni:",
+    "run": "Kartı oluştur",
+    "runAgain": "Kartı yeniden oluştur",
+    "running": "Oluşturuluyor…",
+    "stop": "Durdur",
+    "giveUp": "Bundan vazgeç",
+    "giveUpHint": "ART'ın bu kart için açtığı çalışma klasörü de birlikte kaldırılır.",
+    "blocked": {
+      "noImage": "Bu oluşturulabilmeden önce, Makine sekmesinde kart imajının nereye yazılacağını seçin.",
+      "noArchive": "Bu oluşturulabilmeden önce, Makine sekmesinde bu kartın alacağı Emu68 arşivini seçin.",
+      "noSize": "Bu oluşturulabilmeden önce, Makine sekmesinde bir kart boyutu seçin.",
+      "emptyPartition": "'{{partition}}' bölümünde henüz hiçbir şey yok. Bu oluşturulabilmeden önce Makine sekmesinde üzerine dosya ya da klasör bırakın, ya da bölümü kaldırın."
+    },
+    "phase": {
+      "pending": "sırada bekliyor",
+      "running": "şu anda çalışıyor",
+      "tree": {
+        "succeeded": "Sistem ağacı kuruldu",
+        "refused": "Sistem ağacının kurulması reddedildi",
+        "failed": "Sistem ağacı kurulamadı",
+        "stopped": "Sistem ağacının kurulmasını siz durdurdunuz",
+        "notAttempted": "Sistem ağacı — hiç denenmedi"
+      },
+      "package": {
+        "succeeded": "Güncelleme eklendi",
+        "refused": "Güncellemenin eklenmesi reddedildi",
+        "failed": "Güncelleme eklenemedi",
+        "stopped": "Güncellemenin eklenmesini siz durdurdunuz",
+        "notAttempted": "Güncelleme — hiç denenmedi"
+      },
+      "firstboot": {
+        "succeeded": "İlk açılış kurulumu yazıldı",
+        "refused": "İlk açılış kurulumunun yazılması reddedildi",
+        "failed": "İlk açılış kurulumu yazılamadı",
+        "stopped": "İlk açılış kurulumunu siz durdurdunuz",
+        "notAttempted": "İlk açılış kurulumu — hiç denenmedi"
+      },
+      "prepare": {
+        "succeeded": "Kart hazırlandı",
+        "refused": "Kartın hazırlanması reddedildi ({{code}})",
+        "failed": "Kartın hazırlanması başarısız oldu ({{code}})",
+        "stopped": "Hazırlığı siz durdurdunuz",
+        "notAttempted": "Hazırlık — hiç denenmedi"
+      },
+      "agree": {
+        "succeeded": "Kickstart imajları için onay verildi",
+        "refused": "Kickstart adımı reddedildi ({{code}})",
+        "failed": "Kickstart adımı başarısız oldu ({{code}})",
+        "stopped": "Kickstart adımında bundan vazgeçtiniz",
+        "notAttempted": "Kickstart adımı — hiç denenmedi"
+      },
+      "build": {
+        "succeeded": "Kart imajı yazıldı",
+        "refused": "Kart reddedildi ({{code}}) — imajın hiçbir parçası yazılmadı",
+        "failed": "Kart imajı yazılamadı ({{code}})",
+        "stopped": "Kart imajının yazılmasını siz durdurdunuz",
+        "notAttempted": "Kart imajı — hiç denenmedi"
+      }
+    },
+    "next": {
+      "refused": "Reddetmenin adını verdiği şeyi düzeltin, sonra Oluştur'a yeniden basın. Kart imajının hiçbir parçası yazılmadı.",
+      "failed": "Kart imajı {{image}} yoluna yazılıyordu; disklerinizde başka hiçbir şeye dokunulmadı. Yarım kalan .partial dosyasına ne olduğu aşağıda yazıyor.",
+      "failedUnknown": "ART bir kart imajının adını verecek kadar ileri gidemedi; disklerinizde başka hiçbir şeye dokunulmadı.",
+      "stopped": "Bunu siz durdurdunuz. {{image}} yolundaki kart imajı tamamlanmadı; yarım kalan .partial dosyasına ne olduğu aşağıda yazıyor.",
+      "stoppedUnknown": "Bunu, ART daha bir kart imajının adını vermeden durdurdunuz."
+    },
+    "count": {
+      "soFar": "şimdiye kadar {{done}} adet",
+      "of": "{{total}} içinden {{done}} adet"
+    },
+    "sub": {
+      "prepare": "Her bölüme girecekler hazırlanıyor",
+      "whdload": "WHDLoad",
+      "card": "Kart imajı",
+      "partitions": "Bölümler",
+      "check": "Tamamlanan kart denetleniyor"
+    },
+    "partial": {
+      "notCreated": "Yarım kalmış bir .partial dosyası hiç oluşturulmadı.",
+      "removed": "Yarım kalan {{path}} dosyası kaldırıldı.",
+      "alreadyGone": "Yarım kalan {{path}} dosyası, ART onu kaldırmaya gittiğinde zaten ortada yoktu.",
+      "notRemoved": "{{path}} dosyası KALDIRILAMADI ({{why}}) — hâlâ diskinizde duruyor.",
+      "removedAfterBothNamesLeft": "Yukarıdaki ret, kart tamamlanırken yaşananı anlatıyor: iki addan hiçbiri o anda kaldırılamamıştı. Ancak sonradan yapılan bir denetim {{path}} dosyasının artık orada olmadığını gördü ve onu kaldırdı. İmajın kendi adındaki dosya hâlâ diskinizde kalmış olabilir — kendiniz kontrol edin."
+    },
+    "scratchLeft": "ART'ın kendi çalışma klasörü olan {{path}} kaldırılamadı ({{why}}). İçinde size ait hiçbir şey yok; fırsat bulduğunuzda elle kaldırabilirsiniz.",
+    "openFailed": "ART bu kart için bir çalışma klasörü açamadı, bu yüzden hiçbir şey başlatılmadı: {{message}}",
+    "detail": {
+      "written": "{{files}} dosya, {{bytes}}"
+    },
+    "manifest": "İmajın yanına yazılan künye dosyası: {{path}}",
+    "agreeWaiting": "Sıra sizde: yerleştirilmesine izin verdiğiniz Kickstart imajlarını işaretleyin, sonra Devam'a basın. Hiçbirini işaretlememek de serbesttir.",
+    "agreeContinue": "Bu Kickstart imajlarıyla devam et"
+  },
   "preload": {
     "heading": "Kartın Amiga birimlerini hazırla",
     "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",
@@ -2220,6 +2479,7 @@
       "noBackup": "Bu plan kartın RDB'sini değiştiriyor — önce yedeğinin nereye gideceğini seç.",
       "nothingChosen": "Hazırlanacak en az bir bölüm seç.",
       "blankName": "{{drive}} için bir birim adı gerekiyor.",
+      "checkingName": "ART, {{drive}} için yazdığınız birim adının AmigaDOS'un kabul ettiği bir ad olup olmadığına bakıyor.",
       "badName": "{{drive}} biriminin adında ':' veya '/' var; bunlar Amiga'da yol ayırıcıdır ve bir adın içinde yer alamaz.",
       "longName": "{{drive}} biriminin adı {{max}} karakterden uzun; AmigaDOS adları orada biter.",
       "notPlanned": "Önce önizle — ne biçimlendirileceğini görmeden hiçbir şey biçimlendirilmez."
@@ -2552,6 +2812,14 @@
       "taken": "ART buraya yazmaz: bu yol yeni ya da boş bir klasör değil. Başka bir klasör seçin.",
       "tree": "Bu klasörde ART'ın kurduğu bir ağaç var: {{release}}, {{count}} dosya.",
       "fresh": "ART buraya yazabilir: yeni bir ağaç oluşturulur."
+    },
+    "destinationKind": {
+      "label": "Yapı nereye gitsin",
+      "folder": "Klasör",
+      "card": "Kart imajı",
+      "cardSize": "Kart boyutu",
+      "cardSizeSummary": "{{gb}} GB kart — {{billions}} milyar bayt",
+      "cardPlaceholder": "Kartın bölümleri ve kaynakları burada olacak."
     },
     "layer": {
       "base32": "AmigaOS 3.2 temel ortamı",
@@ -2946,6 +3214,50 @@
     "verbatim": "{{sentence}}\n\nHata kimliği: {{id}}",
     "treeDestinationOccupied": "'{{path}}' klasörünün içinde bir şeyler var. ART bir dağıtım ağacını boş olmayan bir klasörün üzerine kurmaz — boş bir klasör seçin ya da yeni bir tane oluşturun.\n\nHata kimliği: ART-SAFETY-REFUSED",
     "packageWrongArchive": "'{{archive}}' bu paketin kurucusunun bulunduğu arşiv değil: içinde '{{expected}}' çekmecesi yok. İçinde olanlar: {{found}}.\n\nHata kimliği: ART-INPUT-INVALID",
+    "cardSourceUnusable": {
+      "missing": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: artık orada değil. Onu {{partition}} bölümünden kaldırın, ya da klasörü veya arşivi ART'ın bulduğu yere geri koyun.\n\nHata kimliği: {{id}}",
+      "unreadable": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: ART onu okuyamadı ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da dosyayı açık tutan başka bir programı kapatıp yeniden deneyin.\n\nHata kimliği: {{id}}",
+      "archiveUnreadable": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: ART arşivi okuyamadı ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da arşivin yeni bir kopyasını edinin.\n\nHata kimliği: {{id}}",
+      "hardfileNotWhdload": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: bu bir sabit disk dosyası ama bir WHDLoad kurucusunun oluşturduğu türden değil ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da bir WHDLoad kurucusunun oluşturduğu bir hardfile seçin.\n\nHata kimliği: {{id}}",
+      "notAnAmigaSource": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: bu bir klasör, bir arşiv, bir WHDLoad hardfile'ı ya da bir disket imajı değil ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da bu dört türden birini seçin.\n\nHata kimliği: {{id}}",
+      "notAFolder": "{{partition}} bölümündeki System ağacı kopyalanamayacak: bir klasör olması gerekiyor, oysa '{{source}}' bir klasör değil. Onu {{partition}} bölümünden kaldırın, ya da System'i ART'ın oluşturduğu klasöre yönlendirin.\n\nHata kimliği: {{id}}"
+    },
+    "pfs3DriverNotFound": {
+      "missing": "Kart oluşturulamayacak: {{searched}} klasörlerinde hiçbir PFS3 sürücüsü bulunamadı. pfs3aio.lha dosyasını (Aminet disk/misc/pfs3aio) malzeme klasörlerinizden birine koyun, ya da sürücü dosyasını kendiniz seçin.\n\nHata kimliği: {{id}}",
+      "missingUnreadable": "Kart oluşturulamayacak: {{searched}} klasörlerinde hiçbir PFS3 sürücüsü bulunamadı, üstelik ART {{unreadable}} dosyasını okuyamadı. Çalışan bir pfs3aio.lha dosyasını (Aminet disk/misc/pfs3aio) malzeme klasörlerinizden birine koyun, ya da sürücü dosyasını kendiniz seçin.\n\nHata kimliği: {{id}}"
+    },
+    "whdloadNotFound": "Karttaki {{titles}} WHDLoad başlığı açılamayacak: ART'ın baktığı hiçbir yerde ({{searched}}) WHDLoad bulunamadı. WHDLoad_usr.lha dosyasını (whdload.de adresinden) malzeme klasörlerinizden birine koyun ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+    "kickstartNotProposed": {
+      "notNamed": "'{{name}}' karta yerleştirilemeyecek: bu öneri böyle bir Kickstart adını hiç içermiyor. Kartı yeniden hazırlayın ve yalnızca önerinin sunduğu adları kabul edin.\n\nHata kimliği: {{id}}",
+      "notOffered": "'{{name}}' karta yerleştirilemeyecek: ART bunu size sunmadı, çünkü koleksiyonunuzdaki hiçbir dosya buna uymuyor. O ROM dosyasını malzeme klasörlerinizden birine koyun ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "rtbMissing": "'{{name}}' karta yerleştirilemeyecek: ona ait .RTB dosyası hiçbir malzeme klasöründe bulunamadı. {{package}} paketini bu klasörlerden birine koyun ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}"
+    },
+    "cardNamesNeedHst": {
+      "noMore": "{{partition}} yazılamayacak: içinde ART'ın kendi PFS3 yazıcısının yazamadığı adlar var ({{paths}}). ART'a Ayarlar'dan bir hst-imager gösterin, ya da bu dosyaları ASCII adlarla yeniden adlandırıp kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "withMore": "{{partition}} yazılamayacak: içinde ART'ın kendi PFS3 yazıcısının yazamadığı adlar var ({{paths}} ve {{more}} tane daha). ART'a Ayarlar'dan bir hst-imager gösterin, ya da bu dosyaları ASCII adlarla yeniden adlandırıp kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}"
+    },
+    "cardDoesNotFit": {
+      "doesNotFit": "Bu bölümler karta sığmayacak: {{needed}} bayta ihtiyaçları var ve kartta {{available}} bayt var. {{largest}} bölümünün bir kısmını başka bir karta taşıyın, ya da daha büyük bir kart seçin.\n\nHata kimliği: {{id}}",
+      "doesNotFitNoPartition": "Bu bölümler karta sığmayacak: {{needed}} bayta ihtiyaçları var ve kartta {{available}} bayt var. Daha büyük bir kart seçin.\n\nHata kimliği: {{id}}",
+      "partitionTooLarge": "{{volumeName}} bu karta sığmayacak: {{bytes}} bayta ihtiyaç duyar, bu da tek bir PFS3 bölümünün alabileceğinden fazladır. Kaynaklarını iki bölüme bölün.\n\nHata kimliği: {{id}}",
+      "cardTooSmall": "Bu kart System'i ve RDB'yi barındıramayacak: {{cardGb}} GB'lık bir kart bunun için çok küçük. Daha büyük bir kart seçin.\n\nHata kimliği: {{id}}",
+      "partitionContentDoesNotFit": "{{volumeName}} kendi ağacını barındıramayacak: ağaç {{neededBlocks}} blok istiyor, {{volumeName}} ise yalnızca {{availableBlocks}} blokluk yer sunuyor. Ağaçtan bir şeyler çıkarın ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "systemAdditionsDoNotFit": "System, bu kartın ona eklediği her şeyi barındıramayacak: {{neededBlocks}} blok istiyor ve yalnızca {{availableBlocks}} blokluk yer var — ağacın kendisi bile {{treeBlocks}} blok istiyor. Etkilenen Kickstart'lar: {{kickstarts}}; bu kartın ihtiyaç duymadığını malzeme klasörlerinizden çıkarın ve yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "systemAdditionsDoNotFitWithWhdload": "System, bu kartın ona eklediği her şeyi barındıramayacak: {{neededBlocks}} blok istiyor ve yalnızca {{availableBlocks}} blokluk yer var — ağacın kendisi bile {{treeBlocks}} blok istiyor. Eklenmek istenenler şunlar: WHDLoad ({{whdload}}) ve şu Kickstart'lar: {{kickstarts}}; bu kartın ihtiyaç duymadıklarını malzeme klasörlerinizden çıkarın ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}"
+    },
+    "notEnoughSpace": {
+      "image": "'{{place}}' bu kartı alamayacak: orada {{available}} bayt boş yer var, yapım ise {{needed}} bayta ihtiyaç duyuyor. Orada yer açın, ya da kart imajı için başka bir klasör seçip yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "scratch": "'{{place}}' yapımın geçici dosyalarını alamayacak: orada {{available}} bayt boş yer var, yapım ise {{needed}} bayta ihtiyaç duyuyor. Orada yer açın, ya da Ayarlar'dan başka bir geçici klasör seçip yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "imageAndScratch": "'{{place}}' hem kart imajını hem yapımın geçici dosyalarını birlikte alamayacak: orada {{available}} bayt boş yer var, yapım ise orada {{needed}} bayta ihtiyaç duyuyor. Orada yer açın, ya da imaj için başka bir klasör veya Ayarlar'dan başka bir geçici klasör seçip yeniden hazırlayın.\n\nHata kimliği: {{id}}"
+    },
+    "cardCheckFailed": "Bu kart imajı tamamlanamayacak: kontrollerinden {{failures}} tanesinde başarısız oldu ({{checks}}). Yeniden oluşturun; aynı şekilde başarısız olursa, incelenebilmesi için işlem günlüğünü saklayın.\n\nHata kimliği: {{id}}",
+    "hstImagerUnusable": {
+      "noTool": "{{partitions}} yazılamayacak: yalnızca hst-imager'ın yazabildiği adlar taşıyorlar ve bu yapıma bir hst.imager.exe verilmedi. ART'a Ayarlar'dan çalışan bir hst.imager.exe gösterin, ya da bu adları ASCII olarak yeniden adlandırıp kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "toolUnusable": "{{partitions}} yazılamayacak: yalnızca hst-imager'ın yazabildiği adlar taşıyorlar ve '{{path}}' hst-imager olarak kullanılamıyor ({{why}}). ART'a Ayarlar'dan çalışan bir hst.imager.exe gösterin, ya da bu adları ASCII olarak yeniden adlandırıp kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}"
+    },
+    "kickstartSourceChanged": "'{{name}}' yerleştirilemeyecek: '{{path}}' artık kartın hazırlandığı dosya değil ({{why}}). Kartı yeniden hazırlayın, böylece öneri şu anda orada olanı sunsun.\n\nHata kimliği: {{id}}",
+    "cardPartitionTooManyEntries": "'{{partition}}' yazılamayacak: {{entries}} dosya ve klasör tutacaktı, oysa ART bitmiş bir karttan yalnızca {{bound}} tanesini geri okuyabiliyor. İçindekilerin bir kısmını başka bir bölüme taşıyın ve yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+    "cardPartialExists": "Bu kart oluşturulamayacak: '{{path}}' önceki bir çalıştırmadan kalan, yarım kalmış bir imaj. Onu kendiniz silin, ya da başka bir imaj adı seçip yeniden oluşturun.\n\nHata kimliği: {{id}}",
     "verbatimNoId": "{{sentence}}"
   },
   "network": {

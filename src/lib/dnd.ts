@@ -7,13 +7,17 @@
 
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { analyzePaths } from "@/lib/api";
+import { cssPointOf, type CssPoint } from "@/lib/dropTarget";
 import type { DroppedAnalysis } from "@/types";
 
 export type DropPhase = "enter" | "over" | "leave" | "drop";
 
 export interface DropHandler {
-  onPhase?: (phase: DropPhase) => void;
-  onDrop: (analyses: DroppedAnalysis[]) => void;
+  // `position` is already converted to CSS pixels (`cssPointOf`, measured in
+  // experiment-drop-coordinates.md) — undefined on `leave`, which carries no
+  // position at all (`@tauri-apps/api/webview.d.ts`'s `DragDropEvent`).
+  onPhase?: (phase: DropPhase, position?: CssPoint) => void;
+  onDrop: (analyses: DroppedAnalysis[], position?: CssPoint) => void;
   onError?: (message: string) => void;
 }
 
@@ -29,17 +33,18 @@ export async function setupDragDrop(handler: DropHandler): Promise<() => void> {
     switch (payload.type) {
       case "enter":
       case "over":
-        handler.onPhase?.(payload.type);
+        handler.onPhase?.(payload.type, cssPointOf(payload.position));
         break;
       case "leave":
         handler.onPhase?.("leave");
         break;
       case "drop": {
-        handler.onPhase?.("drop");
+        const position = cssPointOf(payload.position);
+        handler.onPhase?.("drop", position);
         if (!payload.paths || payload.paths.length === 0) return;
         try {
           const analyses = await analyzePaths(payload.paths);
-          handler.onDrop(analyses);
+          handler.onDrop(analyses, position);
         } catch (e) {
           // `String(e)` and not `errorText`: this is `src/lib`, which has no
           // i18next singleton (CLAUDE.md), and the handler renders it. The

@@ -166,6 +166,38 @@ import {
   type ReportSource,
   type StepOutcome,
 } from "@/lib/firstboot";
+import {
+  driverMissingPhrase,
+  driverPhrase,
+  overflowPhrase,
+  partitionContentPhrase,
+  sizePhrase,
+  sourceKindPhrase,
+  totalPhrase,
+  unusableSourcePhrase,
+  volumeNameProblemPhrase,
+} from "@/lib/cardOsMeasure";
+import type { MeasuredPartition, SourceKind, UnusableSource } from "@/lib/cardOs";
+import {
+  offerPhrase,
+  rtbPhrase,
+  summaryPhrase,
+  titlesPhrase,
+} from "@/lib/cardOsKickstarts";
+import {
+  cardCountPhrase,
+  cardNextStepPhrase,
+  cardPartialPhrase,
+  cardPhasePhrase,
+  cardRefusalPhrase,
+  cardScratchLeftPhrase,
+  cardSubPhasePhrase,
+  type CardPhaseEnding,
+  type CardPhaseKind,
+} from "@/lib/cardOsRun";
+import type { CardOsPhaseName, PartialRemoval } from "@/lib/cardOs";
+import type { ProposedKickstart, RtbSource } from "@/lib/cardOs";
+import type { KickstartOffer } from "@/lib/gameindex";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -213,7 +245,231 @@ const EVERY_NOT_YET_RUNNABLE = everyValueOf<NotYetRunnable>({
   "installer-not-measured": true,
 });
 
+/** Every `SourceKind` the card path recognises (card round 4, task 8). */
+const EVERY_SOURCE_KIND: SourceKind[] = [
+  { kind: "folder" },
+  { kind: "archive", format: "lha" },
+  { kind: "whdload-hardfile" },
+  { kind: "adf" },
+];
+
+/** Every reason a source cannot be used — each its own sentence, because
+ *  "unusable" without a reason is the one thing a user cannot act on. */
+const EVERY_UNUSABLE: UnusableSource[] = [
+  { reason: "missing" },
+  { reason: "unreadable", detail: "access denied" },
+  { reason: "archive-unreadable", detail: "truncated" },
+  { reason: "hardfile-not-whdload", detail: "no slave" },
+  { reason: "not-an-amiga-source", formatHint: "exe" },
+  { reason: "not-a-folder" },
+];
+
 describe("Phrase keys returned by the discriminated-union mappers", () => {
+  it("cardOsMeasure: every source kind, refusal, size and overflow resolves", () => {
+    for (const kind of EVERY_SOURCE_KIND) {
+      expect(resolvesAtRuntime(sourceKindPhrase(kind).key), kind.kind).toBe(true);
+    }
+    for (const why of EVERY_UNUSABLE) {
+      expect(resolvesAtRuntime(unusableSourcePhrase(why).key), why.reason).toBe(true);
+    }
+    for (const bytes of [0, 4_096, 1_200_000, 4_900_000_000]) {
+      expect(resolvesAtRuntime(sizePhrase(bytes).key), String(bytes)).toBe(true);
+    }
+
+    const plan = {
+      image_bytes: 60_800_000_000,
+      area_bytes: 59_600_000_000,
+      partitions: [],
+    };
+    expect(resolvesAtRuntime(totalPhrase(plan).key)).toBe(true);
+
+    const measured: MeasuredPartition = {
+      volumeName: "Games",
+      driveName: "SDH1",
+      sources: [{ path: "E:\\a", kind: { kind: "folder" }, files: 3, bytes: 10 }],
+      writer: { writer: "native" },
+    };
+    expect(resolvesAtRuntime(partitionContentPhrase(measured).key)).toBe(true);
+    expect(resolvesAtRuntime(partitionContentPhrase(undefined).key)).toBe(true);
+
+    // Every `SizingRefusal` shape `core::error` can serialise, by its own
+    // `kind` tag — plus one the screen has not met, which must still say
+    // Rust's sentence rather than nothing.
+    const sizing: Record<string, string>[] = [
+      { kind: "does-not-fit", needed: "1", available: "0", largest: "Games" },
+      { kind: "does-not-fit", needed: "1", available: "0" },
+      { kind: "partition-too-large", volumeName: "Games", bytes: "1" },
+      { kind: "card-too-small", cardGb: "16" },
+      {
+        kind: "partition-content-does-not-fit",
+        volumeName: "System",
+        neededBlocks: "2",
+        availableBlocks: "1",
+      },
+      {
+        kind: "system-additions-do-not-fit",
+        neededBlocks: "2",
+        availableBlocks: "1",
+        treeBlocks: "1",
+        kickstarts: "kick34005.A500",
+      },
+      { kind: "a-shape-this-screen-has-not-met" },
+    ];
+    for (const params of sizing) {
+      const phrase = overflowPhrase({
+        code: "ART-CARD-DOES-NOT-FIT",
+        message: "the card does not fit",
+        params,
+      });
+      expect(phrase, params.kind).not.toBeNull();
+      expect(resolvesAtRuntime(phrase!.key), params.kind).toBe(true);
+    }
+
+    for (const why of ["empty", "too-long", "reserved-character"] as const) {
+      const phrase = volumeNameProblemPhrase({ ok: false, why, maxChars: 30 });
+      expect(resolvesAtRuntime(phrase!.key), why).toBe(true);
+    }
+
+    // The PFS3 driver line: found in an archive, found loose, and not found
+    // at all — with and without archives ART could not read.
+    for (const fromArchive of ["E:\paketler\pfs3aio.lha", null]) {
+      const phrase = driverPhrase({ path: "E:\pfs3aio", fromArchive, version: 19, revision: 2 });
+      expect(resolvesAtRuntime(phrase.key), String(fromArchive)).toBe(true);
+    }
+    for (const unreadable of ["", "E:\m\broken.lha"]) {
+      const phrase = driverMissingPhrase({
+        code: "ART-PFS3-DRIVER-NOT-FOUND",
+        message: "No PFS3 driver was found.",
+        params: { searched: "E:\m", unreadable },
+      });
+      expect(resolvesAtRuntime(phrase!.key), unreadable).toBe(true);
+    }
+  });
+
+  it("cardOsRun: every (kind, ending) pair, next step, count and fact resolves", () => {
+    const refusal = {
+      code: "ART-CARD-DOES-NOT-FIT",
+      message: "the card does not fit",
+      params: { kind: "does-not-fit" },
+    };
+    const kinds: CardPhaseKind[] = [
+      "tree",
+      "package",
+      "firstboot",
+      "prepare",
+      "agree",
+      "build",
+    ];
+    const endings: CardPhaseEnding[] = [
+      { state: "pending" },
+      { state: "running", done: 3, total: null },
+      { state: "succeeded" },
+      { state: "refused", refusal },
+      { state: "failed", refusal },
+      { state: "stopped", phase: "partitions" },
+      { state: "stopped", phase: null },
+      { state: "not-attempted" },
+    ];
+    for (const kind of kinds) {
+      for (const ending of endings) {
+        const phrase = cardPhasePhrase(kind, ending);
+        expect(resolvesAtRuntime(phrase.key), `${kind}/${ending.state}`).toBe(true);
+      }
+      // Two different kinds never share a terminal key: a build refused and a
+      // tree refused are two different things to tell somebody.
+      expect(cardPhasePhrase(kind, { state: "succeeded" }).key).toContain(kind);
+    }
+
+    for (const ending of endings) {
+      const next = cardNextStepPhrase(ending, "E:\\amiga\\kart.img");
+      if (next) expect(resolvesAtRuntime(next.key), ending.state).toBe(true);
+      const nameless = cardNextStepPhrase(ending, null);
+      if (nameless) expect(resolvesAtRuntime(nameless.key), ending.state).toBe(true);
+      const count = cardCountPhrase(ending);
+      if (count) expect(resolvesAtRuntime(count.key), ending.state).toBe(true);
+    }
+    const withTotal = cardCountPhrase({ state: "running", done: 3, total: 9 });
+    expect(resolvesAtRuntime(withTotal!.key)).toBe(true);
+
+    const subs: CardOsPhaseName[] = ["prepare", "whdload", "card", "partitions", "check"];
+    for (const sub of subs) expect(resolvesAtRuntime(cardSubPhasePhrase(sub).key), sub).toBe(true);
+
+    const partials: PartialRemoval[] = [
+      { outcome: "not-created" },
+      { outcome: "removed", path: "E:\\amiga\\kart.img.partial" },
+      { outcome: "already-gone", path: "E:\\amiga\\kart.img.partial" },
+      { outcome: "not-removed", path: "E:\\amiga\\kart.img.partial", why: "in use" },
+    ];
+    for (const partial of partials) {
+      expect(resolvesAtRuntime(cardPartialPhrase(partial).key), partial.outcome).toBe(true);
+    }
+
+    const left = cardScratchLeftPhrase({ path: "E:\\tmp\\card-1", why: "in use" });
+    expect(resolvesAtRuntime(left!.key)).toBe(true);
+    expect(cardScratchLeftPhrase(null)).toBeNull();
+
+    // A card code the recogniser knows, one it does not, and ART's own
+    // codeless refusal — none of which may render as a raw key.
+    const refusals: { code: string; message: string; params: Record<string, string> }[] = [
+      refusal,
+      {
+        code: "ART-CARD-SOURCE-UNUSABLE",
+        message: "x",
+        params: { source: "a", partition: "Games" },
+      },
+      { code: "", message: "something Rust said", params: {} },
+    ];
+    for (const one of refusals) {
+      const phrase = cardRefusalPhrase(one);
+      expect(phrase, one.code).not.toBeNull();
+      expect(resolvesAtRuntime(phrase!.key), one.code).toBe(true);
+    }
+    // An install phase's refusal has no sentence of its own here: the typed
+    // reasons beside it are what the row renders.
+    expect(cardRefusalPhrase({ code: "ART-INSTALL-REFUSED", message: "", params: {} })).toBeNull();
+  });
+
+  it("cardOsKickstarts: every offer, RTB source and summary resolves", () => {
+    const wanted = { name: "kick40068.A1200", crc16: 1234, size: 524_288 };
+    const offers: KickstartOffer[] = [
+      {
+        outcome: "supplied",
+        wanted,
+        by: { path: "E:\\roms\\kick40068.A1200", name: "kick40068.A1200", sizeDisagrees: null },
+      },
+      { outcome: "encrypted", wanted, candidates: ["E:\\afe\\rom\\kick40068.A1200"] },
+      { outcome: "not-here", wanted },
+      { outcome: "unmatchable", wanted },
+    ];
+    for (const offer of offers) {
+      expect(resolvesAtRuntime(offerPhrase(offer).key), offer.outcome).toBe(true);
+    }
+
+    const rtbSources: RtbSource[] = [
+      { kind: "loose", path: "E:\\material\\kick40068.A1200.RTB" },
+      { kind: "in-archive", archive: "E:\\material\\skick346.lha", member: "kick40068.A1200.RTB" },
+      { kind: "missing", getFrom: "aminet-skick346" },
+      { kind: "missing", getFrom: "whdload-seven-cities-of-gold" },
+    ];
+    for (const rtb of rtbSources) {
+      expect(resolvesAtRuntime(rtbPhrase(rtb).key), rtb.kind).toBe(true);
+    }
+
+    const item: ProposedKickstart = {
+      name: "kick40068.A1200",
+      titles: ["Games/Turrican/Turrican.slave"],
+      titlesMore: 0,
+      offer: offers[0],
+      rtb: rtbSources[0],
+    };
+    expect(resolvesAtRuntime(titlesPhrase(item).key)).toBe(true);
+    expect(resolvesAtRuntime(titlesPhrase({ ...item, titlesMore: 5 }).key)).toBe(true);
+
+    expect(resolvesAtRuntime(summaryPhrase(0, 0).key)).toBe(true);
+    expect(resolvesAtRuntime(summaryPhrase(0, 3).key)).toBe(true);
+    expect(resolvesAtRuntime(summaryPhrase(3, 3).key)).toBe(true);
+  });
+
   it("amigainstall: every ending, every settlement, every blocker resolves", () => {
     // The four endings are four sentences and four next steps (§89, and the
     // three defects this round produced); a key nobody added would render as
@@ -1078,14 +1334,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       notes: [],
       rdb_backup: null,
     };
-    const ready = { image: "card.img", rdbBackup: null, picks: [pick], plan };
+    const ready = { image: "card.img", rdbBackup: null, picks: [pick], plan, nameVerdicts: {} };
+    const longName = "W".repeat(31);
 
     const blockers = [
       preloadBlocker({ ...ready, image: null }),
       preloadBlocker({ ...ready, picks: [{ ...pick, chosen: false }] }),
       preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: " " }] }),
-      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "Work:" }] }),
-      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "W".repeat(31) }] }),
+      preloadBlocker({
+        ...ready,
+        picks: [{ ...pick, volumeName: "Work:" }],
+        nameVerdicts: { "Work:": { ok: false, why: "reserved-character", maxChars: 30 } },
+      }),
+      preloadBlocker({
+        ...ready,
+        picks: [{ ...pick, volumeName: longName }],
+        nameVerdicts: { [longName]: { ok: false, why: "too-long", maxChars: 30 } },
+      }),
       preloadBlocker({ ...ready, plan: null }),
       // ART-117: an RDB edit with no backup path.
       preloadBlocker({ ...ready, plan: importPlan }),
