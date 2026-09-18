@@ -178,6 +178,14 @@ import {
   volumeNameProblemPhrase,
 } from "@/lib/cardOsMeasure";
 import type { MeasuredPartition, SourceKind, UnusableSource } from "@/lib/cardOs";
+import {
+  offerPhrase,
+  rtbPhrase,
+  summaryPhrase,
+  titlesPhrase,
+} from "@/lib/cardOsKickstarts";
+import type { ProposedKickstart, RtbSource } from "@/lib/cardOs";
+import type { KickstartOffer } from "@/lib/gameindex";
 
 /** Whether `dotted` (e.g. "whdload.outcome.installed") names a string leaf. */
 function isLeafKey(dotted: string): boolean {
@@ -324,6 +332,47 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       });
       expect(resolvesAtRuntime(phrase!.key), unreadable).toBe(true);
     }
+  });
+
+  it("cardOsKickstarts: every offer, RTB source and summary resolves", () => {
+    const wanted = { name: "kick40068.A1200", crc16: 1234, size: 524_288 };
+    const offers: KickstartOffer[] = [
+      {
+        outcome: "supplied",
+        wanted,
+        by: { path: "E:\\roms\\kick40068.A1200", name: "kick40068.A1200", sizeDisagrees: null },
+      },
+      { outcome: "encrypted", wanted, candidates: ["E:\\afe\\rom\\kick40068.A1200"] },
+      { outcome: "not-here", wanted },
+      { outcome: "unmatchable", wanted },
+    ];
+    for (const offer of offers) {
+      expect(resolvesAtRuntime(offerPhrase(offer).key), offer.outcome).toBe(true);
+    }
+
+    const rtbSources: RtbSource[] = [
+      { kind: "loose", path: "E:\\material\\kick40068.A1200.RTB" },
+      { kind: "in-archive", archive: "E:\\material\\skick346.lha", member: "kick40068.A1200.RTB" },
+      { kind: "missing", getFrom: "aminet-skick346" },
+      { kind: "missing", getFrom: "whdload-seven-cities-of-gold" },
+    ];
+    for (const rtb of rtbSources) {
+      expect(resolvesAtRuntime(rtbPhrase(rtb).key), rtb.kind).toBe(true);
+    }
+
+    const item: ProposedKickstart = {
+      name: "kick40068.A1200",
+      titles: ["Games/Turrican/Turrican.slave"],
+      titlesMore: 0,
+      offer: offers[0],
+      rtb: rtbSources[0],
+    };
+    expect(resolvesAtRuntime(titlesPhrase(item).key)).toBe(true);
+    expect(resolvesAtRuntime(titlesPhrase({ ...item, titlesMore: 5 }).key)).toBe(true);
+
+    expect(resolvesAtRuntime(summaryPhrase(0, 0).key)).toBe(true);
+    expect(resolvesAtRuntime(summaryPhrase(0, 3).key)).toBe(true);
+    expect(resolvesAtRuntime(summaryPhrase(3, 3).key)).toBe(true);
   });
 
   it("amigainstall: every ending, every settlement, every blocker resolves", () => {

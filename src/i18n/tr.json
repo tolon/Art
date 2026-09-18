@@ -2237,6 +2237,44 @@
       "hint": "Yalnızca belirli bir pfs3aio kullanmak istiyorsanız gerekir. Dokunmazsanız ART malzeme klasörlerinizde bulduğunu kullanır ve hangisi olduğunu aşağıda yazar."
     }
   },
+  "cardKickstart": {
+    "heading": "Kickstart imajları",
+    "intro": "Bu karttaki oyunların her biri ihtiyaç duyduğu bir Kickstart imajını adlandırıyor. Siz kutucuğu işaretlemedikçe hiçbiri karta yerleştirilmez — ART yalnızca öneride bulunur, kararı siz verirsiniz.",
+    "noneNeeded": "Bu karttaki hiçbir oyun bir Kickstart imajına ihtiyaç duymuyor, bu yüzden burada onaylanacak bir şey yok.",
+    "column": {
+      "name": "Adı",
+      "offer": "ART'ın bulduğu",
+      "rtb": ".RTB dosyası"
+    },
+    "titles": {
+      "list": "Bunu isteyen oyunlar: {{list}}",
+      "withMore_one": "Bunu isteyen oyunlar: {{list}} ve {{count}} tanesi daha",
+      "withMore_other": "Bunu isteyen oyunlar: {{list}} ve {{count}} tanesi daha"
+    },
+    "offer": {
+      "supplied": "Elinizde var — {{rom}}",
+      "encrypted": "ART, aradığınız bu olabilecek {{count}} adet Amiga Forever ROM'u buldu; ama ART her birini okuyabilmeden önce yanlarında kendi rom.key dosyalarının bulunması gerekiyor.",
+      "notHere": "ROM klasörünüzde bulunmuyor.",
+      "unmatchable": "Bu oyun tek bir imaj yerine bir liste adlandırıyor, bu yüzden ART onu eşleştiremiyor."
+    },
+    "rtb": {
+      "loose": "Bulundu — {{path}}",
+      "inArchive": "Şu arşivin içinde bulundu: {{archive}}",
+      "missing": "Hiçbir malzeme klasöründe bulunamadı. {{package}} paketini klasörlerden birine koyun — bu paket zaten ART'ın kendi paket kataloğunda bulunuyor."
+    },
+    "tag": {
+      "ready": "hazır",
+      "blocked": "eklenemez"
+    },
+    "agree": "{{name}} bu karta yerleştirilsin mi?",
+    "unreadable": {
+      "heading": "ART'ın okuyamadığı {{count}} adet .slave dosyası var, bu yüzden bunların neye ihtiyaç duyduğunu soramadı:"
+    },
+    "summary": {
+      "none": "Bu karttaki hiçbir oyun bir Kickstart imajı istemiyor.",
+      "line": "{{total}} Kickstart imajından {{agreed}} tanesi karta yerleştirilecek. Geri kalanlar dışarıda bırakılıyor — kendisine gereken imajı alamayan bir oyun WHDLoad altında çalışmayacak."
+    }
+  },
   "preload": {
     "heading": "Kartın Amiga birimlerini hazırla",
     "intro": "ART'ın oluşturduğu kartta Amiga'nın gördüğü bölümler var ama içleri boş — Amiga ilk açılışta onları biçimlendirmeyi önerir. Bu ekran onları burada biçimlendirir ve içeriğini kopyalar, böylece kart hazır gelir.",

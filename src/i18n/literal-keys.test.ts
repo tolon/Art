@@ -756,6 +756,18 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // different facts for an archive and a loose file, and the other says
     // what to add and everywhere ART looked. Both are enumerated in
     // `cardOsMeasure.test.ts` and resolved in `phrase-keys.test.ts`.
-    expect(dynamicCalls).toBe(208);
+    // 208 → 212 (card round 4, task 9): four, all in
+    // `KickstartAgreement.tsx`, all a `Phrase` from `@/lib/cardOsKickstarts`
+    // — what ART found for a name (`offerPhrase`), where its `.RTB` would
+    // come from or the package to get one from (`rtbPhrase`), the titles
+    // that asked for it (`titlesPhrase`), and the step's own summary
+    // (`summaryPhrase`). The row's badge is deliberately a literal
+    // `t("cardKickstart.tag.ready")` / `t("cardKickstart.tag.blocked")`
+    // pair, the same choice `CardPartitionRow.tsx` made for its own tag, so
+    // it stays inside the static check. `cardOsKickstarts.test.ts`
+    // enumerates every variant each mapper can return and
+    // `phrase-keys.test.ts` resolves each one in the catalogue, which is the
+    // check this scan cannot make.
+    expect(dynamicCalls).toBe(212);
   });
 });

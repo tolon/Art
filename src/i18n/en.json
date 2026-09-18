@@ -2237,6 +2237,44 @@
       "hint": "Only if you want a particular pfs3aio. Left alone, ART uses the one it finds in your material folders and says which below."
     }
   },
+  "cardKickstart": {
+    "heading": "Kickstart images",
+    "intro": "The titles on this card each name a Kickstart image they need. Nothing here is placed until you tick it — ART only proposes.",
+    "noneNeeded": "No title on this card needs a Kickstart image, so there is nothing to agree to here.",
+    "column": {
+      "name": "Name",
+      "offer": "What ART found",
+      "rtb": "Its .RTB"
+    },
+    "titles": {
+      "list": "Wanted by: {{list}}",
+      "withMore_one": "Wanted by: {{list}} and {{count}} more",
+      "withMore_other": "Wanted by: {{list}} and {{count}} more"
+    },
+    "offer": {
+      "supplied": "You have it — {{rom}}",
+      "encrypted": "ART found {{count}} Amiga Forever ROM(s) that may be it, but each needs its rom.key beside it before ART can read it.",
+      "notHere": "Not in your ROM folder.",
+      "unmatchable": "This title names a list rather than one image, so ART cannot match it."
+    },
+    "rtb": {
+      "loose": "Found — {{path}}",
+      "inArchive": "Found in {{archive}}",
+      "missing": "Not found in any material folder. Put {{package}} in one — ART's own package catalogue already carries it."
+    },
+    "tag": {
+      "ready": "ready",
+      "blocked": "cannot be added"
+    },
+    "agree": "Place {{name}} on this card?",
+    "unreadable": {
+      "heading": "{{count}} .slave file(s) ART could not read, so it could not ask what they need:"
+    },
+    "summary": {
+      "none": "No title on this card asks for a Kickstart image.",
+      "line": "{{agreed}} of {{total}} Kickstart image(s) will be placed. The rest are left out — a title that needs one it does not get will not run under WHDLoad."
+    }
+  },
   "preload": {
     "heading": "Prepare the card's Amiga volumes",
     "intro": "A card ART builds has partitions an Amiga can see and nothing inside them — the Amiga offers to format them on first boot. This formats them here instead, and copies your content in, so the card arrives ready.",
