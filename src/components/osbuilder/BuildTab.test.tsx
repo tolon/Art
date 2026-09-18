@@ -2258,6 +2258,35 @@ describe("card mode — the card's own run", () => {
     expect(cardCloseMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * **A card run leaves the folder lane's own remembered tree exactly as it
+   * found it** (round 4 final review, C3).
+   *
+   * The run used to put `card_os_open`'s scratch path into `session.tree` —
+   * a *persisted* key five screens read as the user's own distribution root —
+   * and then set it to `null` in the `finally` that runs on every path,
+   * success included, clearing `firstboot.written` with it. A user who had
+   * built a folder distribution and later built a card found the Appearance
+   * and Network panels, the step banner and `VerifyAgainstCard` all saying
+   * there was no tree, having changed nothing themselves. The run's tree now
+   * lives in a store of its own (`@/lib/cardRunTree`), which is not persisted
+   * and which no folder screen reads.
+   */
+  it("leaves session.tree and firstboot.written untouched across a whole card run", async () => {
+    cardMode({
+      "buildSession.tree": { root: "E:\\Amiga\\dist39", builtHere: true },
+      "buildSession.firstboot": { written: true, askPrefs: true },
+    });
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+    await waitFor(() => expect(screen.getByTestId("card-manifest")).toBeTruthy());
+
+    const bag = useSettingsStore.getState().settings.remembered as Record<string, unknown>;
+    expect(bag["buildSession.tree"]).toEqual({ root: "E:\\Amiga\\dist39", builtHere: true });
+    expect((bag["buildSession.firstboot"] as { written: boolean }).written).toBe(true);
+  });
+
   // **The agreement is a real pause** (Q8, the owner's rule of 2026-08-21).
   it("does not build until the user has acted on the Kickstart agreement", async () => {
     cardMode();

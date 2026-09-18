@@ -111,7 +111,13 @@ export function CardPartitionRow({
       : { className: "badge badge-ok", label: t("cardSection.tag.measured") };
 
   return (
-    <div {...(fixed ? {} : { "data-card-row": index })} data-testid={`card-row-${name}`}>
+    // **Every row carries the attribute, fixed ones included** (round 4 final
+    // review, minor 1). A row that is invisible to the hit test swallows a
+    // drop in silence: the pointer is over something that looks exactly like
+    // the rows above it and nothing at all happens. The section answers a
+    // drop on System or Work with the sentence saying where its contents come
+    // from — which is a refusal a user can act on, and an omission is not.
+    <div data-card-row={index} data-testid={`card-row-${name}`}>
       <div className="card-prow">
         <span style={{ fontWeight: 600 }}>{name}</span>
         <span className="muted">{role}</span>

@@ -103,12 +103,19 @@ export interface CardOsRunArgs {
    * `null` again the moment the session closes.
    *
    * **This is how the card section and the run agree about which tree is
-   * measured** (Task 8's carry). The section measures against
-   * `session.tree.root`; the card's tree only exists inside a session, so the
-   * run hands it over while it lives and takes it back when it goes. Before a
-   * run the section says its own sentence — *sizes appear once this build has
-   * a system tree to measure* — which is true and asks the user for nothing
-   * they cannot give.
+   * measured** (Task 8's carry). The card's tree only exists inside a
+   * session, so the run hands it over while it lives and takes it back when
+   * it goes. Before a run the section says its own sentence — *sizes appear
+   * once this build has a system tree to measure* — which is true and asks
+   * the user for nothing they cannot give.
+   *
+   * **What the caller may do with it is narrow, and the narrowness is the
+   * point** (final review, C3). `BuildTab` puts it in `@/lib/cardRunTree`, a
+   * store that is not persisted and that no folder-lane screen reads. It
+   * used to go into `session.tree` — persisted, and read by five screens as
+   * the user's own distribution root — so a card run overwrote that value
+   * with a scratch path and then erased it, and `firstboot.written` with it,
+   * on **every** path including success.
    */
   onSessionTree(tree: string | null): void;
 }
@@ -250,6 +257,20 @@ export function useCardOsRun(args: CardOsRunArgs): CardOsRun {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      /**
+       * **The one await that outlives the screen is the agreement's**, and it
+       * has to be broken here (final review, I4).
+       *
+       * Every other row is waiting on a job Rust is running, which settles on
+       * its own. The agreement is waiting on a *person*, through a promise
+       * only this screen can resolve — so a `CardRun` unmounted by its gate
+       * turning on mid-run left `runRow` awaiting for ever, `runSequence`'s
+       * `finally` unreached and `card_os_close` uncalled: a session holding
+       * the whole staged tree, with nothing left to close it. Rejecting with
+       * `GaveUp` — the same class the Give-up button uses — reaches exactly
+       * that `finally`, which is the only path that closes a session.
+       */
+      agreeRef.current?.reject(new GaveUp());
     };
   }, []);
 

@@ -2141,6 +2141,10 @@
     "work": {
       "role": "the rest of the card"
     },
+    "dropFixed": {
+      "system": "System takes nothing dropped on it: it is the system tree this build writes. Drop those files on one of your own partitions instead.",
+      "work": "Work takes nothing dropped on it: it is whatever is left of the card after the other partitions. Drop those files on one of your own partitions instead."
+    },
     "content": {
       "none": "nothing on it yet",
       "summary": "Sources: {{sources}} · Files: {{count}}"

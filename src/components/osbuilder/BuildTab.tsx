@@ -112,8 +112,10 @@ import {
 import type { Phrase } from "@/lib/phrase";
 import { useBuildRun } from "@/lib/useBuildRun";
 import { useCardOsRun } from "@/lib/useCardOsRun";
+import { useCardRunTreeStore } from "@/lib/cardRunTree";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { useRunLock } from "@/lib/runLock";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
  * What the media folders actually hold, and what ART makes of it.
@@ -584,20 +586,23 @@ export interface CardRunProps {
  * **Mounted only in card mode**, so `useCardOsRun` — and the session it can
  * open — does not exist at all for a folder build (Q9's blast radius).
  *
- * The session's tree goes into `session.tree` while the session lives and is
- * taken back when it closes: that is how the Machine tab's card section and
- * this run agree about which tree is being measured (task 8's carry). Nothing
- * writes `osinstall.destination` — R2.
+ * The session's tree goes into **`@/lib/cardRunTree`** while the session
+ * lives and is taken back when it closes: that is how the Machine tab's card
+ * section and this run agree about which tree is being measured (task 8's
+ * carry). It is deliberately **not** `session.tree` any more (final review,
+ * C3): that key is persisted and five folder-lane screens read it as the
+ * user's own distribution root, so a card run used to overwrite it with a
+ * scratch path and then erase it — along with `firstboot.written` — on every
+ * path, success included. Nothing here writes `osinstall.destination` either
+ * — R2.
  */
 function CardRun({ phases, plan, prepare, build, image }: CardRunProps) {
   const { t } = useTranslation();
-  const { setTree } = useBuildSession();
+  const setRunTree = useCardRunTreeStore((state) => state.setRoot);
   const [confirmed, setConfirmed] = useState(false);
   const [agreed, setAgreed] = useState<string[]>([]);
 
-  const run = useCardOsRun({
-    onSessionTree: (root) => setTree({ root, builtHere: root !== null }),
-  });
+  const run = useCardOsRun({ onSessionTree: setRunTree });
 
   // The lane's strip goes dead while this runs — the same two effects tab 4's
   // folder run uses, and for the same reason: the sequencer lives here, so
@@ -821,6 +826,8 @@ export function BuildTab() {
     DEFAULT_EMU68_OPTIONS
   );
   const [emu68Line] = useRemembered<Emu68Line>("pistorm.line", isEmu68Line, "stable");
+  /** Settings' own hst-imager, for the prepare request (I2). */
+  const hstImagerPath = useSettingsStore((state) => state.settings.hstImagerPath);
 
   const cardPhases: CardPhase[] = useMemo(
     () =>
@@ -842,8 +849,15 @@ export function BuildTab() {
       material: session.material.folders.map((folder) => folder.path),
       ...(cardTarget.pfs3Driver ? { pfs3Driver: cardTarget.pfs3Driver } : {}),
       ...(session.rom.path ? { kickstart: session.rom.path } : {}),
+      // **The hst-imager the user configured** (final review, I2). Without
+      // it `#[serde(default)]` reads `NotConfigured`, and a partition holding
+      // a non-ASCII name was refused with *"show ART a working
+      // hst.imager.exe in Settings"* — where the user had already put one.
+      // The **build** deliberately takes none (round 3, I1): it uses the tool
+      // that answered here, carried in the prepared session.
+      ...(hstImagerPath ? { hstImagerPath } : {}),
     }),
-    [cardTarget, cardImage, session.material.folders, session.rom.path]
+    [cardTarget, cardImage, session.material.folders, session.rom.path, hstImagerPath]
   );
 
   const cardBuildRequest: Omit<CardOsBuildRequest, "session" | "agreedKickstarts"> = useMemo(

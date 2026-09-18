@@ -2141,6 +2141,10 @@
     "work": {
       "role": "karttan geriye kalan her şey"
     },
+    "dropFixed": {
+      "system": "System bölümüne bırakılan hiçbir şey alınmaz: onun içeriği, bu yapının yazdığı sistem ağacının kendisidir. Bıraktığınız dosyaları kendi eklediğiniz bölümlerden birinin üzerine bırakın.",
+      "work": "Work bölümüne bırakılan hiçbir şey alınmaz: o, diğer bölümler yerleştikten sonra karttan geriye kalan yerdir. Bıraktığınız dosyaları kendi eklediğiniz bölümlerden birinin üzerine bırakın."
+    },
     "content": {
       "none": "üzerine henüz bir şey bırakılmadı",
       "summary": "Kaynak sayısı: {{sources}} · Dosya sayısı: {{count}}"

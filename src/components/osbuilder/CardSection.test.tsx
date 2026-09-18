@@ -233,6 +233,7 @@ describe("what fills a partition", () => {
     outletContextMock.mockReturnValue({
       analyses: [{ path: "E:\\demos" }],
       dropPosition: { x: 400, y: 320 },
+      lastDrop: { paths: ["E:\\demos"], at: { x: 400, y: 320 }, seq: 1 },
     });
     render(<CardSection />);
 
@@ -250,6 +251,37 @@ describe("what fills a partition", () => {
     });
   });
 
+  /**
+   * **A drop on System or Work is answered, not swallowed** (round 4 final
+   * review, minor 1). Both rows look exactly like the ones that do take
+   * sources, and before this they had no `data-card-row` at all: the hit test
+   * answered `null` and the section said nothing whatever. Nothing is added —
+   * that part was always right — but the act now gets a sentence naming where
+   * that row's contents come from.
+   */
+  it("says why a drop on System adds nothing, instead of ignoring it", async () => {
+    seedCard([
+      { name: "System", sources: [] },
+      { name: "Games", sources: [] },
+      { name: "Work", sources: [] },
+    ]);
+    cardRowAtMock.mockReturnValue(0);
+    outletContextMock.mockReturnValue({
+      analyses: [{ path: "E:\\demos" }],
+      dropPosition: { x: 400, y: 100 },
+      lastDrop: { paths: ["E:\\demos"], at: { x: 400, y: 100 }, seq: 1 },
+    });
+    render(<CardSection />);
+
+    const said = await screen.findByTestId("card-drop-fixed");
+    expect(said.textContent).toContain("System takes nothing dropped on it");
+    expect(screen.queryByTestId("card-row-sources-System")).toBeNull();
+    const target = rememberedBag()[`osinstall.cardTarget.${RELEASE}`] as {
+      partitions: { name: string; sources: string[] }[];
+    };
+    expect(target.partitions.map((p) => p.sources)).toEqual([[], [], []]);
+  });
+
   it("ignores a drop that landed on no row at all", async () => {
     seedCard([
       { name: "System", sources: [] },
@@ -260,6 +292,7 @@ describe("what fills a partition", () => {
     outletContextMock.mockReturnValue({
       analyses: [{ path: "E:\\demos" }],
       dropPosition: { x: 10, y: 10 },
+      lastDrop: { paths: ["E:\\demos"], at: { x: 10, y: 10 }, seq: 1 },
     });
     render(<CardSection />);
     await screen.findByTestId("card-row-Games");

@@ -27,7 +27,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate, useOutletContext } from "react-router-dom";
 
 import { cardImageBytes } from "@/lib/cardBuild";
 import {
@@ -46,6 +46,7 @@ import {
   minCardBytes,
   whatYouSupply,
 } from "@/lib/osBuilder";
+import type { DropContext } from "@/lib/dropContext";
 import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
@@ -85,6 +86,24 @@ export function OsBuilder() {
    * that sets it.
    */
   const { running } = useRunLock();
+
+  /**
+   * **The shell forwards the drop context; an `<Outlet/>` with no `context`
+   * prop erases it** (round 4 final review, C1).
+   *
+   * This is not "the value happens not to be inherited". react-router's
+   * `useOutlet` (7.18.2) wraps the child it renders in
+   * `<OutletContext.Provider value={context}>` **unconditionally**, so an
+   * `<Outlet />` written without the prop actively provides `undefined` to
+   * everything below it — shadowing the Layout's own value, which is one
+   * provider higher. `CardSection`'s per-row drop and `CardBuilder`'s intake
+   * both read that context, and both read `{}` in the running app while every
+   * test mocked `useOutletContext` and crossed nothing.
+   * `src/pages/osbuilder/dropContext.test.tsx` renders this route tree with no
+   * router API mocked at all, which is the only shape of test that could have
+   * caught it.
+   */
+  const dropContext = useOutletContext<DropContext | undefined>();
 
   // A disc dropped on the drop panel routes here (`os.install-from-disc`)
   // carrying the file in router state. Under sub-routes the shell has to
@@ -145,7 +164,7 @@ export function OsBuilder() {
         )}
       </nav>
 
-      <Outlet />
+      <Outlet context={dropContext} />
       <BuildBar />
     </div>
   );

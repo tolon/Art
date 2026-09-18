@@ -49,23 +49,19 @@ import {
   volumeNameProblemPhrase,
 } from "@/lib/cardOsMeasure";
 import type { CardPartitionTarget } from "@/lib/cardTarget";
+import type { DropContext } from "@/lib/dropContext";
 import { cardRowAt } from "@/lib/dropTarget";
 import { errorPhrase } from "@/lib/errorText";
 import { subscribeSafely } from "@/lib/jobs";
 import { isTextOrNothing } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
+import { useCardRunTree } from "@/lib/cardRunTree";
 import { usePowerMode } from "@/lib/uxmode";
+import { useSettingsStore } from "@/stores/settingsStore";
 
 /** The names the design offers before anyone types one (design § 3). */
 const OFFERED_NAMES = ["Games", "Stuff", "Demos"] as const;
-
-interface DropContext {
-  analyses?: { path: string }[];
-  /** Already in CSS pixels: `dnd.ts` converts once, with `cssPointOf`, and a
-   *  second conversion here would divide by the device ratio twice. */
-  dropPosition?: { x: number; y: number } | null;
-}
 
 export function CardSection() {
   const { t } = useTranslation();
@@ -73,7 +69,28 @@ export function CardSection() {
   const powerMode = usePowerMode();
 
   const target = session.cardTarget;
-  const tree = session.tree.root;
+  /**
+   * **Which tree the sizes are measured against.**
+   *
+   * The card's own tree exists only inside a run, and it lives in
+   * `@/lib/cardRunTree` — never in `session.tree`, which is the folder lane's
+   * persisted, user-facing root (final review, C3). A run's tree wins while
+   * one is open; otherwise the user's own remembered tree is what there is to
+   * measure, which is what a user who built a folder distribution first
+   * expects.
+   */
+  const runTree = useCardRunTree();
+  const tree = runTree ?? session.tree.root;
+  /**
+   * **The hst-imager the user configured, forwarded** (final review, I2).
+   *
+   * `#[serde(default)]` on the request's `hstImagerPath` turned its absence
+   * into `HstImagerState::NotConfigured`, so the measurement told a user to go
+   * to Settings and point ART at an hst.imager.exe that was already sitting in
+   * Settings — a refusal naming a step already done, which is the actionable
+   * rule inverted. `VolumePreload` has read this key since round 3.
+   */
+  const hstImagerPath = useSettingsStore((state) => state.settings.hstImagerPath);
   const material = useMemo(
     () => session.material.folders.map((folder) => folder.path),
     [session.material.folders]
@@ -137,24 +154,42 @@ export function CardSection() {
   );
 
   // -------------------------------------------------------------------
-  // Drops (Q3): the one global listener carried the position out; this is
-  // the hit test against the one attribute a row owns.
+  // Drops (Q3): the one global listener carried the drop out; this is the
+  // hit test against the one attribute a row owns.
+  //
+  // **Keyed on the drop, never on the pointer** (final review, I1). This used
+  // to join `analyses` and `dropPosition` here, which are set at different
+  // moments: merely dragging across the section re-ran it with the previous
+  // drop's paths and appended them, row by row, before anything had been
+  // dropped. `lastDrop` is one value with its own `seq`, so the effect runs
+  // once per drop and never on a move.
   // -------------------------------------------------------------------
-  const dropContext = useOutletContext<DropContext>() ?? {};
-  const drop = JSON.stringify({
-    paths: (dropContext?.analyses ?? []).map((entry) => entry.path),
-    at: dropContext?.dropPosition ?? null,
-  });
+  const dropContext = useOutletContext<DropContext | undefined>();
+  const lastDrop = dropContext?.lastDrop ?? null;
+  const seq = lastDrop?.seq ?? null;
+  const lastDropRef = useRef(lastDrop);
+  lastDropRef.current = lastDrop;
+  /** The fixed row a drop landed on, by name, so the act is answered rather
+   *  than ignored (final review, minor 1). */
+  const [dropRefused, setDropRefused] = useState<string | null>(null);
   useEffect(() => {
-    const { paths, at } = JSON.parse(drop) as {
-      paths: string[];
-      at: { x: number; y: number } | null;
-    };
-    if (paths.length === 0 || !at) return;
-    const row = cardRowAt(at);
+    if (seq === null) return;
+    const drop = lastDropRef.current;
+    if (!drop || drop.seq !== seq || drop.paths.length === 0 || !drop.at) return;
+    const row = cardRowAt(drop.at);
     if (row === null) return;
-    addSources(row, paths);
-  }, [drop, addSources]);
+    const partition = targetRef.current.partitions[row];
+    if (!partition) return;
+    // **System and Work look like the other rows and take nothing**, so a
+    // drop on one used to vanish without a word. Say which of the two it is
+    // and where its contents come from instead.
+    if (isFixedPartition(partition.name)) {
+      setDropRefused(partition.name);
+      return;
+    }
+    setDropRefused(null);
+    addSources(row, drop.paths);
+  }, [seq, addSources]);
 
   // -------------------------------------------------------------------
   // What each source is (Q6)
@@ -191,8 +226,9 @@ export function CardSection() {
       partitions: measurableInputs(target.partitions),
       material,
       ...(target.pfs3Driver ? { pfs3Driver: target.pfs3Driver } : {}),
+      ...(hstImagerPath ? { hstImagerPath } : {}),
     }),
-    [target.sizeGb, target.partitions, target.pfs3Driver, tree, material]
+    [target.sizeGb, target.partitions, target.pfs3Driver, tree, material, hstImagerPath]
   );
   const fingerprint = JSON.stringify(request);
 
@@ -569,6 +605,19 @@ export function CardSection() {
           {t(driverPhrase(shown.driver).key, driverPhrase(shown.driver).params)}
         </p>
       )}
+      {/* A drop the section could not act on — said, because the row it
+          landed on looks exactly like the ones that do take sources. */}
+      {dropRefused && (
+        <p className="infobar" style={{ marginTop: 8 }} data-testid="card-drop-fixed">
+          {/* Two literal keys rather than one call over a ternary, so
+              `literal-keys.test.ts` can check both statically — the rule
+              `CardPartitionRow` already follows for its own two. */}
+          {dropRefused === "System"
+            ? t("cardSection.dropFixed.system")
+            : t("cardSection.dropFixed.work")}
+        </p>
+      )}
+
       {driverMissing && (
         <p className="infobar warn" style={{ marginTop: 8 }} data-testid="card-driver-missing">
           {t(driverMissing.key, driverMissing.params)}

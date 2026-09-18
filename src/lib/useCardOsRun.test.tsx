@@ -338,6 +338,30 @@ describe("the session (Q9, ART-344)", () => {
     expect(buildMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * **A screen that goes away while the run waits at the agreement still
+   * closes its session** (round 4 final review, I4).
+   *
+   * `CardRun` is rendered only inside `BuildTab`'s `gate === null` branch, and
+   * the gate depends on live values (the ticked list, the plan, the media
+   * evidence, the image). Any of them changing mid-run unmounts the whole run.
+   * Unmount only flipped `mounted`, so the agreement's promise was never
+   * settled: `runRow` awaited for ever, `runSequence`'s `finally` never ran and
+   * `card_os_close` was never called — a session holding the whole staged tree,
+   * left behind, with the navigation lock released (ART-344 re-opened from the
+   * screen side).
+   */
+  it("is closed when the screen goes away while the run waits at the agreement", async () => {
+    const view = setup();
+    await toAgreement(view);
+    await act(async () => {
+      view.unmount();
+    });
+    await waitFor(() => expect(closeMock).toHaveBeenCalled());
+    expect(closeMock.mock.calls).toEqual([[SESSION]]);
+    expect(buildMock).not.toHaveBeenCalled();
+  });
+
   it("is closed exactly once when a row before the build fails", async () => {
     const job = pending();
     const view = setup();
