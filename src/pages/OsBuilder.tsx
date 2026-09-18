@@ -50,11 +50,12 @@ import { pistormIdentifyRom, type RomInfo } from "@/lib/pistorm";
 import { isTextOrNothing, isWholeNumberBetween } from "@/lib/remembered";
 import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
-import { kindLabelKey, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps";
+import { kindLabelKey, kindOffered, stepLabelKey, stepPath, stepsFor } from "@/lib/buildSteps";
 import type { BuildKind } from "@/lib/buildSession";
 import { errorText } from "@/lib/errorText";
 import { BuildBar } from "@/pages/osbuilder/BuildBar";
 import { useRunLock } from "@/lib/runLock";
+import { usePowerMode } from "@/lib/uxmode";
 
 /** Card sizes people actually buy. Typed sizes are allowed too. */
 const CARD_SIZES_GB = [16, 32, 64, 128, 256];
@@ -212,6 +213,7 @@ export function StepHedef() {
   const { t } = useTranslation();
   const { session, setKind } = useBuildSession();
   const navigate = useNavigate();
+  const powerMode = usePowerMode();
 
   const kind = session.kind;
 
@@ -352,24 +354,34 @@ export function StepHedef() {
       <section className="card" style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 16, marginTop: 0 }}>{t("osBuilder.what.heading")}</h2>
         <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 8 }}>
-          <KindChoice
-            chosen={kind === "boot-card"}
-            onChoose={() => choose("boot-card")}
-            title={t("osBuilder.what.bootCard")}
-            hint={t("osBuilder.what.bootCardHint")}
-          />
+          {/* **Owner's decision 6: behind power mode, hidden rather than
+              disabled.** `CardBuilder` and `VolumePreload` are the advanced,
+              manual lanes the one-button card (Machine tab, `install`)
+              replaces as the default path. A session already on one of these
+              two kinds — a remembered choice, or a direct route — is
+              unaffected: `kindOffered` gates this list alone. */}
+          {kindOffered("boot-card", powerMode) && (
+            <KindChoice
+              chosen={kind === "boot-card"}
+              onChoose={() => choose("boot-card")}
+              title={t("osBuilder.what.bootCard")}
+              hint={t("osBuilder.what.bootCardHint")}
+            />
+          )}
           <KindChoice
             chosen={kind === "install"}
             onChoose={() => choose("install")}
             title={t("osBuilder.what.install")}
             hint={t("osBuilder.what.installHint")}
           />
-          <KindChoice
-            chosen={kind === "prepare-volumes"}
-            onChoose={() => choose("prepare-volumes")}
-            title={t("osBuilder.what.prepareVolumes")}
-            hint={t("osBuilder.what.prepareVolumesHint")}
-          />
+          {kindOffered("prepare-volumes", powerMode) && (
+            <KindChoice
+              chosen={kind === "prepare-volumes"}
+              onChoose={() => choose("prepare-volumes")}
+              title={t("osBuilder.what.prepareVolumes")}
+              hint={t("osBuilder.what.prepareVolumesHint")}
+            />
+          )}
           <KindChoice
             chosen={kind === "distro"}
             onChoose={() => choose("distro")}

@@ -2155,6 +2155,81 @@ describe("card mode — the card's own run", () => {
     expect(screen.queryByTestId("card-run")).toBeNull();
   });
 
+  // NEW (controller's ruling, Task 10's own concern): a card target the
+  // build cannot possibly finish is refused in the Build button's place,
+  // before a session is even opened — not discovered after the tree, the
+  // updates and the prepare have already run.
+  it("will not build without an Emu68 archive, and says where to choose one", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 64,
+        image: CARD_IMAGE,
+        emu68Archive: null,
+        pfs3Driver: null,
+        partitions: [{ name: "System", sources: [] }],
+      },
+    });
+    renderTab();
+    const blocker = await screen.findByTestId("build-blocker");
+    expect(blocker.textContent).toBe(i18n.t("cardRun.blocked.noArchive"));
+    expect(screen.queryByTestId("card-run")).toBeNull();
+    expect(cardOpenMock).not.toHaveBeenCalled();
+  });
+
+  it("will not build without a card size, and says to choose one", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 0,
+        image: CARD_IMAGE,
+        emu68Archive: "E:\\emu68\\Emu68-pistorm.zip",
+        pfs3Driver: null,
+        partitions: [{ name: "System", sources: [] }],
+      },
+    });
+    renderTab();
+    const blocker = await screen.findByTestId("build-blocker");
+    expect(blocker.textContent).toBe(i18n.t("cardRun.blocked.noSize"));
+    expect(screen.queryByTestId("card-run")).toBeNull();
+  });
+
+  it("will not build a partition the user added but never put anything on, and names it", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 64,
+        image: CARD_IMAGE,
+        emu68Archive: "E:\\emu68\\Emu68-pistorm.zip",
+        pfs3Driver: null,
+        partitions: [
+          { name: "System", sources: [] },
+          { name: "Games", sources: [] },
+          { name: "Work", sources: [] },
+        ],
+      },
+    });
+    renderTab();
+    const blocker = await screen.findByTestId("build-blocker");
+    expect(blocker.textContent).toBe(i18n.t("cardRun.blocked.emptyPartition", { partition: "Games" }));
+    expect(screen.queryByTestId("card-run")).toBeNull();
+  });
+
+  it("builds a plain System-and-Work card with no extra partition, unblocked", async () => {
+    cardMode({
+      "osinstall.cardTarget.AmigaOS 3.9": {
+        sizeGb: 64,
+        image: CARD_IMAGE,
+        emu68Archive: "E:\\emu68\\Emu68-pistorm.zip",
+        pfs3Driver: null,
+        partitions: [
+          { name: "System", sources: [] },
+          { name: "Work", sources: [] },
+        ],
+      },
+    });
+    renderTab();
+    await screen.findByTestId("card-run");
+    expect(screen.queryByTestId("build-blocker")).toBeNull();
+  });
+
   it("runs the whole card, shows the manifest and the health checklist", async () => {
     cardMode();
     renderTab();
@@ -2213,7 +2288,7 @@ describe("card mode — the card's own run", () => {
       phase: "card",
       code: "ART-CARD-SOURCE-UNUSABLE",
       message: "that source cannot be used",
-      params: { source: `${ARCHIVES}\\kirik.lha`, partition: "Games" },
+      params: { source: `${ARCHIVES}\\kirik.lha`, partition: "Games", reason: "missing" },
     });
     await changeLanguage("tr");
     cardMode();
@@ -2223,7 +2298,7 @@ describe("card mode — the card's own run", () => {
 
     const refusal = await screen.findByTestId("card-refusal-sentence");
     expect(refusal.textContent).toBe(
-      i18n.t("errors.cardSourceUnusable", {
+      i18n.t("errors.cardSourceUnusable.missing", {
         id: "ART-CARD-SOURCE-UNUSABLE",
         source: `${ARCHIVES}\\kirik.lha`,
         partition: "Games",
@@ -2267,6 +2342,34 @@ describe("card mode — the card's own run", () => {
     const next = await screen.findByTestId("card-phase-next");
     expect(next.textContent).toBe(i18n.t("cardRun.next.failed", { image: CARD_IMAGE }));
     expect(screen.getByTestId("card-partial").textContent).toBe(
+      i18n.t("cardRun.partial.removed", { path: `${CARD_IMAGE}.partial` })
+    );
+  });
+
+  // R2 (card round 3's residual re-review, "New breakage"): the ending says
+  // neither name could be removed when the build finished; the report beside
+  // it, once a later retry actually removed `.partial`, must say both facts
+  // in order rather than flatly contradicting the sentence above it.
+  it("says both, in order, when the .partial was reported unremovable and then removed on a later try", async () => {
+    cardAnswer = cardResult({
+      ending: "failed",
+      phase: "check",
+      code: "ART-CARD-FINISH-LEFT-BOTH-NAMES",
+      message:
+        "ART could not finish naming its card: neither the .partial name nor the new name could be removed.",
+      params: { image: CARD_IMAGE, partial: `${CARD_IMAGE}.partial`, why: "held by a scanner" },
+    });
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    await screen.findByTestId("card-phase-next");
+    const partial = screen.getByTestId("card-partial");
+    expect(partial.textContent).toBe(
+      i18n.t("cardRun.partial.removedAfterBothNamesLeft", { path: `${CARD_IMAGE}.partial` })
+    );
+    expect(partial.textContent).not.toBe(
       i18n.t("cardRun.partial.removed", { path: `${CARD_IMAGE}.partial` })
     );
   });

@@ -15,11 +15,13 @@ import type { CardReport } from "@/lib/card";
 import type { ParsedPartition } from "@/lib/hdf";
 import { subscribeSafely } from "@/lib/jobs";
 import { onPreloadResult, type PreloadPlan, type PreloadResult } from "@/lib/preload";
+import type { VolumeNameVerdict } from "@/lib/cardOs";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 const planMock = vi.hoisted(() => vi.fn());
 const cardOpenMock = vi.hoisted(() => vi.fn());
 const dialogSaveMock = vi.hoisted(() => vi.fn());
+const checkVolumeNameMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/preload", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/preload")>()),
@@ -27,6 +29,13 @@ vi.mock("@/lib/preload", async (importOriginal) => ({
   preloadRun: vi.fn(),
   preloadProbe: vi.fn(),
   onPreloadResult: vi.fn(() => Promise.resolve(() => {})),
+}));
+// Q7: the core's own name rule, never restated on this side — mocked so the
+// panel's own wiring to `card_os_check_volume_name` is what is under test,
+// not the rule itself (`preload.test.ts` owns the mapping).
+vi.mock("@/lib/cardOs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/cardOs")>()),
+  cardOsCheckVolumeName: checkVolumeNameMock,
 }));
 vi.mock("@/lib/card", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/card")>()),
@@ -120,6 +129,7 @@ beforeEach(() => {
     settings: { ...DEFAULT_SETTINGS, remembered: { "preload.driver": "E:\\drivers\\pfs3aio" } },
   });
   cardOpenMock.mockResolvedValue(CARD);
+  checkVolumeNameMock.mockResolvedValue({ ok: true } satisfies VolumeNameVerdict);
 });
 
 afterEach(async () => {
@@ -260,5 +270,65 @@ describe("the volume preload screen and an RDB edit", () => {
     ).toBeTruthy();
     expect(screen.getByText(/the tool said no/)).toBeTruthy();
     expect(screen.queryByText("Done")).toBeNull();
+  });
+});
+
+// Q7: `preloadBlocker`'s two restated name rules now read
+// `card_os_check_volume_name`'s own verdict — this is the panel's own wiring
+// to that command, not the rule itself (`preload.test.ts` owns the mapping).
+describe("the volume preload screen and the core's own name rule (Q7)", () => {
+  it("blocks Run on a name the core's own verdict rejects, and clears once it is fixed", async () => {
+    const user = userEvent.setup();
+    planMock.mockResolvedValue({
+      image: "E:\\cards\\caffeine.img",
+      steps: [{ step: "format-partition", slot: 2, index: 1, drive_name: "SDH0", volume_name: "SDH0" }],
+      notes: [],
+      rdb_backup: null,
+    } satisfies PreloadPlan);
+    checkVolumeNameMock.mockImplementation((name: string) =>
+      Promise.resolve(
+        name.includes(":")
+          ? ({ ok: false, why: "reserved-character", maxBytes: 30 } satisfies VolumeNameVerdict)
+          : ({ ok: true } satisfies VolumeNameVerdict)
+      )
+    );
+    render(<VolumePreload />);
+
+    await previewWithSdh0Chosen(user);
+    const confirm = () => {
+      const checkboxes = screen.getAllByRole("checkbox");
+      return user.click(checkboxes[checkboxes.length - 1]);
+    };
+    await confirm();
+    expect(runButton().disabled).toBe(false);
+
+    // Editing the name is a new request — the plan and the confirmation go
+    // with it (unrelated to this task; `VolumePreload`'s own existing rule).
+    // Preview again to get the button back, so the block that follows is
+    // isolated to the name, not to a stale or missing plan.
+    const nameField = screen.getByDisplayValue("SDH0");
+    await user.clear(nameField);
+    await user.type(nameField, "Games:");
+    await waitFor(() => expect(checkVolumeNameMock).toHaveBeenCalledWith("Games:"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Format and fill" })).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(runButton()).toBeTruthy());
+    await confirm();
+
+    await waitFor(() => expect(runButton().disabled).toBe(true));
+    expect(
+      screen.getByText(
+        "SDH0's volume name contains ':' or '/', which separate paths on the Amiga and cannot appear in a name."
+      )
+    ).toBeTruthy();
+
+    await user.clear(nameField);
+    await user.type(nameField, "Games");
+    await waitFor(() => expect(checkVolumeNameMock).toHaveBeenCalledWith("Games"));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Format and fill" })).toBeNull());
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    await waitFor(() => expect(runButton()).toBeTruthy());
+    await confirm();
+    expect(runButton().disabled).toBe(false);
   });
 });

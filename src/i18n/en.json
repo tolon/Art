@@ -2286,7 +2286,10 @@
     "giveUp": "Give this up",
     "giveUpHint": "The working folder ART opened for this card is removed with it.",
     "blocked": {
-      "noImage": "Choose where the card image goes, on the Machine tab, before this can be built."
+      "noImage": "Choose where the card image goes, on the Machine tab, before this can be built.",
+      "noArchive": "Choose the Emu68 archive this card gets, on the Machine tab, before this can be built.",
+      "noSize": "Choose a card size, on the Machine tab, before this can be built.",
+      "emptyPartition": "'{{partition}}' has nothing in it yet. Drop files or folders onto it on the Machine tab, or remove the partition, before this can be built."
     },
     "phase": {
       "pending": "waiting",
@@ -2356,7 +2359,8 @@
       "notCreated": "No half-written .partial file was created.",
       "removed": "The half-written {{path}} was removed.",
       "alreadyGone": "The half-written {{path}} was already gone when ART went to remove it.",
-      "notRemoved": "{{path}} could NOT be removed ({{why}}) — it is still on your disk."
+      "notRemoved": "{{path}} could NOT be removed ({{why}}) — it is still on your disk.",
+      "removedAfterBothNamesLeft": "The refusal above is what happened when the build finished: neither name could be removed. A later check found {{path}} gone after all and removed it. The image's own name may still be on your disk — check for it yourself."
     },
     "scratchLeft": "ART's own working folder {{path}} could not be removed ({{why}}). Nothing of yours is in it; remove it by hand when you can.",
     "openFailed": "ART could not open a working folder for this card, so nothing was started: {{message}}",

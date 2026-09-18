@@ -9,8 +9,9 @@
 import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
-import type { CardOsPhaseName, CardRefusal, PartialRemoval } from "@/lib/cardOs";
+import type { CardOsEnding, CardOsPhaseName, CardRefusal, PartialRemoval } from "@/lib/cardOs";
 import {
+  CARD_FINISH_LEFT_BOTH_NAMES_CODE,
   cardBarFraction,
   cardCountPhrase,
   cardNextStepPhrase,
@@ -169,6 +170,40 @@ describe("the facts every ending carries", () => {
     const keys = partials.map((partial) => cardPartialPhrase(partial).key);
     for (const key of keys) expect(resolves(key), key).toBe(true);
     expect(new Set(keys).size).toBe(4);
+  });
+
+  // R2 (card round 3's residual re-review, "New breakage"): the ending that
+  // said neither name could be removed, and a later, independent retry that
+  // did remove `.partial`, are both true — at different moments — and must
+  // not read as one contradicting the other.
+  it("says both, in order, when CardFinishLeftBothNames sits beside a later Removed", () => {
+    const removed: PartialRemoval = { outcome: "removed", path: "E:\\amiga\\kart.img.partial" };
+    const bothNamesLeft: CardOsEnding = {
+      ending: "failed",
+      phase: "check",
+      code: CARD_FINISH_LEFT_BOTH_NAMES_CODE,
+      message: "x",
+      params: {},
+    };
+
+    const combined = cardPartialPhrase(removed, bothNamesLeft);
+    expect(resolves(combined.key)).toBe(true);
+    expect(combined.key).toBe("cardRun.partial.removedAfterBothNamesLeft");
+    expect(combined.key).not.toBe("cardRun.partial.removed");
+    expect(combined.params).toEqual({ path: "E:\\amiga\\kart.img.partial" });
+
+    // The control, three ways: a different code, no ending at all, and the
+    // same code with a *different* partial outcome — none of these divert
+    // from the plain mapping.
+    const otherCode: CardOsEnding = { ...bothNamesLeft, code: "ART-IO" };
+    expect(cardPartialPhrase(removed, otherCode).key).toBe("cardRun.partial.removed");
+    expect(cardPartialPhrase(removed).key).toBe("cardRun.partial.removed");
+    const notRemoved: PartialRemoval = {
+      outcome: "not-removed",
+      path: "E:\\amiga\\kart.img.partial",
+      why: "held by a scanner",
+    };
+    expect(cardPartialPhrase(notRemoved, bothNamesLeft).key).toBe("cardRun.partial.notRemoved");
   });
 
   it("names a session folder that could not be removed, and says nothing when it went", () => {

@@ -31,6 +31,7 @@
 
 import type {
   BuildPhase,
+  CardOsEnding,
   CardOsPhaseName,
   CardRefusal,
   LeftBehind,
@@ -418,11 +419,34 @@ export function cardSubPhasePhrase(phase: CardOsPhaseName): Phrase {
   }
 }
 
+/** The code `finish_partial_removing` returns when the finished card was
+ *  linked to its name and then neither name could be removed
+ *  (`core::error::CoreError::CardFinishLeftBothNames`) — the one code
+ *  `cardPartialPhrase` reads by name, for R2 below. */
+export const CARD_FINISH_LEFT_BOTH_NAMES_CODE = "ART-CARD-FINISH-LEFT-BOTH-NAMES";
+
 /** What became of `<image>.partial` — always said, on every ending. Four
  *  states and four sentences: *not removed* is not *removed*, and a file
  *  still on the disk that a screen calls gone is this project's named
- *  defect. */
-export function cardPartialPhrase(partial: PartialRemoval): Phrase {
+ *  defect.
+ *
+ * **R2 (card round 3's residual re-review, "New breakage"): say both, in
+ * order, rather than one contradicting the other.** The build's own ending
+ * still tries to remove `.partial` after `CardFinishLeftBothNames` said
+ * neither name could be removed — a retry that can genuinely succeed once
+ * whatever held the file lets go. Reported plainly as *removed*, that flatly
+ * contradicts the refusal sentence sitting right beside it on this screen;
+ * both facts were true, at different moments, so `ending` is read here only
+ * to tell that one case apart, never to change what `partial` itself means
+ * for every other ending. */
+export function cardPartialPhrase(partial: PartialRemoval, ending?: CardOsEnding): Phrase {
+  const bothNamesLeftAtFinish =
+    ending !== undefined &&
+    (ending.ending === "refused" || ending.ending === "failed") &&
+    ending.code === CARD_FINISH_LEFT_BOTH_NAMES_CODE;
+  if (bothNamesLeftAtFinish && partial.outcome === "removed") {
+    return { key: "cardRun.partial.removedAfterBothNamesLeft", params: { path: partial.path } };
+  }
   switch (partial.outcome) {
     case "not-created":
       return { key: "cardRun.partial.notCreated" };

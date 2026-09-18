@@ -59,7 +59,7 @@ import {
 import { stepPath } from "@/lib/buildSteps";
 import { CARD_BUILDER_ARCHIVE_KEY } from "@/lib/cardBuild";
 import type { CardOsBuildRequest, CardOsPrepareRequest } from "@/lib/cardOs";
-import { measurableInputs } from "@/lib/cardOsMeasure";
+import { isFixedPartition, measurableInputs } from "@/lib/cardOsMeasure";
 import {
   cardBarFraction,
   cardCountPhrase,
@@ -610,7 +610,7 @@ function CardRun({ phases, plan, prepare, build, image }: CardRunProps) {
   useEffect(() => () => setRunning(false), [setRunning]);
 
   const result = run.result;
-  const partial = result ? cardPartialPhrase(result.partial) : null;
+  const partial = result ? cardPartialPhrase(result.partial, result.ending) : null;
   const scratchLeft = cardScratchLeftPhrase(run.scratchLeft);
 
   return (
@@ -935,18 +935,45 @@ export function BuildTab() {
     releaseHolding: evidence.releaseHolding,
     mediaFacts: evidence.facts,
   });
+  /**
+   * **NEW (the controller's ruling, Task 10's own concern): a card target
+   * the build cannot possibly finish, refused before a session opens.**
+   *
+   * A missing Emu68 archive used to be found only at the build itself, after
+   * the tree, the updates and the prepare had all run — actionable, but
+   * costly. These four are the whole of `CardTarget`'s own completeness: the
+   * image (already `cardGate`'s first check, above), the archive, the size,
+   * and a partition the user added but never put a source on — a formatted,
+   * permanently empty drawer the card would otherwise carry. System and Work
+   * are exempt: neither ever carries a `sources` entry (System comes from
+   * the tree, Work is formatted empty by design), so a plain OS-only card is
+   * not incomplete for lacking one.
+   */
+  const emptyAddedPartition = cardTarget.partitions.find(
+    (partition) => !isFixedPartition(partition.name) && partition.sources.length === 0
+  );
+  const cardTargetGate: Phrase | null = !cardBuildRequest.archive
+    ? { key: "cardRun.blocked.noArchive" }
+    : !cardTarget.sizeGb
+      ? { key: "cardRun.blocked.noSize" }
+      : emptyAddedPartition
+        ? { key: "cardRun.blocked.emptyPartition", params: { partition: emptyAddedPartition.name } }
+        : null;
+
   const cardGate: Phrase | null = !cardImage
     ? { key: "cardRun.blocked.noImage" }
-    : summary.ticked.loading
-      ? { key: "osBuilder.build.summary.updatesChecking" }
-      : ticked.unresolved.length > 0
-        ? {
-            key: "osBuilder.build.blocked.unresolved",
-            params: { names: ticked.unresolved.map((row) => row.name).join(", ") },
-          }
-        : cardBlocker?.key === "osinstall.blocked.notPlanned" && planning
-          ? { key: "osinstall.blocked.planning" }
-          : cardBlocker;
+    : cardTargetGate
+      ? cardTargetGate
+      : summary.ticked.loading
+        ? { key: "osBuilder.build.summary.updatesChecking" }
+        : ticked.unresolved.length > 0
+          ? {
+              key: "osBuilder.build.blocked.unresolved",
+              params: { names: ticked.unresolved.map((row) => row.name).join(", ") },
+            }
+          : cardBlocker?.key === "osinstall.blocked.notPlanned" && planning
+            ? { key: "osinstall.blocked.planning" }
+            : cardBlocker;
 
   const folderGate: Phrase | null = !summary.destinationChecked
     ? // **Nothing is offered over a guess** (fix round 1, M3). Which

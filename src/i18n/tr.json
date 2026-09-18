@@ -2286,7 +2286,10 @@
     "giveUp": "Bundan vazgeç",
     "giveUpHint": "ART'ın bu kart için açtığı çalışma klasörü de birlikte kaldırılır.",
     "blocked": {
-      "noImage": "Bu oluşturulabilmeden önce, Makine sekmesinde kart imajının nereye yazılacağını seçin."
+      "noImage": "Bu oluşturulabilmeden önce, Makine sekmesinde kart imajının nereye yazılacağını seçin.",
+      "noArchive": "Bu oluşturulabilmeden önce, Makine sekmesinde bu kartın alacağı Emu68 arşivini seçin.",
+      "noSize": "Bu oluşturulabilmeden önce, Makine sekmesinde bir kart boyutu seçin.",
+      "emptyPartition": "'{{partition}}' bölümünde henüz hiçbir şey yok. Bu oluşturulabilmeden önce Makine sekmesinde üzerine dosya ya da klasör bırakın, ya da bölümü kaldırın."
     },
     "phase": {
       "pending": "sırada bekliyor",
@@ -2356,7 +2359,8 @@
       "notCreated": "Yarım kalmış bir .partial dosyası hiç oluşturulmadı.",
       "removed": "Yarım kalan {{path}} dosyası kaldırıldı.",
       "alreadyGone": "Yarım kalan {{path}} dosyası, ART onu kaldırmaya gittiğinde zaten ortada yoktu.",
-      "notRemoved": "{{path}} dosyası KALDIRILAMADI ({{why}}) — hâlâ diskinizde duruyor."
+      "notRemoved": "{{path}} dosyası KALDIRILAMADI ({{why}}) — hâlâ diskinizde duruyor.",
+      "removedAfterBothNamesLeft": "Yukarıdaki ret, kart tamamlanırken yaşananı anlatıyor: iki addan hiçbiri o anda kaldırılamamıştı. Ancak sonradan yapılan bir denetim {{path}} dosyasının artık orada olmadığını gördü ve onu kaldırdı. İmajın kendi adındaki dosya hâlâ diskinizde kalmış olabilir — kendiniz kontrol edin."
     },
     "scratchLeft": "ART'ın kendi çalışma klasörü olan {{path}} kaldırılamadı ({{why}}). İçinde size ait hiçbir şey yok; fırsat bulduğunuzda elle kaldırabilirsiniz.",
     "openFailed": "ART bu kart için bir çalışma klasörü açamadı, bu yüzden hiçbir şey başlatılmadı: {{message}}",

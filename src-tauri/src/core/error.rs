@@ -976,8 +976,8 @@ pub enum CoreError {
     /// of ART-343). The file the user agreed to is the file placed, so the
     /// build is refused before anything is written.
     #[error(
-        "'{name}' cannot be placed: '{path}' {why} since the card was prepared. Nothing was \
-         written — prepare the card again, so the proposal offers what is there now."
+        "'{name}' cannot be placed: '{path}' {why}. Nothing was written — prepare the card \
+         again, so the proposal offers what is there now."
     )]
     KickstartSourceChanged {
         name: String,

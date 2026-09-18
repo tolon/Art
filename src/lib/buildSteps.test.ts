@@ -14,6 +14,7 @@ import {
 } from "./buildSession";
 import {
   kindLabelKey,
+  kindOffered,
   readiness,
   stepLabelKey,
   stepPath,
@@ -70,6 +71,27 @@ describe("stepsFor", () => {
     }
     for (const retired of ["kaynak", "paketler", "amiga-kurulum", "ilk-acilis"]) {
       expect(STEP_IDS as readonly string[]).not.toContain(retired);
+    }
+  });
+});
+
+// Owner's decision 6 (card round 4): `CardBuilder` and `VolumePreload` stay
+// as the advanced screens, behind power mode — beginner mode only *hides*
+// their kind from the picker (CLAUDE.md's own rule), it never disables the
+// step itself, and a direct route (a bookmark, a remembered `session.kind`)
+// still renders regardless of the mode.
+describe("kindOffered", () => {
+  it("offers install and distro in every mode — neither is behind power mode", () => {
+    for (const kind of ["install", "distro"] as const) {
+      expect(kindOffered(kind, false)).toBe(true);
+      expect(kindOffered(kind, true)).toBe(true);
+    }
+  });
+
+  it("offers the card and volume lanes only in Power User mode", () => {
+    for (const kind of ["boot-card", "prepare-volumes"] as const) {
+      expect(kindOffered(kind, true)).toBe(true);
+      expect(kindOffered(kind, false)).toBe(false);
     }
   });
 });

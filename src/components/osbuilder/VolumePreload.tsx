@@ -27,6 +27,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
 import { cardOpen, type CardReport } from "@/lib/card";
+import { cardOsCheckVolumeName, type VolumeNameVerdict } from "@/lib/cardOs";
 import {
   backupDefaultName,
   embedDetailPhrases,
@@ -116,6 +117,14 @@ export function VolumePreload() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<PreloadResult | null>(null);
+  /**
+   * `card_os_check_volume_name`'s own verdict, by the trimmed name asked
+   * (Q7) — never a rule restated on this side. Keyed by the name itself
+   * rather than by drive, since the verdict is a pure function of the string;
+   * a name with no entry yet has simply not come back, and `preloadBlocker`
+   * treats that as "not yet known" rather than as a refusal.
+   */
+  const [nameVerdicts, setNameVerdicts] = useState<Record<string, VolumeNameVerdict>>({});
 
   // Re-read whatever card was remembered, so one since deleted or unplugged is
   // noticed rather than shown as still there.
@@ -159,6 +168,41 @@ export function VolumePreload() {
       setConfirmed(false);
     }
   }, [fingerprint]);
+
+  // Q7: the core's own name rule, asked live as a chosen partition's name
+  // changes — never restated here. A name already answered, or nothing typed
+  // at all, is not asked again; `preloadBlocker` treats a name still in
+  // flight as not yet blocked on that account.
+  useEffect(() => {
+    const names = [
+      ...new Set(
+        picks
+          .filter((pick) => pick.chosen)
+          .map((pick) => pick.volumeName.trim())
+          .filter((name) => name.length > 0)
+      ),
+    ].filter((name) => !(name in nameVerdicts));
+    if (names.length === 0) return;
+    let current = true;
+    void Promise.all(
+      names.map((name) => cardOsCheckVolumeName(name).then((verdict) => [name, verdict] as const))
+    )
+      .then((entries) => {
+        if (!current) return;
+        setNameVerdicts((prev) => {
+          const next = { ...prev };
+          for (const [name, verdict] of entries) next[name] = verdict;
+          return next;
+        });
+      })
+      .catch(() => {
+        // A round trip that failed leaves the name unanswered rather than
+        // blocked — the same "asking is a state" rule `preloadBlocker` reads.
+      });
+    return () => {
+      current = false;
+    };
+  }, [picks, nameVerdicts]);
 
   // G9: the ROM question is about the card and the folders going onto it —
   // one verdict per folder, since the screen takes one folder per partition
@@ -293,7 +337,7 @@ export function VolumePreload() {
     }
   }
 
-  const blocker = preloadBlocker({ image: imagePath, rdbBackup, picks, plan });
+  const blocker = preloadBlocker({ image: imagePath, rdbBackup, picks, plan, nameVerdicts });
   const erases = plan ? formatCount(plan) : 0;
 
   return (

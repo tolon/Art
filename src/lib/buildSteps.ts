@@ -143,6 +143,30 @@ function hasTree(session: BuildSession, treeRoot?: string | null): boolean {
 }
 
 /**
+ * Whether `kind` is offered as a choice on `hedef`, in this mode.
+ *
+ * **Owner's decision 6 (card round 4): `CardBuilder` and `VolumePreload`
+ * stay, behind power mode.** The one-button card on the Machine tab is the
+ * default path for `install`; `boot-card` and `prepare-volumes` are the
+ * advanced, manual lanes those two screens are — Beginner mode only *hides*
+ * them from the picker (CLAUDE.md's rule: never disable an operation based
+ * on the mode, and never change what ART does). A `session.kind` already set
+ * to one of them — a remembered choice, or a direct route — is unaffected:
+ * this function gates the picker's own list, never `stepsFor` or a step's
+ * own route.
+ */
+export function kindOffered(kind: BuildKind, powerMode: boolean): boolean {
+  switch (kind) {
+    case "boot-card":
+    case "prepare-volumes":
+      return powerMode;
+    case "install":
+    case "distro":
+      return true;
+  }
+}
+
+/**
  * The route for a step — a path, not display text.
  *
  * One place, so a link and a route cannot drift apart: the shell's strip, the

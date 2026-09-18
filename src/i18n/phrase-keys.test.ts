@@ -1334,14 +1334,23 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       notes: [],
       rdb_backup: null,
     };
-    const ready = { image: "card.img", rdbBackup: null, picks: [pick], plan };
+    const ready = { image: "card.img", rdbBackup: null, picks: [pick], plan, nameVerdicts: {} };
+    const longName = "W".repeat(31);
 
     const blockers = [
       preloadBlocker({ ...ready, image: null }),
       preloadBlocker({ ...ready, picks: [{ ...pick, chosen: false }] }),
       preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: " " }] }),
-      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "Work:" }] }),
-      preloadBlocker({ ...ready, picks: [{ ...pick, volumeName: "W".repeat(31) }] }),
+      preloadBlocker({
+        ...ready,
+        picks: [{ ...pick, volumeName: "Work:" }],
+        nameVerdicts: { "Work:": { ok: false, why: "reserved-character", maxBytes: 30 } },
+      }),
+      preloadBlocker({
+        ...ready,
+        picks: [{ ...pick, volumeName: longName }],
+        nameVerdicts: { [longName]: { ok: false, why: "too-long", maxBytes: 30 } },
+      }),
       preloadBlocker({ ...ready, plan: null }),
       // ART-117: an RDB edit with no backup path.
       preloadBlocker({ ...ready, plan: importPlan }),
