@@ -295,6 +295,32 @@ export class JobRefused extends Error {
 }
 
 /**
+ * The rejection a **failed** job produces, carrying the code it failed with
+ * (round 4 final review, C2).
+ *
+ * The message was — and still is — `"<sentence> (<ART-CODE>)"`, which reads
+ * well in a badge and is unreadable to a recogniser: `parseError` looks for
+ * the `\n\nError ID: ` trailer that `CoreError::user_message` writes, and a
+ * code in parentheses is not it. So an error that travelled this way arrived
+ * at `errorPhrase` with no id at all and was rendered as
+ * `errors.verbatimNoId` — Rust's English, trailer and all. Carrying the code
+ * as a field costs nothing and keeps the `ART-*` id a caller can build a
+ * sentence from, even for a failure nobody has written a recogniser for.
+ *
+ * A sibling of {@link JobRefused}, and deliberately a *different* class: a
+ * failure and a refusal are two endings with two different next steps.
+ */
+export class JobFailed extends Error {
+  constructor(
+    readonly code: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "JobFailed";
+  }
+}
+
+/**
  * Wait for exactly one job to finish, resolving with the value its own
  * result event carries — or rejecting with a readable sentence if the job
  * fails or is cancelled first. `resultEvent` is a Tauri event name whose
@@ -368,7 +394,9 @@ export function awaitJobResult<
       if (job.state.state === "failed") {
         settled = true;
         cleanup();
-        reject(new Error(`${job.state.message} (${job.state.error_code})`));
+        // The same sentence as before — 134 callers render `String(e)` — plus
+        // the code as a field, for the ones that can do better with it (C2).
+        reject(new JobFailed(job.state.error_code, `${job.state.message} (${job.state.error_code})`));
       } else if (job.state.state === "cancelled") {
         settled = true;
         cleanup();

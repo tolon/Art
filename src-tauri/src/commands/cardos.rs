@@ -291,7 +291,17 @@ pub const CARD_OS_PREPARE_EVENT: &str = "card-os-prepare-result";
 pub struct CardOsPrepareResult {
     pub job_id: JobId,
     pub session: u64,
-    pub prepared: PreparedCard,
+    /// The prepared card, or `None` when the preparation refused.
+    pub prepared: Option<PreparedCard>,
+    /// **A refusal is this command's own answer, typed** (round 4 final
+    /// review, C2) — the shape `CardOsMeasureResult` already had, and for the
+    /// same reason. All but three of the card's `ART-*` refusals are raised
+    /// here, and returning them as a plain `Err` ended the job `Failed` and
+    /// handed the screen one formatted English string: the code went into
+    /// parentheses, where `parseError` does not look, and the typed
+    /// parameters both catalogues need were lost entirely. Never `Some` at
+    /// the same time as `prepared`.
+    pub refusal: Option<CardRefusal>,
 }
 
 /// Empty one of the session's own folders: its contents are ART's, from this
@@ -413,8 +423,39 @@ fn prepare_record(
     }
 }
 
-/// Prepare the session's card. Returns a job id; the result arrives on
-/// [`CARD_OS_PREPARE_EVENT`], and a refusal ends the job with its code.
+/// Whether an error raised while preparing is a **refusal** — something ART's
+/// own rules stopped it doing, whose next step is the user's — rather than a
+/// failure (round 4 final review, C2).
+///
+/// This is the same distinction `run_phases` makes for the build, made where
+/// the preparation raises it. The family is closed and named rather than
+/// derived from "anything that is not I/O": every one of these is decided
+/// **before** a byte of the image exists, from what the user gave — a source
+/// that is not there, a card too small, no PFS3 driver in the material, a name
+/// PFS3 cannot hold, not enough room to stage, too many entries for one
+/// partition, no WHDLoad for the titles asked for. Anything else — an
+/// unreadable disk, a permission, a bug — is a failure, and a failure's next
+/// step is not the user's.
+fn prepare_refused(error: &CoreError) -> bool {
+    matches!(
+        error,
+        CoreError::CardSourceUnusable { .. }
+            | CoreError::CardDoesNotFit(_)
+            | CoreError::Pfs3DriverNotFound { .. }
+            | CoreError::CardNamesNeedHstImager { .. }
+            | CoreError::NotEnoughSpace { .. }
+            | CoreError::CardPartitionTooManyEntries { .. }
+            | CoreError::WhdloadNotFound { .. }
+            | CoreError::HstImagerUnusable { .. }
+            | CoreError::PartialImageExists { .. }
+            | CoreError::SafetyRefused(_)
+    )
+}
+
+/// Prepare the session's card. Returns a job id; the answer arrives on
+/// [`CARD_OS_PREPARE_EVENT`] — a prepared card **or** a typed refusal, never
+/// both — and a refusal ends the job [`JobState::Refused`] with its own code,
+/// never `Failed`.
 #[tauri::command]
 pub fn card_os_prepare(
     request: CardOsPrepareRequest,
@@ -434,7 +475,7 @@ pub fn card_os_prepare(
     let target = image.display().to_string();
     let title = JobTitle::new("components.jobBar.title.prepareCardOs").text("target", &target);
 
-    let id = spawn_job(&app, registry, title, move |job_id, progress| {
+    let id = spawn_job_with_outcome(&app, registry, title, move |job_id, progress| {
         // Task 2: the screen's phase-and-count, before the (possibly slow)
         // preparation itself starts — the source count is known from the
         // request alone.
@@ -491,14 +532,34 @@ pub fn card_os_prepare(
                     CardOsPrepareResult {
                         job_id,
                         session: request.session,
-                        prepared,
+                        prepared: Some(prepared),
+                        refusal: None,
                     },
                 );
-                Ok(())
+                JobOutcome::Finished
             }
             Err(err) => {
                 sessions.end_prepare(request.session, None);
-                Err(err)
+                // **The refusal is the answer, and it travels typed** (C2).
+                // Emitted on this command's own event with its code and its
+                // `details()` — the screen builds the Turkish sentence from
+                // those, exactly as it does for the build's ending. The job
+                // state below carries the same decision to the job bar, so a
+                // refusal is never drawn as a failure there either.
+                let _ = emit_app.emit(
+                    CARD_OS_PREPARE_EVENT,
+                    CardOsPrepareResult {
+                        job_id,
+                        session: request.session,
+                        prepared: None,
+                        refusal: Some(card_refusal_from(&err)),
+                    },
+                );
+                if prepare_refused(&err) {
+                    JobOutcome::Refused(err)
+                } else {
+                    JobOutcome::Other(err)
+                }
             }
         }
     });
@@ -2764,6 +2825,74 @@ mod tests {
             writer_name("1.6.616+a91fa4ca"),
             "hst-imager 1.6.616+a91fa4ca"
         );
+    }
+
+    /// **Every refusal the preparation can raise ends the job refused, and
+    /// nothing else does** (round 4 final review, C2).
+    ///
+    /// `card_os_prepare` used plain `spawn_job`, so `JobOutcome::from` routed
+    /// every `Err` to `JobState::Failed` — and all but three of the card's
+    /// `ART-*` refusals are raised in here, not in the build. The list below
+    /// is the family the user can act on, each checked as the state it really
+    /// ends with rather than as a bare boolean, and an I/O error beside it
+    /// shown still failing: a predicate that answered `true` for everything
+    /// would satisfy half a test and break the distinction the round exists
+    /// for.
+    #[test]
+    fn a_preparation_s_own_refusals_end_the_job_refused_and_an_io_error_does_not() {
+        let refusals = [
+            CoreError::CardSourceUnusable {
+                partition: "Games".into(),
+                source_path: "E:\\demos".into(),
+                why: UnusableSource::Missing,
+            },
+            CoreError::CardDoesNotFit(crate::core::error::SizingRefusal::CardTooSmall {
+                card_gb: 8,
+            }),
+            CoreError::Pfs3DriverNotFound {
+                searched: vec!["E:\\media".into()],
+                unreadable: vec![],
+            },
+            CoreError::CardNamesNeedHstImager {
+                partition: "Games".into(),
+                paths: vec!["türkçe".into()],
+                more: 0,
+            },
+            CoreError::NotEnoughSpace {
+                place: "E:\\".into(),
+                needed: 2,
+                available: 1,
+                what: crate::core::error::SpacePlace::Image,
+            },
+            CoreError::CardPartitionTooManyEntries {
+                partition: "Games".into(),
+                entries: 2,
+                bound: 1,
+            },
+            CoreError::WhdloadNotFound {
+                titles: 3,
+                searched: vec!["E:\\media".into()],
+            },
+        ];
+        for err in refusals {
+            let code = err.code().to_string();
+            let message = err.to_string();
+            assert!(prepare_refused(&err), "{code} must be a refusal");
+            assert_eq!(
+                JobOutcome::Refused(err).into_state(),
+                crate::core::jobs::JobState::Refused { code, message },
+            );
+        }
+
+        let failure = CoreError::Io(std::io::Error::other("the disk is unreadable"));
+        assert!(
+            !prepare_refused(&failure),
+            "an I/O error is a failure, not a refusal"
+        );
+        assert!(matches!(
+            JobOutcome::Other(failure).into_state(),
+            crate::core::jobs::JobState::Failed { .. }
+        ));
     }
 
     /// M7: an image path the screen did not fill in, or one relative to

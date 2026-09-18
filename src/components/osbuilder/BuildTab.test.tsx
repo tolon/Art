@@ -196,6 +196,16 @@ function cardResult(
  *  cases, so it is settable per test. */
 let cardAnswer = cardResult({ ending: "succeeded" });
 
+/** What `card-os-prepare-result` will carry. A refusal is `card_os_prepare`'s
+ *  own **answer** now, on its own event, exactly as `card_os_measure`'s is —
+ *  so it is settable per test too (final review, C2). */
+let prepareAnswer: import("@/lib/cardOs").CardOsPrepareResult = {
+  jobId: 12,
+  session: CARD_SESSION,
+  prepared: PREPARED,
+  refusal: null,
+};
+
 // ---------------------------------------------------------------------------
 // What the core answers with
 // ---------------------------------------------------------------------------
@@ -502,7 +512,7 @@ async function settles(
     event === OSINSTALL_EVENT
       ? treeResult()
       : event === CARD_OS_PREPARE_EVENT
-        ? { jobId: 12, session: CARD_SESSION, prepared: PREPARED }
+        ? prepareAnswer
         : event === CARD_OS_BUILD_EVENT
           ? cardAnswer
           : { job_id: 12, outcome: PACKAGE_OUTCOME }
@@ -591,6 +601,7 @@ beforeEach(() => {
   });
   awaitJobResultMock.mockReset().mockImplementation(settles);
   cardAnswer = cardResult({ ending: "succeeded" });
+  prepareAnswer = { jobId: 12, session: CARD_SESSION, prepared: PREPARED, refusal: null };
   cardOpenMock.mockReset().mockImplementation(async () => {
     order.push("cardOpen");
     return { session: CARD_SESSION, tree: CARD_TREE };
@@ -2353,6 +2364,63 @@ describe("card mode — the card's own run", () => {
     expect(i18n.t(bar.key, bar.params)).not.toBe(
       i18n.t("components.jobBar.status.failed", { code: "ART-CARD-SOURCE-UNUSABLE" })
     );
+  });
+
+  /**
+   * **A refusal raised while preparing reaches the screen as a refusal**
+   * (round 4 final review, C2).
+   *
+   * Every card refusal but the three the build itself raises comes out of
+   * `card_os_prepare` — `CardSourceUnusable`, `CardDoesNotFit`,
+   * `Pfs3DriverNotFound`, `CardNamesNeedHstImager`, `NotEnoughSpace`,
+   * `CardPartitionTooManyEntries`, `WhdloadNotFound`. The command used plain
+   * `spawn_job` and returned `Err`, so the job ended **Failed**, the frontend
+   * got one formatted English string with the code in parentheses (which
+   * `parseError` does not read), and the row said *"Preparing the card
+   * failed"* in red with the failure's next step. Owner decision 4 (card
+   * refusals are Turkish), decision 5 (a refusal is never called failed) and
+   * "endings stay distinct" were all broken for the commonest refusal in the
+   * flow. The existing case above proved the same sentence through the
+   * *build*'s result event — a path this error cannot take.
+   */
+  it("says a prepare refusal in Turkish, on a refused row, and never as a failure", async () => {
+    prepareAnswer = {
+      jobId: 12,
+      session: CARD_SESSION,
+      prepared: null,
+      refusal: {
+        code: "ART-CARD-SOURCE-UNUSABLE",
+        message: `'${ARCHIVES}\\oyunlar' in Games cannot be used: it does not exist.`,
+        params: { partition: "Games", source: `${ARCHIVES}\\oyunlar`, reason: "missing" },
+      },
+    };
+    await changeLanguage("tr");
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+
+    const refusal = await screen.findByTestId("card-refusal-sentence");
+    expect(refusal.textContent).toBe(
+      i18n.t("errors.cardSourceUnusable.missing", {
+        id: "ART-CARD-SOURCE-UNUSABLE",
+        source: `${ARCHIVES}\\oyunlar`,
+        partition: "Games",
+      })
+    );
+    // The prepare row itself: refused, with its code — not failed.
+    const prepareRow = cardRows().find((row) =>
+      row.includes(i18n.t("cardRun.phase.prepare.refused", { code: "ART-CARD-SOURCE-UNUSABLE" }))
+    );
+    expect(prepareRow).toBeTruthy();
+    expect(cardRows().join("\n")).not.toContain(
+      i18n.t("cardRun.phase.prepare.failed", { code: "ART-CARD-SOURCE-UNUSABLE" })
+    );
+    // The refusal's next step, not the failure's "where the evidence is".
+    const next = screen.getAllByTestId("card-phase-next").at(-1);
+    expect(next?.textContent).toBe(i18n.t("cardRun.next.refused"));
+    // Nothing was built, and the session was closed exactly once.
+    expect(cardBuildMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(cardCloseMock.mock.calls).toEqual([[CARD_SESSION]]));
   });
 
   it("says where the evidence is and what became of the .partial when a build fails", async () => {

@@ -67,6 +67,7 @@ import {
   awaitJobResult,
   isJobCancellation,
   jobCancel,
+  JobFailed,
   JobRefused,
   onJobProgress,
   subscribeSafely,
@@ -436,11 +437,29 @@ export function useCardOsRun(args: CardOsRunArgs): CardOsRun {
             };
           }
           case "prepare": {
-            const prepared = await awaitJobResult<CardOsPrepareResult, PreparedCard>(
+            // **A refusal is the preparation's answer, on its own event**
+            // (final review, C2) — the shape `card_os_measure` already had.
+            // The whole payload is taken rather than `payload.prepared`,
+            // because which of the two fields is set is the ending.
+            const answer = await awaitJobResult<CardOsPrepareResult, CardOsPrepareResult>(
               CARD_OS_PREPARE_EVENT,
               async () => noteJob(await cardOsPrepare({ ...input.prepare, session })),
-              (payload) => payload.prepared
+              (payload) => payload
             );
+            if (answer.refusal) {
+              return { ending: { state: "refused", refusal: answer.refusal } };
+            }
+            const prepared: PreparedCard | null = answer.prepared;
+            // Neither field set is not a state Rust can produce; saying so
+            // beats an unexplained crash reading `null.kickstarts`.
+            if (!prepared) {
+              return {
+                ending: {
+                  state: "failed",
+                  refusal: { code: "", message: "card_os_prepare answered nothing", params: {} },
+                },
+              };
+            }
             if (mounted.current) setProposal(prepared.kickstarts);
             return { ending: { state: "succeeded" } };
           }
@@ -496,6 +515,16 @@ export function useCardOsRun(args: CardOsRunArgs): CardOsRun {
           return {
             ending: {
               state: "refused",
+              refusal: { code: err.code, message: err.message, params: {} },
+            },
+          };
+        }
+        // A failed job keeps its `ART-*` id (C2): with an empty code the
+        // screen could only print Rust's English verbatim, trailer and all.
+        if (err instanceof JobFailed) {
+          return {
+            ending: {
+              state: "failed",
               refusal: { code: err.code, message: err.message, params: {} },
             },
           };

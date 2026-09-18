@@ -183,13 +183,26 @@ export interface PreparedCard {
 
 export const CARD_OS_PREPARE_EVENT = "card-os-prepare-result";
 
+/**
+ * What the preparation answered — **a plan or a typed refusal, never both**,
+ * the shape `card_os_measure` already uses (final review, C2).
+ *
+ * A refusal is `card_os_prepare`'s own answer: the sources it was given do not
+ * exist, the card is too small, no PFS3 driver was found, a name needs
+ * hst-imager. Those are the user's next step, not ART failing, and they carry
+ * the `ART-*` code and the typed parameters both catalogues build a sentence
+ * from. They used to come back as a plain `Err`, which `spawn_job` turned into
+ * a **failed** job and one formatted English string.
+ */
 export interface CardOsPrepareResult {
   jobId: number;
   session: number;
-  prepared: PreparedCard;
+  prepared: PreparedCard | null;
+  refusal: CardRefusal | null;
 }
 
-/** Prepare the session's card. Returns a job id; a refusal ends the job. */
+/** Prepare the session's card. Returns a job id; the answer — a prepared card
+ *  or a typed refusal — arrives on {@link CARD_OS_PREPARE_EVENT}. */
 export async function cardOsPrepare(request: CardOsPrepareRequest): Promise<number> {
   return invoke<number>("card_os_prepare", { request });
 }

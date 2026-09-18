@@ -145,9 +145,14 @@ export function installRefusal(reasons: RefusalReason[]): CardRefusal {
 export function cardRefusalPhrase(refusal: CardRefusal): Phrase | null {
   if (refusal.code === INSTALL_REFUSED_CODE) return null;
   if (!refusal.code) {
-    return refusal.message
-      ? { key: "errors.verbatimNoId", params: { sentence: refusal.message } }
-      : null;
+    // **The message still gets `errorPhrase`'s string path** (final review,
+    // C2, belt). A rejection that never reached a typed refusal — a
+    // synchronous `invoke` rejection, say — carries Rust's `user_message`,
+    // trailer and all, and that trailer is exactly what `parseError` reads.
+    // Rendering the whole string raw inside `errors.verbatimNoId` threw away
+    // both the recogniser's chance and the id; going through `errorPhrase`
+    // costs one call and can only do better.
+    return refusal.message ? errorPhrase(refusal.message) : null;
   }
   return errorPhrase(refusal);
 }
