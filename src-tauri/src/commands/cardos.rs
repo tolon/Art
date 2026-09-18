@@ -452,6 +452,22 @@ fn prepare_refused(error: &CoreError) -> bool {
     )
 }
 
+/// What the preparation's `Err` arm puts on [`CARD_OS_PREPARE_EVENT`]: a typed
+/// refusal, or **nothing at all** (round 4 fix-wave re-review, N2).
+///
+/// The event is the *refusal's* channel, not the error's. Emitting it for
+/// every `Err` made the screen read an unclassified failure — an unreadable
+/// disk, a permission, a bug — as *refused*, because the frontend branches on
+/// the field's presence alone; the same job then ended `Failed`, so the job bar
+/// said one thing and the row above it said another, and the failure's own
+/// "where the copy is" sentence never appeared. That is the screen out-claiming
+/// the core, in the wave built to stop it. A failure loses nothing by staying
+/// silent here: the job ends `Failed` with its `ART-*` code, and
+/// `settleFromProgress` turns that into a `JobFailed` carrying the code.
+fn prepare_refusal_event(error: &CoreError) -> Option<CardRefusal> {
+    prepare_refused(error).then(|| card_refusal_from(error))
+}
+
 /// Prepare the session's card. Returns a job id; the answer arrives on
 /// [`CARD_OS_PREPARE_EVENT`] — a prepared card **or** a typed refusal, never
 /// both — and a refusal ends the job [`JobState::Refused`] with its own code,
@@ -546,15 +562,22 @@ pub fn card_os_prepare(
                 // those, exactly as it does for the build's ending. The job
                 // state below carries the same decision to the job bar, so a
                 // refusal is never drawn as a failure there either.
-                let _ = emit_app.emit(
-                    CARD_OS_PREPARE_EVENT,
-                    CardOsPrepareResult {
-                        job_id,
-                        session: request.session,
-                        prepared: None,
-                        refusal: Some(card_refusal_from(&err)),
-                    },
-                );
+                //
+                // **And only a refusal travels here** (N2): a failure says
+                // nothing on this event and is settled by its job's own
+                // `Failed` state, which carries the same `ART-*` code. The
+                // two endings stay distinct on both wires.
+                if let Some(refusal) = prepare_refusal_event(&err) {
+                    let _ = emit_app.emit(
+                        CARD_OS_PREPARE_EVENT,
+                        CardOsPrepareResult {
+                            job_id,
+                            session: request.session,
+                            prepared: None,
+                            refusal: Some(refusal),
+                        },
+                    );
+                }
                 if prepare_refused(&err) {
                     JobOutcome::Refused(err)
                 } else {
@@ -2898,6 +2921,46 @@ mod tests {
             JobOutcome::Other(failure).into_state(),
             crate::core::jobs::JobState::Failed { .. }
         ));
+    }
+
+    /// **Only a refusal is answered on the prepare event** (round 4 fix-wave
+    /// re-review, N2).
+    ///
+    /// The Err arm used to emit `refusal: Some(card_refusal_from(&err))` for
+    /// every error, including the ones `prepare_refused` deliberately
+    /// excludes, and `useCardOsRun` branches on that field's presence alone.
+    /// So an `Io` raised while staging was drawn as a refusal, with the
+    /// refusal's next step (*fix what it names and press Build again*), while
+    /// the job the same command spawned ended `Failed` and the job bar said
+    /// so. Two endings, one run, and the screen out-claiming the core.
+    ///
+    /// The case above pins the *job state*; this one pins what travels on the
+    /// event, which is what the row says. A predicate that answered `Some`
+    /// for everything — the defect verbatim — fails the second half.
+    #[test]
+    fn only_a_refusal_travels_on_the_prepare_event() {
+        let refusal = CoreError::CardSourceUnusable {
+            partition: "Games".into(),
+            source_path: "E:\\demos".into(),
+            why: UnusableSource::Missing,
+        };
+        let said = prepare_refusal_event(&refusal).expect("a refusal is the preparation's answer");
+        assert_eq!(said.code, "ART-CARD-SOURCE-UNUSABLE");
+        assert_eq!(
+            said.params.get("partition").map(String::as_str),
+            Some("Games")
+        );
+
+        for failure in [
+            CoreError::Io(std::io::Error::other("the disk is unreadable")),
+            CoreError::NonUtf8Path,
+        ] {
+            assert!(
+                prepare_refusal_event(&failure).is_none(),
+                "{} is a failure: it must reach the screen as one",
+                failure.code()
+            );
+        }
     }
 
     /// M7: an image path the screen did not fill in, or one relative to

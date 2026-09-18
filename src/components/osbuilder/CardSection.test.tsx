@@ -501,6 +501,28 @@ describe("sizes, the total, and an overflow", () => {
   });
 
   /**
+   * **And it carries the hst-imager the user configured** (round 4 fix-wave
+   * re-review, N3; the wire I2 added). A path read from Settings and never put
+   * in the request is a setting the user cannot see the effect of — the same
+   * shape as C1, a value not forwarded across a seam, which is exactly what a
+   * "this only asserts a line" defence let through once already.
+   */
+  it("asks the measurement with the hst-imager Settings holds", async () => {
+    seedCard([
+      { name: "System", sources: [] },
+      { name: "Games", sources: ["E:\\games"] },
+    ]);
+    useSettingsStore.setState((state) => ({
+      settings: { ...state.settings, hstImagerPath: "E:\\tools\\hst.imager.exe" },
+    }));
+    render(<CardSection />);
+    await waitFor(() => expect(measureMock).toHaveBeenCalled());
+    expect(measureMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hstImagerPath: "E:\\tools\\hst.imager.exe" })
+    );
+  });
+
+  /**
    * **An overflow names the partition and the bytes** (design § 4): "does not
    * fit" alone tells a user to guess which of their partitions to cut.
    */

@@ -128,7 +128,7 @@ const { RunLockContext } = await import("@/lib/runLock");
 const { DEFAULT_SETTINGS } = await import("@/lib/settings");
 const { OSINSTALL_EVENT, refusalPhrase } = await import("@/lib/osinstall");
 const { CARD_OS_BUILD_EVENT, CARD_OS_PREPARE_EVENT } = await import("@/lib/cardOs");
-const { jobStatusLabel } = await import("@/lib/jobs");
+const { jobStatusLabel, JobFailed } = await import("@/lib/jobs");
 
 // ---------------------------------------------------------------------------
 // The card lane's own answers (round 4, task 10)
@@ -2298,6 +2298,25 @@ describe("card mode — the card's own run", () => {
     expect((bag["buildSession.firstboot"] as { written: boolean }).written).toBe(true);
   });
 
+  /**
+   * **The preparation is asked with the hst-imager Settings holds** (round 4
+   * fix-wave re-review, N3; the wire I2 added). The build deliberately takes
+   * none — it uses the one its preparation asked (card round 3, I1) — so this
+   * request is the only place the setting can reach the run at all.
+   */
+  it("asks the preparation with the hst-imager Settings holds", async () => {
+    cardMode();
+    useSettingsStore.setState((state) => ({
+      settings: { ...state.settings, hstImagerPath: "E:\\tools\\hst.imager.exe" },
+    }));
+    renderTab();
+    await pressCardBuild();
+    await waitFor(() => expect(cardPrepareMock).toHaveBeenCalled());
+    expect(cardPrepareMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hstImagerPath: "E:\\tools\\hst.imager.exe" })
+    );
+  });
+
   // **The agreement is a real pause** (Q8, the owner's rule of 2026-08-21).
   it("does not build until the user has acted on the Kickstart agreement", async () => {
     cardMode();
@@ -2419,6 +2438,57 @@ describe("card mode — the card's own run", () => {
     const next = screen.getAllByTestId("card-phase-next").at(-1);
     expect(next?.textContent).toBe(i18n.t("cardRun.next.refused"));
     // Nothing was built, and the session was closed exactly once.
+    expect(cardBuildMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(cardCloseMock.mock.calls).toEqual([[CARD_SESSION]]));
+  });
+
+  /**
+   * **And a prepare *failure* reaches it as a failure** (round 4 fix-wave
+   * re-review, N2) — the other arm of the case above, and the one the wave
+   * broke while fixing the first.
+   *
+   * `card_os_prepare`'s Err arm emitted a typed refusal on its own event for
+   * **every** error, including the ones `prepare_refused` deliberately
+   * excludes, and this hook branches on that field's presence alone. So an
+   * unreadable disk mid-staging was drawn as *refused*, with the refusal's
+   * next step (*fix what it names and press Build again*), while the job bar
+   * above it — reading the same command's `JobState::Failed` — said the job
+   * failed, and the failure's own "where the image was being written" sentence
+   * was never shown. Rust now says nothing on the event for a failure, so what
+   * arrives here is the failed job's `JobFailed`, code and all; this case pins
+   * the two sentences that follow from it.
+   */
+  it("says a prepare failure as a failure, with the failure's own next step", async () => {
+    awaitJobResultMock.mockImplementation(
+      async (event: string, start: Start, extract: (payload: unknown) => unknown) => {
+        if (event !== CARD_OS_PREPARE_EVENT) return settles(event, start, extract);
+        await start();
+        // What a failed job's `settleFromProgress` throws when no result
+        // event ever arrives — which is now the whole of a failure's wire.
+        throw new JobFailed("ART-IO", "the disk is unreadable (ART-IO)");
+      }
+    );
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+
+    await waitFor(() =>
+      expect(cardRows().join("\n")).toContain(
+        i18n.t("cardRun.phase.prepare.failed", { code: "ART-IO" })
+      )
+    );
+    expect(cardRows().join("\n")).not.toContain(
+      i18n.t("cardRun.phase.prepare.refused", { code: "ART-IO" })
+    );
+    // The failure's next step — where the image was being written — never the
+    // refusal's "fix what it names and press Build again".
+    const next = screen.getAllByTestId("card-phase-next").at(-1);
+    expect(next?.textContent).toBe(i18n.t("cardRun.next.failed", { image: CARD_IMAGE }));
+    expect(next?.textContent).not.toBe(i18n.t("cardRun.next.refused"));
+    // And the core's own sentence is still on screen, not swallowed.
+    expect(screen.getByTestId("card-refusal-sentence").textContent).toContain(
+      "the disk is unreadable"
+    );
     expect(cardBuildMock).not.toHaveBeenCalled();
     await waitFor(() => expect(cardCloseMock.mock.calls).toEqual([[CARD_SESSION]]));
   });
