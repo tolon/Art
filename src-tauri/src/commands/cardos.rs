@@ -1791,7 +1791,12 @@ pub struct VolumeNameVerdict {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<VolumeNameProblem>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_bytes: Option<u32>,
+    /// The bound `check_name` enforces — **characters, not bytes** (round 4
+    /// final review, minor). It was `max_bytes`, and it never was: the check
+    /// is `name.chars().count() > MAX_NAME_LEN`, and both catalogues' Turkish
+    /// already said *karakter*. Only the field name lied, which is the kind
+    /// of thing the next caller believes.
+    pub max_chars: Option<u32>,
 }
 
 fn volume_name_problem(name: &str) -> VolumeNameProblem {
@@ -1814,12 +1819,12 @@ pub fn card_os_check_volume_name(name: String) -> VolumeNameVerdict {
         Ok(_) => VolumeNameVerdict {
             ok: true,
             why: None,
-            max_bytes: None,
+            max_chars: None,
         },
         Err(_) => VolumeNameVerdict {
             ok: false,
             why: Some(volume_name_problem(&name)),
-            max_bytes: Some(MAX_NAME_LEN as u32),
+            max_chars: Some(MAX_NAME_LEN as u32),
         },
     }
 }
@@ -3572,7 +3577,7 @@ mod tests {
             VolumeNameVerdict {
                 ok: true,
                 why: None,
-                max_bytes: None,
+                max_chars: None,
             }
         );
         assert_eq!(
@@ -3580,7 +3585,7 @@ mod tests {
             VolumeNameVerdict {
                 ok: false,
                 why: Some(VolumeNameProblem::ReservedCharacter),
-                max_bytes: Some(30),
+                max_chars: Some(30),
             }
         );
         assert_eq!(
@@ -3588,7 +3593,7 @@ mod tests {
             VolumeNameVerdict {
                 ok: false,
                 why: Some(VolumeNameProblem::Empty),
-                max_bytes: Some(30),
+                max_chars: Some(30),
             }
         );
         assert_eq!(
@@ -3596,7 +3601,7 @@ mod tests {
             VolumeNameVerdict {
                 ok: false,
                 why: Some(VolumeNameProblem::TooLong),
-                max_bytes: Some(30),
+                max_chars: Some(30),
             }
         );
     }

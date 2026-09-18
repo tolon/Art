@@ -421,7 +421,7 @@ export type VolumeNameVerdict =
   | {
       ok: false;
       why: "empty" | "too-long" | "reserved-character";
-      maxBytes: number;
+      maxChars: number;
     };
 
 /** Check a volume name against AmigaDOS's own rule. Synchronous; never

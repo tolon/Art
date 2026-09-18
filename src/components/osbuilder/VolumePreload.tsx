@@ -22,7 +22,7 @@
 // setting beside `winuaePath`, and this screen can set it too so somebody who
 // arrives here first is not sent to Settings and back.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useTranslation } from "react-i18next";
 
@@ -169,40 +169,75 @@ export function VolumePreload() {
     }
   }, [fingerprint]);
 
-  // Q7: the core's own name rule, asked live as a chosen partition's name
-  // changes — never restated here. A name already answered, or nothing typed
-  // at all, is not asked again; `preloadBlocker` treats a name still in
-  // flight as not yet blocked on that account.
-  useEffect(() => {
-    const names = [
+  /** The names whose round trip is in flight — what blocks Run while it is
+   *  (round 4 final review, minor) and what stops a second ask for a name
+   *  already being asked about. */
+  const [namesChecking, setNamesChecking] = useState<string[]>([]);
+
+  /** Every chosen, non-empty, trimmed name — the whole of what this screen
+   *  ever has an opinion about. */
+  const chosenNames = useMemo(
+    () => [
       ...new Set(
         picks
           .filter((pick) => pick.chosen)
           .map((pick) => pick.volumeName.trim())
           .filter((name) => name.length > 0)
       ),
-    ].filter((name) => !(name in nameVerdicts));
-    if (names.length === 0) return;
+    ],
+    [picks]
+  );
+  const chosenKey = JSON.stringify(chosenNames);
+
+  // Q7: the core's own name rule, asked live as a chosen partition's name
+  // changes — never restated here. A name already answered, or already being
+  // asked about, is not asked again.
+  //
+  // **The map is pruned to the names now chosen** (final review, minor). It
+  // used to keep every prefix of everything ever typed — one entry per
+  // keystroke, for the life of the screen — which is an unbounded map of
+  // answers to questions nobody is asking any more. Pruning is stable: after
+  // it, every chosen name has an entry, so the effect's own `names` list is
+  // empty and it does not run again.
+  useEffect(() => {
+    const names = chosenNames.filter(
+      (name) => !(name in nameVerdicts) && !namesChecking.includes(name)
+    );
+    if (names.length === 0) {
+      setNameVerdicts((prev) => {
+        const kept = Object.keys(prev).filter((name) => chosenNames.includes(name));
+        if (kept.length === Object.keys(prev).length) return prev;
+        return Object.fromEntries(kept.map((name) => [name, prev[name]]));
+      });
+      return;
+    }
     let current = true;
+    setNamesChecking((prev) => [...new Set([...prev, ...names])]);
+    const done = () =>
+      setNamesChecking((prev) => prev.filter((name) => !names.includes(name)));
     void Promise.all(
       names.map((name) => cardOsCheckVolumeName(name).then((verdict) => [name, verdict] as const))
     )
       .then((entries) => {
-        if (!current) return;
+        if (!current) return done();
         setNameVerdicts((prev) => {
           const next = { ...prev };
           for (const [name, verdict] of entries) next[name] = verdict;
           return next;
         });
+        done();
       })
       .catch(() => {
-        // A round trip that failed leaves the name unanswered rather than
-        // blocked — the same "asking is a state" rule `preloadBlocker` reads.
+        // A round trip that failed leaves the name unanswered and Run live:
+        // the core refuses it again at run time, and a screen that blocked
+        // for ever on a question it could not ask has no way out. Disclosed
+        // in `preloadBlocker`'s own comment.
+        done();
       });
     return () => {
       current = false;
     };
-  }, [picks, nameVerdicts]);
+  }, [chosenKey, chosenNames, nameVerdicts, namesChecking]);
 
   // G9: the ROM question is about the card and the folders going onto it —
   // one verdict per folder, since the screen takes one folder per partition
@@ -337,7 +372,14 @@ export function VolumePreload() {
     }
   }
 
-  const blocker = preloadBlocker({ image: imagePath, rdbBackup, picks, plan, nameVerdicts });
+  const blocker = preloadBlocker({
+    image: imagePath,
+    rdbBackup,
+    picks,
+    plan,
+    nameVerdicts,
+    namesChecking,
+  });
   const erases = plan ? formatCount(plan) : 0;
 
   return (

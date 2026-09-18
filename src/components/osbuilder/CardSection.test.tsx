@@ -197,7 +197,7 @@ describe("the partitions a card always has", () => {
    * reads would be the wrong one exactly when they disagree.
    */
   it("refuses a typed name the core refuses, and says which rule", async () => {
-    checkNameMock.mockResolvedValue({ ok: false, why: "reserved-character", maxBytes: 30 });
+    checkNameMock.mockResolvedValue({ ok: false, why: "reserved-character", maxChars: 30 });
     seedCard([
       { name: "System", sources: [] },
       { name: "Work", sources: [] },
@@ -212,6 +212,31 @@ describe("the partitions a card always has", () => {
     );
     expect(screen.queryByTestId("card-row-Games:")).toBeNull();
     expect(checkNameMock).toHaveBeenCalledWith("Games:");
+  });
+
+  /**
+   * **A name the core makes for itself is refused before it is asked about**
+   * (round 4 final review, minor). `check_name` passes `Work_2` — it is a
+   * perfectly legal AmigaDOS name — but `plan_card_image` splits the leftover
+   * into `Work`, `Work_1`, … itself, and `isFixedPartition` answered `true`
+   * for that shape: the row that appeared could not be removed, could not
+   * take a source and was never measured, because all three are gated on it.
+   */
+  it("refuses a name the core makes itself, before asking the core about it", async () => {
+    seedCard([
+      { name: "System", sources: [] },
+      { name: "Work", sources: [] },
+    ]);
+    render(<CardSection />);
+    await userEvent.click(await screen.findByTestId("card-add-partition"));
+    await userEvent.type(screen.getByTestId("card-new-name"), "Work_2");
+    await userEvent.click(screen.getByTestId("card-new-name-add"));
+
+    expect((await screen.findByTestId("card-new-name-problem")).textContent).toBe(
+      i18n.t("cardSection.nameProblem.reserved", { name: "Work_2" })
+    );
+    expect(screen.queryByTestId("card-row-Work_2")).toBeNull();
+    expect(checkNameMock).not.toHaveBeenCalled();
   });
 });
 

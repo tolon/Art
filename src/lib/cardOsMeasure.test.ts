@@ -20,6 +20,7 @@ import {
   driverMissingPhrase,
   driverPhrase,
   isFixedPartition,
+  isReservedPartitionName,
   measurableInputs,
   overflowPhrase,
   partitionBytes,
@@ -69,10 +70,25 @@ describe("which partitions the request carries", () => {
   it("knows the two rows that are always there and cannot be removed", () => {
     expect(isFixedPartition("System")).toBe(true);
     expect(isFixedPartition("Work")).toBe(true);
-    // A split Work (`split_work`) is still the Work row, not a user's own.
-    expect(isFixedPartition("Work_1")).toBe(true);
     expect(isFixedPartition("Games")).toBe(false);
     expect(isFixedPartition("Workbench")).toBe(false);
+    // **`Work_1` is not one of them** (round 4 final review, minor). The
+    // target holds exactly two fixed rows; `Work_1` is a name the *core*
+    // makes when it splits the leftover, and it never appears in the target
+    // at all. Answering `true` here meant a user who typed `Work_2` — which
+    // `check_name` allows — got a row that could not be removed, could not
+    // take a source and was never measured.
+    expect(isFixedPartition("Work_1")).toBe(false);
+  });
+
+  it("reserves the names the core makes for itself, so no row can be typed dead", () => {
+    expect(isReservedPartitionName("System")).toBe(true);
+    expect(isReservedPartitionName("Work")).toBe(true);
+    expect(isReservedPartitionName("Work_1")).toBe(true);
+    expect(isReservedPartitionName("Work_12")).toBe(true);
+    expect(isReservedPartitionName("Games")).toBe(false);
+    expect(isReservedPartitionName("Workbench")).toBe(false);
+    expect(isReservedPartitionName("Work_")).toBe(false);
   });
 });
 
@@ -257,14 +273,14 @@ describe("a volume name the core refuses", () => {
   });
 
   it("says which rule was broken, with the core's own limit", () => {
-    expect(volumeNameProblemPhrase({ ok: false, why: "empty", maxBytes: 30 })!.key).toBe(
+    expect(volumeNameProblemPhrase({ ok: false, why: "empty", maxChars: 30 })!.key).toBe(
       "cardSection.nameProblem.empty"
     );
-    const long = volumeNameProblemPhrase({ ok: false, why: "too-long", maxBytes: 30 })!;
+    const long = volumeNameProblemPhrase({ ok: false, why: "too-long", maxChars: 30 })!;
     expect(long.key).toBe("cardSection.nameProblem.tooLong");
     expect(long.params).toMatchObject({ max: 30 });
     expect(
-      volumeNameProblemPhrase({ ok: false, why: "reserved-character", maxBytes: 30 })!.key
+      volumeNameProblemPhrase({ ok: false, why: "reserved-character", maxChars: 30 })!.key
     ).toBe("cardSection.nameProblem.reservedCharacter");
   });
 });

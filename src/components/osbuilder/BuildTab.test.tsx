@@ -2423,6 +2423,67 @@ describe("card mode — the card's own run", () => {
     await waitFor(() => expect(cardCloseMock.mock.calls).toEqual([[CARD_SESSION]]));
   });
 
+  /**
+   * **A fallback is news** (round 4 final review, minor). The manual builder
+   * has said which tool wrote which partition, and why ART's own writer could
+   * not, since ART-120; the one-button run dropped `result.steps` entirely, so
+   * a card half-written by hst-imager looked exactly like one ART wrote
+   * itself. Nothing was out-claimed — and the user was not told.
+   */
+  it("names the partition hst-imager wrote and why ART's own writer could not", async () => {
+    cardAnswer = {
+      ...cardResult({ ending: "succeeded" }),
+      steps: [
+        {
+          step: {
+            step: "format-partition",
+            slot: null,
+            index: 0,
+            drive_name: "SDH0",
+            volume_name: "System",
+          },
+          tool: "native",
+          fallback_reason: null,
+        },
+        {
+          step: {
+            step: "format-partition",
+            slot: null,
+            index: 1,
+            drive_name: "SDH1",
+            volume_name: "Games",
+          },
+          tool: "hst-imager 1.2.3",
+          fallback_reason: { reason: "non-ascii-pfs3-names", paths: ["türkçe"], more: 0 },
+        },
+      ] satisfies import("@/lib/preload").StepReport[],
+    };
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await agreeAndContinue();
+
+    const said = await screen.findByTestId("card-fallbacks");
+    // One line: the step that went the ordinary way is not news.
+    expect(said.querySelectorAll("li").length).toBe(1);
+    expect(said.textContent).toContain("hst-imager");
+    expect(said.textContent).toContain("Games");
+  });
+
+  /**
+   * **No Stop while the run waits at the agreement** (the review's triage of
+   * Task 10's deferred minor): there is no job to cancel, so Stop did what
+   * Give up does and then printed the give-up sentence.
+   */
+  it("offers only Give up at the agreement, never Stop", async () => {
+    cardMode();
+    renderTab();
+    await pressCardBuild();
+    await screen.findByTestId("kickstart-agreement");
+    expect(screen.queryByTestId("card-stop")).toBeNull();
+    expect(screen.getByTestId("card-give-up")).toBeTruthy();
+  });
+
   it("says where the evidence is and what became of the .partial when a build fails", async () => {
     cardAnswer = cardResult({
       ending: "failed",

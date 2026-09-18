@@ -8,6 +8,8 @@
 // to match the regex. That direction matters: a pattern written against a
 // sentence somebody invented proves nothing about the sentence somebody ships.
 
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import en from "@/i18n/en.json";
@@ -186,13 +188,37 @@ const CARD_CASES: CardCase[] = [
     key: "errors.whdloadNotFound",
   },
   {
-    name: "KickstartNotProposed",
+    name: "KickstartNotProposed, not named",
     refusal: {
       code: "ART-KICKSTART-NOT-PROPOSED",
       message: "cannot be placed",
-      params: { name: "Kickstart 3.1 (A1200)", why: "ART's proposal does not name it" },
+      params: { name: "Kickstart 3.1 (A1200)", reason: "not-named" },
     },
-    key: "errors.kickstartNotProposed",
+    key: "errors.kickstartNotProposed.notNamed",
+  },
+  {
+    name: "KickstartNotProposed, not offered",
+    refusal: {
+      code: "ART-KICKSTART-NOT-PROPOSED",
+      message: "cannot be placed",
+      params: { name: "Kickstart 3.1 (A1200)", reason: "not-offered" },
+    },
+    key: "errors.kickstartNotProposed.notOffered",
+  },
+  {
+    // The reason whose actionable half used to arrive in English inside the
+    // Turkish sentence's parentheses.
+    name: "KickstartNotProposed, .RTB missing",
+    refusal: {
+      code: "ART-KICKSTART-NOT-PROPOSED",
+      message: "cannot be placed",
+      params: {
+        name: "Kickstart 3.1 (A1200)",
+        reason: "rtb-missing",
+        package: "Aminet util/boot/skick346",
+      },
+    },
+    key: "errors.kickstartNotProposed.rtbMissing",
   },
   {
     name: "CardSourceUnusable, missing",
@@ -350,6 +376,24 @@ const CARD_CASES: CardCase[] = [
       },
     },
     key: "errors.cardDoesNotFit.systemAdditionsDoNotFit",
+  },
+  {
+    // The optional field `details()` supplies when the card adds a WHDLoad —
+    // which no case named until the key-set check below found it dropped.
+    name: "CardDoesNotFit, system-additions-do-not-fit with a WHDLoad",
+    refusal: {
+      code: "ART-CARD-DOES-NOT-FIT",
+      message: "System needs more blocks with its additions than it has room for",
+      params: {
+        kind: "system-additions-do-not-fit",
+        neededBlocks: "9000",
+        availableBlocks: "8000",
+        treeBlocks: "7000",
+        kickstarts: "Kickstart 3.1 (A1200)",
+        whdload: "WHDLoad 18.9",
+      },
+    },
+    key: "errors.cardDoesNotFit.systemAdditionsDoNotFitWithWhdload",
   },
   {
     name: "NotEnoughSpace, image",
@@ -526,5 +570,133 @@ describe("errorText renders through the caller's own translator", () => {
     expect(errorText(spy, TREE_OCCUPIED)).toBe(
       'errors.treeDestinationOccupied|{"id":"ART-SAFETY-REFUSED","path":"E:\\\\amiga\\\\Amigatolon\\\\hdf"}'
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The table above, checked against the Rust that fills it (round 4 final
+// review, I3)
+// ---------------------------------------------------------------------------
+
+/**
+ * **`CARD_CASES` is a hand-written copy of `CoreError::details()`, and copies
+ * drift** (CLAUDE.md, *a test that reads a table instead of the file is a
+ * copy*).
+ *
+ * Nothing pinned the two together. `core/error.rs`'s own
+ * `every_card_error_s_details_are_not_empty` asserts only that `details()`
+ * answers *something*, and the cases above assert only that every
+ * `{{placeholder}}` of the catalogue sentence is covered by the params **the
+ * table itself supplies**. So renaming one key on the Rust side — `source` to
+ * `source_path`, say — left both sides green while the rendered Turkish
+ * sentence kept a literal `{{source}}` in it, over the exact wire the owner's
+ * decision 4 depends on.
+ *
+ * This reads the literals out of `core/error.rs` the way
+ * `i18n/job-title-keys.test.ts` reads `JobTitle::new` out of the Rust tree,
+ * and checks the two directions that matter: no case may name a key Rust does
+ * not supply for that code, and no key Rust supplies for a code may be
+ * unnamed by every case for it. Rename either end and this is red, pointing
+ * at the other.
+ */
+const ERROR_RS = resolve(__dirname, "..", "..", "src-tauri", "src", "core", "error.rs");
+
+/** Every `("literal", …)` key in one `details()` arm. */
+function keysIn(arm: string): string[] {
+  return [...arm.matchAll(/\("([a-zA-Z_]+)",/g)].map((m) => m[1]);
+}
+
+/** The body of a `fn details(…)` that starts at `from`, to its `match`'s end. */
+function detailsBodyAt(source: string, from: number): string {
+  const start = source.indexOf("match self {", from);
+  const end = source.indexOf("\n    }", start);
+  return source.slice(start, end);
+}
+
+/** The keys the `details()` of one sub-enum's own `impl` block supplies. */
+function subEnumKeys(source: string, name: string): string[] {
+  const block = source.indexOf(`impl ${name} {`);
+  expect(block, `core/error.rs should hold an impl for ${name}`).toBeGreaterThan(-1);
+  const head = source.indexOf("fn details(&self)", block);
+  expect(head, `${name} should have a details()`).toBeGreaterThan(-1);
+  return keysIn(detailsBodyAt(source, head));
+}
+
+/**
+ * Which sub-enum each delegating arm folds in. Named per variant rather than
+ * sniffed from the expression, because two of them spell it `why.details()`
+ * and a parser that read the expression alone would give them each other's
+ * keys — the exact class of quiet wrongness this whole check exists against.
+ */
+const DELEGATES: Record<string, string> = {
+  CardSourceUnusable: "UnusableSource",
+  KickstartNotProposed: "KickstartNotProposedWhy",
+  CardDoesNotFit: "SizingRefusal",
+};
+
+function readRustDetailKeys(): Map<string, Set<string>> {
+  const source = readFileSync(ERROR_RS, "utf8");
+
+  const subKeys = new Map<string, string[]>();
+  for (const name of new Set(Object.values(DELEGATES))) {
+    subKeys.set(name, subEnumKeys(source, name));
+  }
+
+  // `CoreError`'s own is the only `pub fn details`; the sub-enums' are private.
+  const coreHead = source.indexOf("pub fn details(&self)");
+  expect(coreHead, "core/error.rs should hold CoreError::details").toBeGreaterThan(-1);
+  const coreBody = detailsBodyAt(source, coreHead);
+
+  // Variant → `ART-*` code, straight out of `code()`'s own match arms.
+  const codeOf = new Map<string, string>();
+  for (const match of source.matchAll(/Self::(\w+)[^\n]*=> "(ART-[A-Z0-9-]+)"/g)) {
+    codeOf.set(match[1], match[2]);
+  }
+
+  const byCode = new Map<string, Set<string>>();
+  const arms = coreBody.split(/\n            Self::/).slice(1);
+  for (const arm of arms) {
+    const variant = /^(\w+)/.exec(arm)?.[1];
+    const code = variant ? codeOf.get(variant) : undefined;
+    if (!code) continue;
+    const keys = new Set(keysIn(arm));
+    // An arm that hands the question to a sub-enum can carry every one of
+    // that enum's own keys under this code.
+    const delegate = DELEGATES[variant!];
+    if (delegate) {
+      expect(arm, `${variant} should delegate to ${delegate}`).toMatch(/\.details\(\)/);
+      for (const key of subKeys.get(delegate) ?? []) keys.add(key);
+    }
+    byCode.set(code, keys);
+  }
+  return byCode;
+}
+
+describe("the card table and Rust's own details() cannot drift (I3)", () => {
+  const rust = readRustDetailKeys();
+
+  it("finds a key set for every code the table covers", () => {
+    for (const code of new Set(CARD_CASES.map((c) => c.refusal.code))) {
+      expect(rust.get(code), `${code} has no details() arm in core/error.rs`).toBeTruthy();
+    }
+  });
+
+  it("names no parameter Rust does not supply for that code", () => {
+    for (const { name, refusal } of CARD_CASES) {
+      const supplied = rust.get(refusal.code);
+      if (!supplied) continue;
+      const invented = Object.keys(refusal.params).filter((key) => !supplied.has(key));
+      expect(invented, `${name}: Rust supplies ${[...supplied].sort().join(", ")}`).toEqual([]);
+    }
+  });
+
+  it("leaves no parameter Rust supplies unnamed by every case for its code", () => {
+    for (const [code, supplied] of rust) {
+      const cases = CARD_CASES.filter((c) => c.refusal.code === code);
+      if (cases.length === 0) continue;
+      const named = new Set(cases.flatMap((c) => Object.keys(c.refusal.params)));
+      const unused = [...supplied].filter((key) => !named.has(key));
+      expect(unused, `${code}: no case supplies these`).toEqual([]);
+    }
   });
 });

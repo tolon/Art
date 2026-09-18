@@ -47,6 +47,24 @@ export const DOES_NOT_FIT = "ART-CARD-DOES-NOT-FIT";
  * same name, which is a card with two drawers called Work on it.
  */
 export function isFixedPartition(name: string): boolean {
+  return name === "System" || name === "Work";
+}
+
+/**
+ * A name the user may not give one of their own partitions, because the core
+ * makes it itself (round 4 final review, minor).
+ *
+ * `isFixedPartition` used to answer `true` for any `Work_\d+`, so that a
+ * partition the *core* had split off was drawn as a fixed row. But the same
+ * answer was given to a row the **user** typed: `addPartition` accepted
+ * `Work_2` — `check_name` has no opinion about it — and the row that appeared
+ * could not be removed, could not take a source and was never measured,
+ * because every one of those is gated on `isFixedPartition`. A name that
+ * produces a dead row is refused at the one place it can be typed, and
+ * `isFixedPartition` goes back to meaning exactly the two rows the target
+ * really holds.
+ */
+export function isReservedPartitionName(name: string): boolean {
   return name === "System" || name === "Work" || /^Work_\d+$/.test(name);
 }
 
@@ -301,7 +319,7 @@ export function volumeNameProblemPhrase(verdict: VolumeNameVerdict): Phrase | nu
     case "too-long":
       return {
         key: "cardSection.nameProblem.tooLong",
-        params: { max: verdict.maxBytes },
+        params: { max: verdict.maxChars },
       };
     case "reserved-character":
       return { key: "cardSection.nameProblem.reservedCharacter" };

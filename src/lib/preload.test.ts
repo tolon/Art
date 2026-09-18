@@ -257,7 +257,7 @@ describe("preloadBlocker", () => {
       const picks = chosenFirst();
       picks[0] = { ...picks[0], volumeName: bad };
       const nameVerdicts: Record<string, VolumeNameVerdict> = {
-        [bad]: { ok: false, why: "reserved-character", maxBytes: 30 },
+        [bad]: { ok: false, why: "reserved-character", maxChars: 30 },
       };
       expect(preloadBlocker({ ...ready, picks, nameVerdicts })?.key, bad).toBe(
         "preload.blocked.badName"
@@ -270,7 +270,7 @@ describe("preloadBlocker", () => {
     const picks = chosenFirst();
     picks[0] = { ...picks[0], volumeName: longName };
     const nameVerdicts: Record<string, VolumeNameVerdict> = {
-      [longName]: { ok: false, why: "too-long", maxBytes: 30 },
+      [longName]: { ok: false, why: "too-long", maxChars: 30 },
     };
     const blocker = preloadBlocker({ ...ready, picks, nameVerdicts });
     expect(blocker?.key).toBe("preload.blocked.longName");
@@ -286,9 +286,31 @@ describe("preloadBlocker", () => {
     ).toBeNull();
   });
 
-  it("does not block on a name nobody has checked yet — asking is a state, not a refusal", () => {
+  /**
+   * **A name being checked right now blocks Run, and says so** (round 4 final
+   * review, minor). Round 4 replaced a synchronous name check with a round
+   * trip and left Run live while it was in flight, which is a regression: the
+   * user pressed Run over a name the core was a moment from refusing, and the
+   * refusal arrived after the job had started. The two states are different —
+   * *being asked* blocks and clears itself; *asked and the round trip failed*
+   * leaves Run live, which is deliberate, because a screen that blocked for
+   * ever on a question it could not ask has no way out.
+   */
+  it("blocks while a chosen name's check is in flight, and not once it has failed", () => {
     const picks = chosenFirst();
     picks[0] = { ...picks[0], volumeName: "Work:" };
+    const blocker = preloadBlocker({
+      ...ready,
+      picks,
+      nameVerdicts: {},
+      namesChecking: ["Work:"],
+    });
+    expect(blocker?.key).toBe("preload.blocked.checkingName");
+    expect(blocker?.params).toEqual({ drive: "DH0" });
+
+    // Nobody is asking any more, and no verdict came back: Run is live and
+    // the core is the one that refuses it.
+    expect(preloadBlocker({ ...ready, picks, nameVerdicts: {}, namesChecking: [] })).toBeNull();
     expect(preloadBlocker({ ...ready, picks, nameVerdicts: {} })).toBeNull();
   });
 

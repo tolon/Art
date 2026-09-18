@@ -497,10 +497,19 @@ export function editsRdb(plan: PreloadPlan): boolean {
  * stays a local check: every text field needs to know whether the user has
  * typed anything at all, which is not one of `check_name`'s language-specific
  * rules. `nameVerdicts` is keyed by the trimmed name itself — the verdict is
- * a pure function of the string, not of which drive is asking — and a name
- * with no entry yet is not blocked on that account: the round trip has not
- * landed, and asking is a state, not a refusal (the same rule
- * `destinationTaken` follows elsewhere).
+ * a pure function of the string, not of which drive is asking.
+ *
+ * **A name whose check is still in flight blocks Run, and says so** (round 4
+ * final review, minor). The rule used to be "a name with no entry yet is not
+ * blocked on that account", which made this a regression from the synchronous
+ * check it replaced: Run stood live over a name the core was about to refuse,
+ * and the refusal arrived after the job had started. `namesChecking` is the
+ * set of names actually being asked about, so this is *"checking…"* — the
+ * `destinationChecked` rule, not the `destinationTaken` one — and it clears
+ * itself. A round trip that **failed** leaves the name in neither map and
+ * Run live, which is deliberate and disclosed: the core refuses it again at
+ * run time, and a screen that blocked for ever on a question it could not ask
+ * would have no way out.
  *
  * **ART-117: an RDB edit needs a backup path.** The engine refuses without one
  * too (`PreloadPlan::ready_to_run`); asking here keeps Run disabled rather than
@@ -512,6 +521,8 @@ export function preloadBlocker(input: {
   picks: PartitionPick[];
   plan: PreloadPlan | null;
   nameVerdicts: Record<string, VolumeNameVerdict>;
+  /** Names whose `card_os_check_volume_name` round trip has not landed. */
+  namesChecking?: string[];
 }): Phrase | null {
   if (!input.image?.trim()) return { key: "preload.blocked.noCard" };
 
@@ -521,12 +532,15 @@ export function preloadBlocker(input: {
   for (const pick of chosen) {
     const name = pick.volumeName.trim();
     if (!name) return { key: "preload.blocked.blankName", params: { drive: pick.driveName } };
+    if (input.namesChecking?.includes(name)) {
+      return { key: "preload.blocked.checkingName", params: { drive: pick.driveName } };
+    }
     const verdict = input.nameVerdicts[name];
     if (!verdict || verdict.ok) continue;
     if (verdict.why === "too-long") {
       return {
         key: "preload.blocked.longName",
-        params: { drive: pick.driveName, max: verdict.maxBytes },
+        params: { drive: pick.driveName, max: verdict.maxChars },
       };
     }
     if (verdict.why === "reserved-character") {

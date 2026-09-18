@@ -24,7 +24,7 @@
 // unreadable-slaves notice, the same as `CardSection.tsx`'s own refusal
 // strip.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import type { KickstartProposal, ProposedKickstart } from "@/lib/cardOs";
@@ -43,6 +43,27 @@ export function KickstartAgreement({ proposal, onAgreedChange }: KickstartAgreem
   // Nothing ticked by ART (owner's rule): the set starts empty no matter
   // what the proposal offers.
   const [agreed, setAgreed] = useState<Set<string>>(new Set());
+
+  /**
+   * **And it starts empty again for every new proposal** (round 4 final
+   * review, minor).
+   *
+   * This set is this component's own, and `BuildTab` mounts it once for the
+   * whole tab: a second run in the same mount inherited the first run's ticks
+   * — the run's `setAgreed([])` clears the *parent's* copy, which is what the
+   * build is sent, not this one, which is what the boxes draw. So the screen
+   * showed a name ticked that the parent had forgotten, and the build was
+   * refused by `check_agreed` for a name the new proposal does not offer: the
+   * user refused rather than told. Keyed on the proposal **object**, not on
+   * its names, so two runs offering the same Kickstart still start clean.
+   */
+  useEffect(() => {
+    setAgreed(new Set());
+    onAgreedChange([]);
+    // `onAgreedChange` is the parent's own callback and is not what decides
+    // this; a new proposal is.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposal]);
 
   function toggle(item: ProposedKickstart) {
     if (!canAgree(item)) return;

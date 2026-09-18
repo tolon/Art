@@ -2189,7 +2189,8 @@
       "empty": "A partition needs a name.",
       "tooLong": "That name is too long: AmigaDOS allows {{max}} characters.",
       "reservedCharacter": "That name holds a character AmigaDOS does not allow in a volume name.",
-      "duplicate": "This card already has a partition called {{name}}."
+      "duplicate": "This card already has a partition called {{name}}.",
+      "reserved": "{{name}} is a name ART gives a partition itself: System holds the operating system, and Work — split into Work, Work_1 and so on when it is large — is whatever is left of the card. Choose another name."
     },
     "newName": {
       "label": "Name for the new partition",
@@ -2283,6 +2284,7 @@
   },
   "cardRun": {
     "confirm": "I have read what will be built, and the card image may be written.",
+    "fallback": "{{step}} was written by {{tool}} rather than by ART's own writer:",
     "run": "Build the card",
     "runAgain": "Build the card again",
     "running": "Building…",
@@ -2477,6 +2479,7 @@
       "noBackup": "This plan changes the card's RDB — choose where its backup goes first.",
       "nothingChosen": "Choose at least one partition to prepare.",
       "blankName": "{{drive}} needs a volume name.",
+      "checkingName": "ART is checking whether {{drive}}'s volume name is one AmigaDOS accepts.",
       "badName": "{{drive}}'s volume name contains ':' or '/', which separate paths on the Amiga and cannot appear in a name.",
       "longName": "{{drive}}'s volume name is longer than {{max}} characters, which is where AmigaDOS names stop.",
       "notPlanned": "Preview it first — nothing is formatted before you have seen what would be."
@@ -3215,7 +3218,7 @@
       "missing": "'{{source}}' in {{partition}} will not be copied: it does not exist any more. Remove it from {{partition}}, or put the folder or archive back where ART found it.\n\nError ID: {{id}}",
       "unreadable": "'{{source}}' in {{partition}} will not be copied: ART could not read it ({{detail}}). Remove it from {{partition}}, or close whatever else has it open and try again.\n\nError ID: {{id}}",
       "archiveUnreadable": "'{{source}}' in {{partition}} will not be copied: ART could not read the archive ({{detail}}). Remove it from {{partition}}, or get a fresh copy of the archive.\n\nError ID: {{id}}",
-      "hardfileNotWhdload": "'{{source}}' in {{partition}} will not be copied: {{detail}}. Remove it from {{partition}}, or choose a hardfile a WHDLoad installer built.\n\nError ID: {{id}}",
+      "hardfileNotWhdload": "'{{source}}' in {{partition}} will not be copied: it is a hard file, but not one a WHDLoad installer built ({{detail}}). Remove it from {{partition}}, or choose a hardfile a WHDLoad installer built.\n\nError ID: {{id}}",
       "notAnAmigaSource": "'{{source}}' in {{partition}} will not be copied: it is not a folder, an archive, a WHDLoad hardfile or a floppy image ({{detail}}). Remove it from {{partition}}, or choose one of those four kinds.\n\nError ID: {{id}}",
       "notAFolder": "System's tree in {{partition}} will not be copied: it must be a folder, and '{{source}}' is not one. Remove it from {{partition}}, or point System at the folder ART built.\n\nError ID: {{id}}"
     },
@@ -3224,7 +3227,11 @@
       "missingUnreadable": "The card will not be built: no PFS3 driver was found in {{searched}}, and ART could not read {{unreadable}}. Put a working pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself.\n\nError ID: {{id}}"
     },
     "whdloadNotFound": "{{titles}} WHDLoad title(s) on this card will not start: no WHDLoad was found anywhere ART looked ({{searched}}). Put WHDLoad_usr.lha (from whdload.de) in one of your material folders and prepare the card again.\n\nError ID: {{id}}",
-    "kickstartNotProposed": "'{{name}}' will not be placed on the card: it is not something the current proposal offers ({{why}}). Prepare the card again, and agree only to what its proposal offers.\n\nError ID: {{id}}",
+    "kickstartNotProposed": {
+      "notNamed": "'{{name}}' will not be placed on the card: this proposal does not name it at all. Prepare the card again, and agree only to what its proposal offers.\n\nError ID: {{id}}",
+      "notOffered": "'{{name}}' will not be placed on the card: ART did not offer it, because nothing in your collection matches it. Put that ROM file in one of your material folders and prepare the card again.\n\nError ID: {{id}}",
+      "rtbMissing": "'{{name}}' will not be placed on the card: its .RTB file was not found in any material folder. Put {{package}} in one of them and prepare the card again.\n\nError ID: {{id}}"
+    },
     "cardNamesNeedHst": {
       "noMore": "{{partition}} will not be written: it holds names ART's own PFS3 writer cannot write ({{paths}}). Point ART at hst-imager in Settings, or rename those files to ASCII, and prepare the card again.\n\nError ID: {{id}}",
       "withMore": "{{partition}} will not be written: it holds names ART's own PFS3 writer cannot write ({{paths}}, and {{more}} more). Point ART at hst-imager in Settings, or rename those files to ASCII, and prepare the card again.\n\nError ID: {{id}}"
@@ -3235,7 +3242,8 @@
       "partitionTooLarge": "{{volumeName}} will not fit on this card: it would need {{bytes}} bytes, more than one PFS3 partition can hold. Split its sources across two partitions.\n\nError ID: {{id}}",
       "cardTooSmall": "This card will not hold System and the RDB: a {{cardGb}} GB card is too small. Choose a larger card.\n\nError ID: {{id}}",
       "partitionContentDoesNotFit": "{{volumeName}} will not hold its own tree: the tree needs {{neededBlocks}} blocks and {{volumeName}} has room for {{availableBlocks}}. Take something out of the tree, and prepare the card again.\n\nError ID: {{id}}",
-      "systemAdditionsDoNotFit": "System will not hold everything this card adds to it: it needs {{neededBlocks}} blocks and has room for {{availableBlocks}} — the tree by itself needs {{treeBlocks}}. The Kickstarts affected are {{kickstarts}}; take what this card does not need out of your material folders, and prepare again.\n\nError ID: {{id}}"
+      "systemAdditionsDoNotFit": "System will not hold everything this card adds to it: it needs {{neededBlocks}} blocks and has room for {{availableBlocks}} — the tree by itself needs {{treeBlocks}}. The Kickstarts affected are {{kickstarts}}; take what this card does not need out of your material folders, and prepare again.\n\nError ID: {{id}}",
+      "systemAdditionsDoNotFitWithWhdload": "System will not hold everything this card adds to it: it needs {{neededBlocks}} blocks and has room for {{availableBlocks}} — the tree by itself needs {{treeBlocks}}. What is being added is WHDLoad ({{whdload}}) and the Kickstarts {{kickstarts}}; take what this card does not need out of your material folders, and prepare again.\n\nError ID: {{id}}"
     },
     "notEnoughSpace": {
       "image": "'{{place}}' will not receive this card: it has {{available}} bytes free and the build needs {{needed}}. Free some space there, or choose another folder for the card image, and prepare again.\n\nError ID: {{id}}",

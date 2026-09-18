@@ -42,6 +42,7 @@ import {
   driverMissingPhrase,
   driverPhrase,
   isFixedPartition,
+  isReservedPartitionName,
   measurableInputs,
   overflowPhrase,
   sizePhrase,
@@ -291,6 +292,15 @@ export function CardSection() {
     const trimmed = name.trim();
     if (targetRef.current.partitions.some((partition) => partition.name === trimmed)) {
       setNameProblem(t("cardSection.nameProblem.duplicate", { name: trimmed }));
+      return;
+    }
+    // **A name the core makes for itself is refused here** (final review,
+    // minor). `check_name` passes `Work_2` — it is a legal AmigaDOS name —
+    // but `plan_card_image` splits the leftover into `Work`, `Work_1`, … so a
+    // user's own `Work_2` would be a second volume with that name, and the
+    // row it drew could not be removed, filled or measured.
+    if (isReservedPartitionName(trimmed)) {
+      setNameProblem(t("cardSection.nameProblem.reserved", { name: trimmed }));
       return;
     }
     const verdict = await cardOsCheckVolumeName(trimmed);

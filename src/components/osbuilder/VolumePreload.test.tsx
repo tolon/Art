@@ -288,7 +288,7 @@ describe("the volume preload screen and the core's own name rule (Q7)", () => {
     checkVolumeNameMock.mockImplementation((name: string) =>
       Promise.resolve(
         name.includes(":")
-          ? ({ ok: false, why: "reserved-character", maxBytes: 30 } satisfies VolumeNameVerdict)
+          ? ({ ok: false, why: "reserved-character", maxChars: 30 } satisfies VolumeNameVerdict)
           : ({ ok: true } satisfies VolumeNameVerdict)
       )
     );

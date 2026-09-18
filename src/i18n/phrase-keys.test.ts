@@ -326,7 +326,7 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     }
 
     for (const why of ["empty", "too-long", "reserved-character"] as const) {
-      const phrase = volumeNameProblemPhrase({ ok: false, why, maxBytes: 30 });
+      const phrase = volumeNameProblemPhrase({ ok: false, why, maxChars: 30 });
       expect(resolvesAtRuntime(phrase!.key), why).toBe(true);
     }
 
@@ -1344,12 +1344,12 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       preloadBlocker({
         ...ready,
         picks: [{ ...pick, volumeName: "Work:" }],
-        nameVerdicts: { "Work:": { ok: false, why: "reserved-character", maxBytes: 30 } },
+        nameVerdicts: { "Work:": { ok: false, why: "reserved-character", maxChars: 30 } },
       }),
       preloadBlocker({
         ...ready,
         picks: [{ ...pick, volumeName: longName }],
-        nameVerdicts: { [longName]: { ok: false, why: "too-long", maxBytes: 30 } },
+        nameVerdicts: { [longName]: { ok: false, why: "too-long", maxChars: 30 } },
       }),
       preloadBlocker({ ...ready, plan: null }),
       // ART-117: an RDB edit with no backup path.

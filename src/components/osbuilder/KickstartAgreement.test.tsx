@@ -76,6 +76,39 @@ describe("KickstartAgreement", () => {
     expect(onAgreedChange).toHaveBeenLastCalledWith([]);
   });
 
+  /**
+   * **Every new proposal starts with nothing ticked** (round 4 final review,
+   * minor). This set is the component's own; the run's `setAgreed([])` on the
+   * Build press clears the *parent's* copy — what the build is sent — not this
+   * one, which is what the boxes draw. A second proposal arriving into a live
+   * mount therefore showed the first run's ticks, and if it did not offer that
+   * name the build was refused by `check_agreed` rather than the user told.
+   *
+   * Driven here rather than through `BuildTab`, where the guard the run
+   * happens to have — `awaitingAgreement` going false between runs, which
+   * unmounts this component — makes the same case pass either way. A test
+   * that passes for a second reason proves nothing about the first.
+   */
+  it("clears its ticks when a new proposal arrives into the same mount", async () => {
+    const user = userEvent.setup();
+    const onAgreedChange = vi.fn();
+    const view = render(
+      <KickstartAgreement proposal={proposal([readyItem()])} onAgreedChange={onAgreedChange} />
+    );
+    const box = () => screen.getByTestId("kickstart-check-kick40068.A1200") as HTMLInputElement;
+    await user.click(box());
+    expect(box().checked).toBe(true);
+    expect(onAgreedChange).toHaveBeenLastCalledWith(["kick40068.A1200"]);
+
+    // A second run's proposal — a different object, the same name offered.
+    view.rerender(
+      <KickstartAgreement proposal={proposal([readyItem()])} onAgreedChange={onAgreedChange} />
+    );
+
+    expect(box().checked).toBe(false);
+    expect(onAgreedChange).toHaveBeenLastCalledWith([]);
+  });
+
   it("cannot tick a supplied item with a missing RTB, and says where to get it", () => {
     render(
       <KickstartAgreement

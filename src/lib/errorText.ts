@@ -98,7 +98,7 @@ const CARD_RECOGNISERS: CardRecogniser[] = [
   { code: "ART-CARD-SOURCE-UNUSABLE", key: cardSourceUnusableKey },
   { code: "ART-PFS3-DRIVER-NOT-FOUND", key: pfs3DriverNotFoundKey },
   { code: "ART-WHDLOAD-NOT-FOUND", key: "errors.whdloadNotFound" },
-  { code: "ART-KICKSTART-NOT-PROPOSED", key: "errors.kickstartNotProposed" },
+  { code: "ART-KICKSTART-NOT-PROPOSED", key: kickstartNotProposedKey },
   { code: "ART-CARD-NAMES-NEED-HST", key: cardNamesNeedHstKey },
   { code: "ART-CARD-DOES-NOT-FIT", key: cardDoesNotFitKey },
   { code: "ART-NOT-ENOUGH-SPACE", key: notEnoughSpaceKey },
@@ -108,6 +108,30 @@ const CARD_RECOGNISERS: CardRecogniser[] = [
   { code: "ART-CARD-PARTITION-TOO-MANY-ENTRIES", key: "errors.cardPartitionTooManyEntries" },
   { code: "ART-CARD-PARTIAL-EXISTS", key: "errors.cardPartialExists" },
 ];
+
+/**
+ * `CoreError::KickstartNotProposed`'s `why.reason` — one sentence per reason
+ * (round 4 final review, the *one English clause is the sentence* minor).
+ *
+ * This was a single key interpolating Rust's `{{why}}`, and that clause
+ * carried the **actionable half** in English: *"its .RTB was not found in any
+ * material folder — put Aminet util/boot/skick346 in one"*, inside a Turkish
+ * sentence's parentheses. `KickstartNotProposedWhy` is a closed three-member
+ * enum on the Rust side, so each reason says its own thing and the one value
+ * a user acts on — the package — is a parameter.
+ */
+function kickstartNotProposedKey(params: Record<string, string>): string {
+  switch (params.reason) {
+    case "not-named":
+      return "errors.kickstartNotProposed.notNamed";
+    case "not-offered":
+      return "errors.kickstartNotProposed.notOffered";
+    case "rtb-missing":
+      return "errors.kickstartNotProposed.rtbMissing";
+    default:
+      return "errors.verbatim";
+  }
+}
 
 /** `CoreError::CardSourceUnusable`'s `why.reason` (`UnusableSource`'s own
  *  `details()`) — one sentence per reason, because "cannot be used" with no
@@ -166,7 +190,15 @@ function cardDoesNotFitKey(params: Record<string, string>): string {
     case "partition-content-does-not-fit":
       return "errors.cardDoesNotFit.partitionContentDoesNotFit";
     case "system-additions-do-not-fit":
-      return "errors.cardDoesNotFit.systemAdditionsDoNotFit";
+      // **The WHDLoad is part of what does not fit, so it is named** (round 4
+      // final review, I3, found by the new key-set check). `details()` has
+      // always supplied `whdload` when the card adds one, and the single
+      // sentence here dropped it — telling the user which Kickstarts to take
+      // out of their folders while saying nothing about the other thing the
+      // build was adding to System. Same optional-field split as `largest`.
+      return params.whdload
+        ? "errors.cardDoesNotFit.systemAdditionsDoNotFitWithWhdload"
+        : "errors.cardDoesNotFit.systemAdditionsDoNotFit";
     default:
       // `SizingRefusal` is a closed five-member enum on the Rust side; see
       // `cardSourceUnusableKey`'s own note.

@@ -2189,7 +2189,8 @@
       "empty": "Bir bölümün adı olmak zorunda.",
       "tooLong": "Bu ad fazla uzun: AmigaDOS en çok {{max}} karaktere izin veriyor.",
       "reservedCharacter": "Bu ad, AmigaDOS'un bir birim adında kabul etmediği bir karakter taşıyor.",
-      "duplicate": "Bu kartta {{name}} adında bir bölüm zaten var."
+      "duplicate": "Bu kartta {{name}} adında bir bölüm zaten var.",
+      "reserved": "{{name}}, ART'ın bir bölüme kendisinin verdiği adlardan biri: System işletim sistemini taşır, Work ise — büyük olduğunda Work, Work_1 diye bölünerek — karttan geriye kalan her şeydir. Lütfen başka bir ad seçin."
     },
     "newName": {
       "label": "Yeni bölümün adı",
@@ -2283,6 +2284,7 @@
   },
   "cardRun": {
     "confirm": "Ne oluşturulacağını okudum; kart imajı yazılabilir.",
+    "fallback": "{{step}} adımını ART'ın kendi yazıcısı değil, {{tool}} yazdı. Nedeni:",
     "run": "Kartı oluştur",
     "runAgain": "Kartı yeniden oluştur",
     "running": "Oluşturuluyor…",
@@ -2477,6 +2479,7 @@
       "noBackup": "Bu plan kartın RDB'sini değiştiriyor — önce yedeğinin nereye gideceğini seç.",
       "nothingChosen": "Hazırlanacak en az bir bölüm seç.",
       "blankName": "{{drive}} için bir birim adı gerekiyor.",
+      "checkingName": "ART, {{drive}} için yazdığınız birim adının AmigaDOS'un kabul ettiği bir ad olup olmadığına bakıyor.",
       "badName": "{{drive}} biriminin adında ':' veya '/' var; bunlar Amiga'da yol ayırıcıdır ve bir adın içinde yer alamaz.",
       "longName": "{{drive}} biriminin adı {{max}} karakterden uzun; AmigaDOS adları orada biter.",
       "notPlanned": "Önce önizle — ne biçimlendirileceğini görmeden hiçbir şey biçimlendirilmez."
@@ -3215,7 +3218,7 @@
       "missing": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: artık orada değil. Onu {{partition}} bölümünden kaldırın, ya da klasörü veya arşivi ART'ın bulduğu yere geri koyun.\n\nHata kimliği: {{id}}",
       "unreadable": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: ART onu okuyamadı ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da dosyayı açık tutan başka bir programı kapatıp yeniden deneyin.\n\nHata kimliği: {{id}}",
       "archiveUnreadable": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: ART arşivi okuyamadı ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da arşivin yeni bir kopyasını edinin.\n\nHata kimliği: {{id}}",
-      "hardfileNotWhdload": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: {{detail}}. Onu {{partition}} bölümünden kaldırın, ya da bir WHDLoad kurucusunun oluşturduğu bir hardfile seçin.\n\nHata kimliği: {{id}}",
+      "hardfileNotWhdload": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: bu bir sabit disk dosyası ama bir WHDLoad kurucusunun oluşturduğu türden değil ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da bir WHDLoad kurucusunun oluşturduğu bir hardfile seçin.\n\nHata kimliği: {{id}}",
       "notAnAmigaSource": "{{partition}} bölümündeki '{{source}}' kopyalanamayacak: bu bir klasör, bir arşiv, bir WHDLoad hardfile'ı ya da bir disket imajı değil ({{detail}}). Onu {{partition}} bölümünden kaldırın, ya da bu dört türden birini seçin.\n\nHata kimliği: {{id}}",
       "notAFolder": "{{partition}} bölümündeki System ağacı kopyalanamayacak: bir klasör olması gerekiyor, oysa '{{source}}' bir klasör değil. Onu {{partition}} bölümünden kaldırın, ya da System'i ART'ın oluşturduğu klasöre yönlendirin.\n\nHata kimliği: {{id}}"
     },
@@ -3224,7 +3227,11 @@
       "missingUnreadable": "Kart oluşturulamayacak: {{searched}} klasörlerinde hiçbir PFS3 sürücüsü bulunamadı, üstelik ART {{unreadable}} dosyasını okuyamadı. Çalışan bir pfs3aio.lha dosyasını (Aminet disk/misc/pfs3aio) malzeme klasörlerinizden birine koyun, ya da sürücü dosyasını kendiniz seçin.\n\nHata kimliği: {{id}}"
     },
     "whdloadNotFound": "Karttaki {{titles}} WHDLoad başlığı açılamayacak: ART'ın baktığı hiçbir yerde ({{searched}}) WHDLoad bulunamadı. WHDLoad_usr.lha dosyasını (whdload.de adresinden) malzeme klasörlerinizden birine koyun ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
-    "kickstartNotProposed": "'{{name}}' karta yerleştirilemeyecek: geçerli öneri bunu sunmuyor ({{why}}). Kartı yeniden hazırlayın ve yalnızca önerinin sunduklarını kabul edin.\n\nHata kimliği: {{id}}",
+    "kickstartNotProposed": {
+      "notNamed": "'{{name}}' karta yerleştirilemeyecek: bu öneri böyle bir Kickstart adını hiç içermiyor. Kartı yeniden hazırlayın ve yalnızca önerinin sunduğu adları kabul edin.\n\nHata kimliği: {{id}}",
+      "notOffered": "'{{name}}' karta yerleştirilemeyecek: ART bunu size sunmadı, çünkü koleksiyonunuzdaki hiçbir dosya buna uymuyor. O ROM dosyasını malzeme klasörlerinizden birine koyun ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "rtbMissing": "'{{name}}' karta yerleştirilemeyecek: ona ait .RTB dosyası hiçbir malzeme klasöründe bulunamadı. {{package}} paketini bu klasörlerden birine koyun ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}"
+    },
     "cardNamesNeedHst": {
       "noMore": "{{partition}} yazılamayacak: içinde ART'ın kendi PFS3 yazıcısının yazamadığı adlar var ({{paths}}). ART'a Ayarlar'dan bir hst-imager gösterin, ya da bu dosyaları ASCII adlarla yeniden adlandırıp kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
       "withMore": "{{partition}} yazılamayacak: içinde ART'ın kendi PFS3 yazıcısının yazamadığı adlar var ({{paths}} ve {{more}} tane daha). ART'a Ayarlar'dan bir hst-imager gösterin, ya da bu dosyaları ASCII adlarla yeniden adlandırıp kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}"
@@ -3235,7 +3242,8 @@
       "partitionTooLarge": "{{volumeName}} bu karta sığmayacak: {{bytes}} bayta ihtiyaç duyar, bu da tek bir PFS3 bölümünün alabileceğinden fazladır. Kaynaklarını iki bölüme bölün.\n\nHata kimliği: {{id}}",
       "cardTooSmall": "Bu kart System'i ve RDB'yi barındıramayacak: {{cardGb}} GB'lık bir kart bunun için çok küçük. Daha büyük bir kart seçin.\n\nHata kimliği: {{id}}",
       "partitionContentDoesNotFit": "{{volumeName}} kendi ağacını barındıramayacak: ağaç {{neededBlocks}} blok istiyor, {{volumeName}} ise yalnızca {{availableBlocks}} blokluk yer sunuyor. Ağaçtan bir şeyler çıkarın ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}",
-      "systemAdditionsDoNotFit": "System, bu kartın ona eklediği her şeyi barındıramayacak: {{neededBlocks}} blok istiyor ve yalnızca {{availableBlocks}} blokluk yer var — ağacın kendisi bile {{treeBlocks}} blok istiyor. Etkilenen Kickstart'lar: {{kickstarts}}; bu kartın ihtiyaç duymadığını malzeme klasörlerinizden çıkarın ve yeniden hazırlayın.\n\nHata kimliği: {{id}}"
+      "systemAdditionsDoNotFit": "System, bu kartın ona eklediği her şeyi barındıramayacak: {{neededBlocks}} blok istiyor ve yalnızca {{availableBlocks}} blokluk yer var — ağacın kendisi bile {{treeBlocks}} blok istiyor. Etkilenen Kickstart'lar: {{kickstarts}}; bu kartın ihtiyaç duymadığını malzeme klasörlerinizden çıkarın ve yeniden hazırlayın.\n\nHata kimliği: {{id}}",
+      "systemAdditionsDoNotFitWithWhdload": "System, bu kartın ona eklediği her şeyi barındıramayacak: {{neededBlocks}} blok istiyor ve yalnızca {{availableBlocks}} blokluk yer var — ağacın kendisi bile {{treeBlocks}} blok istiyor. Eklenmek istenenler şunlar: WHDLoad ({{whdload}}) ve şu Kickstart'lar: {{kickstarts}}; bu kartın ihtiyaç duymadıklarını malzeme klasörlerinizden çıkarın ve kartı yeniden hazırlayın.\n\nHata kimliği: {{id}}"
     },
     "notEnoughSpace": {
       "image": "'{{place}}' bu kartı alamayacak: orada {{available}} bayt boş yer var, yapım ise {{needed}} bayta ihtiyaç duyuyor. Orada yer açın, ya da kart imajı için başka bir klasör seçip yeniden hazırlayın.\n\nHata kimliği: {{id}}",

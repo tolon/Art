@@ -782,6 +782,10 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // inside the static check. `cardOsRun.test.ts` enumerates every variant
     // each mapper can return and `phrase-keys.test.ts` resolves each one in
     // the catalogue, which is the check this scan cannot make.
-    expect(dynamicCalls).toBe(223);
+    // 223 → 225 (round 4 fix wave): two in `BuildTab.tsx`'s new fallback
+    // list — which step hst-imager wrote (`stepPhrase`) and why ART's own
+    // writer could not (`fallbackPhrase`), both `@/lib/preload` mappers the
+    // manual builder has drawn since ART-120 and the one-button run dropped.
+    expect(dynamicCalls).toBe(225);
   });
 });

@@ -41,7 +41,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::core::archive;
-use crate::core::error::{CoreError, CoreResult};
+use crate::core::error::{CoreError, CoreResult, KickstartNotProposedWhy};
 use crate::core::gameindex::readers::slave::read_slave;
 use crate::core::gameindex::record::KickstartNeed;
 use crate::core::jobs::{cancelled_error, ProgressSink};
@@ -474,12 +474,12 @@ pub fn check_agreed<'a>(
             .find(|item| &item.name == name)
             .ok_or_else(|| CoreError::KickstartNotProposed {
                 name: name.clone(),
-                why: "ART's proposal does not name it".into(),
+                why: KickstartNotProposedWhy::NotNamed,
             })?;
         let Offer::Supplied { by, .. } = &item.offer else {
             return Err(CoreError::KickstartNotProposed {
                 name: name.clone(),
-                why: "ART did not offer it — nothing in the collection matches it".into(),
+                why: KickstartNotProposedWhy::NotOffered,
             });
         };
         recheck_source(name, item.offer.wanted(), by)?;
@@ -490,9 +490,9 @@ pub fn check_agreed<'a>(
             };
             return Err(CoreError::KickstartNotProposed {
                 name: name.clone(),
-                why: format!(
-                    "its .RTB was not found in any material folder — put {package} in one"
-                ),
+                why: KickstartNotProposedWhy::RtbMissing {
+                    package: package.to_string(),
+                },
             });
         }
         validated.push((item, by));

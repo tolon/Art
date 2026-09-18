@@ -200,6 +200,65 @@ impl UnusableSource {
     }
 }
 
+/// Why a Kickstart name the caller agreed to cannot be placed — **typed, not
+/// prose** (round 4 final review, minor: *one English clause is the
+/// sentence*).
+///
+/// `KickstartNotProposed.why` used to be a `String`, and the catalogue
+/// interpolated it: the Turkish sentence read *"… değil (its .RTB was not
+/// found in any material folder — put Aminet util/boot/skick346 in one)"* —
+/// the actionable half, in English, inside the parentheses meant for an
+/// aside. There are exactly three reasons and all three are ART's own, so
+/// each gets its own tag and its own sentence in both catalogues. `package`
+/// is the one value a user acts on.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(
+    tag = "reason",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum KickstartNotProposedWhy {
+    /// The proposal holds no item under this name at all.
+    NotNamed,
+    /// Named, but never offered: nothing in the collection matches it.
+    NotOffered,
+    /// Offered, but its `.RTB` was not found — and this is where to get it.
+    RtbMissing { package: String },
+}
+
+impl KickstartNotProposedWhy {
+    /// The typed parameters the screen builds its own sentence from.
+    fn details(&self) -> Vec<(&'static str, String)> {
+        match self {
+            Self::NotNamed => vec![("reason", "not-named".to_string())],
+            Self::NotOffered => vec![("reason", "not-offered".to_string())],
+            Self::RtbMissing { package } => vec![
+                ("reason", "rtb-missing".to_string()),
+                ("package", package.clone()),
+            ],
+        }
+    }
+}
+
+/// The English clause inside [`CoreError::KickstartNotProposed`]'s sentence —
+/// unchanged from when it was a `String`, because that sentence is what the
+/// operation log keeps.
+impl std::fmt::Display for KickstartNotProposedWhy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotNamed => write!(f, "ART's proposal does not name it"),
+            Self::NotOffered => write!(
+                f,
+                "ART did not offer it — nothing in the collection matches it"
+            ),
+            Self::RtbMissing { package } => write!(
+                f,
+                "its .RTB was not found in any material folder — put {package} in one"
+            ),
+        }
+    }
+}
+
 /// The sentence for a source's [`UnusableSource`] reason, said inside
 /// [`CoreError::CardSourceUnusable`] — kept apart from that variant's other
 /// two fields because it is also what the operation log gets through
@@ -910,7 +969,10 @@ pub enum CoreError {
         "'{name}' cannot be placed: {why}. Prepare the card again and agree only to what the \
          proposal offers."
     )]
-    KickstartNotProposed { name: String, why: String },
+    KickstartNotProposed {
+        name: String,
+        why: KickstartNotProposedWhy,
+    },
 
     /// One of a card partition's sources cannot be used
     /// (`core::cardos::prepare::measure_card`). `why` is the typed reason
@@ -1326,7 +1388,9 @@ impl CoreError {
                 ("searched", searched.join(", ")),
             ],
             Self::KickstartNotProposed { name, why } => {
-                vec![("name", name.clone()), ("why", why.clone())]
+                let mut d = vec![("name", name.clone())];
+                d.extend(why.details());
+                d
             }
             Self::CardSourceUnusable {
                 partition,
@@ -1610,7 +1674,9 @@ mod tests {
             },
             CoreError::KickstartNotProposed {
                 name: "x".into(),
-                why: "x".into(),
+                why: KickstartNotProposedWhy::RtbMissing {
+                    package: "Aminet util/boot/skick346".into(),
+                },
             },
             CoreError::CardSourceUnusable {
                 partition: "x".into(),
@@ -1727,7 +1793,9 @@ mod tests {
             },
             CoreError::KickstartNotProposed {
                 name: "x".into(),
-                why: "x".into(),
+                why: KickstartNotProposedWhy::RtbMissing {
+                    package: "Aminet util/boot/skick346".into(),
+                },
             },
             CoreError::CardSourceUnusable {
                 partition: "x".into(),

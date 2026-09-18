@@ -183,4 +183,24 @@ describe("the job bar", () => {
     expect(screen.getByText("Adding 2 packages to Work.hdf")).toBeTruthy();
     expect(screen.queryByText(/\(s\)/)).toBeNull();
   });
+  /**
+   * **A bar only when there is something to measure** (round 4 final review,
+   * minor). It drew a fixed 25 % sliver for a job whose total is unknown,
+   * which CLAUDE.md names as the same defect as a fake bar: it looks like
+   * progress and carries no information. `CardPhaseRow` has done this right
+   * since the round began; the bar above it had not.
+   */
+  it("draws no bar at all for a job with no total, and one when there is a total", async () => {
+    render(<JobBar />);
+    await act(async () => {});
+
+    await send(running(1, INSTALL));
+    expect(screen.getByText("Installing AmigaOS 3.2 into Tree")).toBeTruthy();
+    expect(screen.queryByTestId("job-bar-progress")).toBeNull();
+    // The honest form of the same information is still there.
+    expect(screen.getByText(/101/)).toBeTruthy();
+
+    await send({ ...running(1, INSTALL), done: 50, total: 200 });
+    expect(screen.getByTestId("job-bar-progress")).toBeTruthy();
+  });
 });

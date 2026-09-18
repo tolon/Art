@@ -115,6 +115,7 @@ import { useCardOsRun } from "@/lib/useCardOsRun";
 import { useCardRunTreeStore } from "@/lib/cardRunTree";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { useRunLock } from "@/lib/runLock";
+import { fallbackPhrase, stepPhrase } from "@/lib/preload";
 import { useSettingsStore } from "@/stores/settingsStore";
 
 /**
@@ -643,9 +644,18 @@ function CardRun({ phases, plan, prepare, build, image }: CardRunProps) {
         </button>
         {run.running && (
           <>
-            <button className="btn btn-sm" data-testid="card-stop" onClick={() => run.stop()}>
-              {t("cardRun.stop")}
-            </button>
+            {/* **No Stop while the run is paused at the agreement** (the
+                review's triage of Task 10's deferred minor). There is no job
+                to cancel there, so Stop did exactly what Give up does — and
+                then printed `cardRun.phase.agree.stopped`, *"you gave this
+                up at the Kickstart step"*, which is the other button's
+                sentence. Two buttons with one behaviour and the wrong words
+                is worse than one button; Give up stays, and it is the truth. */}
+            {!run.awaitingAgreement && (
+              <button className="btn btn-sm" data-testid="card-stop" onClick={() => run.stop()}>
+                {t("cardRun.stop")}
+              </button>
+            )}
             <button className="btn btn-sm" data-testid="card-give-up" onClick={() => run.giveUp()}>
               {t("cardRun.giveUp")}
             </button>
@@ -682,6 +692,10 @@ function CardRun({ phases, plan, prepare, build, image }: CardRunProps) {
           <p className="infobar" data-testid="card-agree-waiting">
             {t("cardRun.agreeWaiting")}
           </p>
+          {/* The component clears its own ticks for each new proposal (round
+              4 final review, minor): a second run in the same mount used to
+              carry the first run's ticks, and `setAgreed([])` on the button
+              clears *this* screen's copy, not the child's state. */}
           <KickstartAgreement proposal={run.proposal} onAgreedChange={setAgreed} />
           <button
             className="btn btn-primary btn-sm"
@@ -705,6 +719,35 @@ function CardRun({ phases, plan, prepare, build, image }: CardRunProps) {
         <p className="infobar warn" data-testid="card-scratch-left" style={{ marginTop: 8 }}>
           {t(scratchLeft.key, scratchLeft.params)}
         </p>
+      )}
+
+      {/* **A fallback is said here too** (round 4 final review, minor). The
+          manual builder has shown which tool wrote which partition and why
+          ART's own writer could not since ART-120; the one-button run dropped
+          `result.steps` entirely, so a card written partly by hst-imager
+          looked exactly like one ART wrote itself. Only the steps that fell
+          back are listed — a step that went the ordinary way is not news. */}
+      {(result?.steps ?? []).some((step) => step.fallback_reason) && (
+        <ul
+          className="muted"
+          data-testid="card-fallbacks"
+          style={{ fontSize: 11, margin: "8px 0 0", paddingLeft: 18 }}
+        >
+          {(result?.steps ?? []).map((step, at) => {
+            if (!step.fallback_reason) return null;
+            const why = fallbackPhrase(step.fallback_reason);
+            const where = stepPhrase(step.step);
+            return (
+              <li key={at}>
+                {t("cardRun.fallback", {
+                  step: t(where.key, where.params),
+                  tool: step.tool,
+                })}{" "}
+                {t(why.key, why.params)}
+              </li>
+            );
+          })}
+        </ul>
       )}
 
       {result?.manifestPath && (
