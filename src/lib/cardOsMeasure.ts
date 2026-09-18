@@ -20,6 +20,7 @@ import type {
   CardImagePlan,
   CardRefusal,
   ClassifiedSource,
+  FoundDriver,
   MeasuredPartition,
   PartitionInput,
   SourceKind,
@@ -248,6 +249,43 @@ export function overflowPhrase(refusal: CardRefusal): Phrase | null {
       // it was about.
       return { key: "cardSection.overflow.other", params: { sentence: refusal.message } };
   }
+}
+
+/**
+ * The PFS3 driver line the design draws — "pfs3aio 19.2 — from
+ * paketler\pfs3aio.lha".
+ *
+ * **Two sentences, because where it came from is two different facts.** A
+ * driver unpacked from an archive names the archive; a loose file names the
+ * file. Saying "from pfs3aio.lha" about a loose `pfs3aio` would be a claim
+ * about its origin that nobody made — the *ask the artefact* rule, in one
+ * line of a row.
+ */
+export function driverPhrase(driver: FoundDriver): Phrase {
+  const version = `${driver.version}.${driver.revision}`;
+  return driver.fromArchive
+    ? { key: "cardSection.driver.fromArchive", params: { version, from: driver.fromArchive } }
+    : { key: "cardSection.driver.loose", params: { version, at: driver.path } };
+}
+
+/** The code `CoreError::Pfs3DriverNotFound` carries. */
+export const DRIVER_NOT_FOUND = "ART-PFS3-DRIVER-NOT-FOUND";
+
+/**
+ * No driver anywhere ART looked — **what to add, and where it looked**, so a
+ * refusal one download fixes does not read like one the user cannot fix. The
+ * archives ART could not read get their own sentence, and only when there
+ * were any: `Pfs3DriverNotFound`'s own rule, kept rather than restated.
+ *
+ * `null` for every other refusal.
+ */
+export function driverMissingPhrase(refusal: CardRefusal): Phrase | null {
+  if (refusal.code !== DRIVER_NOT_FOUND) return null;
+  const searched = refusal.params?.searched ?? "";
+  const unreadable = refusal.params?.unreadable ?? "";
+  return unreadable
+    ? { key: "cardSection.driver.missingUnreadable", params: { searched, unreadable } }
+    : { key: "cardSection.driver.missing", params: { searched } };
 }
 
 /**

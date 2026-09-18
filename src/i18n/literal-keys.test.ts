@@ -750,6 +750,12 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // cannot make. The row's own System/Work caption is deliberately *two*
     // literal calls rather than one over a ternary, so it stays inside
     // the static check.
-    expect(dynamicCalls).toBe(206);
+    // 206 → 208 (the same task's follow-up): the PFS3 driver line and its
+    // refusal, `driverPhrase` and `driverMissingPhrase` from the same module
+    // — one names the driver found and **where it came from**, which is two
+    // different facts for an archive and a loose file, and the other says
+    // what to add and everywhere ART looked. Both are enumerated in
+    // `cardOsMeasure.test.ts` and resolved in `phrase-keys.test.ts`.
+    expect(dynamicCalls).toBe(208);
   });
 });

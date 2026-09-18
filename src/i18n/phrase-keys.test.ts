@@ -167,6 +167,8 @@ import {
   type StepOutcome,
 } from "@/lib/firstboot";
 import {
+  driverMissingPhrase,
+  driverPhrase,
   overflowPhrase,
   partitionContentPhrase,
   sizePhrase,
@@ -306,6 +308,21 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
     for (const why of ["empty", "too-long", "reserved-character"] as const) {
       const phrase = volumeNameProblemPhrase({ ok: false, why, maxBytes: 30 });
       expect(resolvesAtRuntime(phrase!.key), why).toBe(true);
+    }
+
+    // The PFS3 driver line: found in an archive, found loose, and not found
+    // at all — with and without archives ART could not read.
+    for (const fromArchive of ["E:\paketler\pfs3aio.lha", null]) {
+      const phrase = driverPhrase({ path: "E:\pfs3aio", fromArchive, version: 19, revision: 2 });
+      expect(resolvesAtRuntime(phrase.key), String(fromArchive)).toBe(true);
+    }
+    for (const unreadable of ["", "E:\m\broken.lha"]) {
+      const phrase = driverMissingPhrase({
+        code: "ART-PFS3-DRIVER-NOT-FOUND",
+        message: "No PFS3 driver was found.",
+        params: { searched: "E:\m", unreadable },
+      });
+      expect(resolvesAtRuntime(phrase!.key), unreadable).toBe(true);
     }
   });
 

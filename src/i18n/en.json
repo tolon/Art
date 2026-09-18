@@ -2212,7 +2212,29 @@
       "hint": "MB — a floor, never a way past the card's own total."
     },
     "driver": {
-      "found": "PFS3 driver {{version}} — from {{from}}"
+      "fromArchive": "PFS3 driver pfs3aio {{version}} — from {{from}}",
+      "loose": "PFS3 driver pfs3aio {{version}} — the file at {{at}}",
+      "missing": "No PFS3 driver, so no partition can be formatted. Put pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself. ART looked in: {{searched}}.",
+      "missingUnreadable": "No PFS3 driver, so no partition can be formatted. Put pfs3aio.lha (Aminet disk/misc/pfs3aio) in one of your material folders, or choose the driver file yourself. ART looked in: {{searched}}, and could not read: {{unreadable}}."
+    },
+    "image": {
+      "label": "Image file",
+      "none": "No image file chosen.",
+      "chooseTitle": "Where should the card image be written?",
+      "hint": "The .img file ART writes. You flash it to the card yourself, with the imager you already use.",
+      "blocker": "The build cannot start without an image file."
+    },
+    "emu68": {
+      "label": "Emu68 archive",
+      "none": "No Emu68 release chosen.",
+      "chooseTitle": "Choose your Emu68 release archive",
+      "hint": "Your own download from the Emu68 releases page — ART never fetches one. The card builder's choice is offered here; choosing another changes this card only."
+    },
+    "pfs3": {
+      "label": "PFS3 driver (override)",
+      "none": "Found in your material folders.",
+      "chooseTitle": "Choose the PFS3 driver file",
+      "hint": "Only if you want a particular pfs3aio. Left alone, ART uses the one it finds in your material folders and says which below."
     }
   },
   "preload": {

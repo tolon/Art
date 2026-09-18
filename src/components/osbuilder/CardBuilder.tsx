@@ -29,6 +29,7 @@ import {
   SECOND_SYSTEM_DRIVE,
   type ProposedTable,
   type SecondSystem,
+  CARD_BUILDER_ARCHIVE_KEY,
   cardBuild,
   cardPlanBuild,
   cardCheckImage,
@@ -99,8 +100,11 @@ export function CardBuilder() {
   const powerMode = usePowerMode();
 
   // --- what the user chose, remembered ------------------------------------
+  // The key is a constant (`@/lib/cardBuild`) because the one-button card's
+  // own section reads it as its default — one key, two screens, one answer to
+  // which Emu68 this card gets.
   const [archive, setArchive] = useRemembered<string | null>(
-    "cardBuilder.archive",
+    CARD_BUILDER_ARCHIVE_KEY,
     isTextOrNothing,
     null
   );

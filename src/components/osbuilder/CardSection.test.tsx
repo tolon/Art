@@ -32,6 +32,7 @@ const classifyMock = vi.hoisted(() => vi.fn());
 const checkNameMock = vi.hoisted(() => vi.fn());
 const cardRowAtMock = vi.hoisted(() => vi.fn());
 const dialogOpenMock = vi.hoisted(() => vi.fn());
+const dialogSaveMock = vi.hoisted(() => vi.fn());
 const outletContextMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/cardOs", async (importOriginal) => ({
@@ -49,6 +50,7 @@ vi.mock("@/lib/dropTarget", async (importOriginal) => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: dialogOpenMock,
+  save: dialogSaveMock,
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => ({
@@ -136,6 +138,7 @@ beforeEach(() => {
   checkNameMock.mockReset().mockResolvedValue({ ok: true });
   cardRowAtMock.mockReset().mockReturnValue(null);
   dialogOpenMock.mockReset();
+  dialogSaveMock.mockReset();
   outletContextMock.mockReset().mockReturnValue({});
 });
 
@@ -489,6 +492,170 @@ describe("sizes, the total, and an overflow", () => {
       i18n.t("cardSection.needTree")
     );
     expect(measureMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The three rows above the partitions (design § 3's own sketch), added on the
+// controller's ruling after task 8's first commit: the image file the card is
+// written into, the user's Emu68 archive, and the PFS3 driver line.
+// ---------------------------------------------------------------------------
+
+describe("the image file the card is written into", () => {
+  it("says the build cannot start without one, and stops saying it once there is one", async () => {
+    seedCard([
+      { name: "System", sources: [] },
+      { name: "Work", sources: [] },
+    ]);
+    render(<CardSection />);
+    expect((await screen.findByTestId("card-image-blocker")).textContent).toBe(
+      i18n.t("cardSection.image.blocker")
+    );
+
+    dialogSaveMock.mockResolvedValueOnce("E:\\amiga\\Kartlar\\amiga39.img");
+    await userEvent.click(
+      within(screen.getByTestId("card-image-field")).getByRole("button", {
+        name: new RegExp(i18n.t("common.browse"), "i"),
+      })
+    );
+
+    await waitFor(() => {
+      const target = rememberedBag()[`osinstall.cardTarget.${RELEASE}`] as { image: string | null };
+      expect(target.image).toBe("E:\\amiga\\Kartlar\\amiga39.img");
+    });
+    await waitFor(() => expect(screen.queryByTestId("card-image-blocker")).toBeNull());
+    expect(screen.getByTestId("card-image-field").textContent).toContain("amiga39.img");
+  });
+});
+
+describe("the Emu68 archive", () => {
+  /**
+   * **The same value the card builder already remembers.** Asking for it
+   * twice is how two screens come to build two different cards; this reads
+   * that key and never writes it (ART-089: a late read may not overwrite a
+   * key the user touched).
+   */
+  it("shows the one the card builder remembers when the card target has none", async () => {
+    seedRemembered({
+      "buildSession.release": RELEASE,
+      "cardBuilder.archive": "E:\\amiga\\Emu68-pistorm-20260101.zip",
+      [`osinstall.cardTarget.${RELEASE}`]: {
+        sizeGb: 64,
+        image: null,
+        emu68Archive: null,
+        pfs3Driver: null,
+        partitions: [
+          { name: "System", sources: [] },
+          { name: "Work", sources: [] },
+        ],
+      },
+    });
+    render(<CardSection />);
+    expect((await screen.findByTestId("card-emu68-field")).textContent).toContain(
+      "Emu68-pistorm-20260101.zip"
+    );
+  });
+
+  it("stores a chosen archive on the card target and leaves the builder's key alone", async () => {
+    seedRemembered({
+      "buildSession.release": RELEASE,
+      "cardBuilder.archive": "E:\\amiga\\Emu68-old.zip",
+      [`osinstall.cardTarget.${RELEASE}`]: {
+        sizeGb: 64,
+        image: null,
+        emu68Archive: null,
+        pfs3Driver: null,
+        partitions: [
+          { name: "System", sources: [] },
+          { name: "Work", sources: [] },
+        ],
+      },
+    });
+    render(<CardSection />);
+    dialogOpenMock.mockResolvedValueOnce("E:\\amiga\\Emu68-new.zip");
+    await userEvent.click(
+      within(await screen.findByTestId("card-emu68-field")).getByRole("button", {
+        name: new RegExp(i18n.t("common.browse"), "i"),
+      })
+    );
+
+    await waitFor(() => {
+      const target = rememberedBag()[`osinstall.cardTarget.${RELEASE}`] as {
+        emu68Archive: string | null;
+      };
+      expect(target.emu68Archive).toBe("E:\\amiga\\Emu68-new.zip");
+    });
+    expect(rememberedBag()["cardBuilder.archive"]).toBe("E:\\amiga\\Emu68-old.zip");
+  });
+});
+
+describe("the PFS3 driver", () => {
+  it("names the driver the measurement found and where it came from", async () => {
+    seedCard([
+      { name: "System", sources: [] },
+      { name: "Work", sources: [] },
+    ]);
+    render(<CardSection />);
+    await deliver({ measured: measuredCard([["System", 838_860_800]]), refusal: null });
+
+    const line = await screen.findByTestId("card-driver");
+    await waitFor(() => expect(line.textContent).toContain("19.2"));
+    expect(line.textContent).toContain("pfs3aio.lha");
+    expect(screen.queryByTestId("card-driver-missing")).toBeNull();
+  });
+
+  /** A refusal must be actionable: what to add, and everywhere ART looked. */
+  it("says what to add and where it looked when the measurement found none", async () => {
+    seedCard([
+      { name: "System", sources: [] },
+      { name: "Work", sources: [] },
+    ]);
+    render(<CardSection />);
+    await deliver({
+      measured: null,
+      refusal: {
+        code: "ART-PFS3-DRIVER-NOT-FOUND",
+        message: "No PFS3 driver was found.",
+        params: { searched: "E:\\media, E:\\paketler", unreadable: "" },
+      },
+    });
+
+    const missing = await screen.findByTestId("card-driver-missing");
+    expect(missing.textContent).toContain("E:\\paketler");
+    expect(missing.textContent).toContain("pfs3aio");
+    // Not the generic refusal strip: this one has its own sentence.
+    expect(screen.queryByTestId("card-refusal")).toBeNull();
+    expect(screen.queryByTestId("card-driver")).toBeNull();
+  });
+
+  /** § 47: the explicit override is a power-user row on the same screen —
+   *  hidden in beginner mode, never disabled. */
+  it("offers the explicit driver override in power mode only", async () => {
+    seedCard([
+      { name: "System", sources: [] },
+      { name: "Work", sources: [] },
+    ]);
+    render(<CardSection />);
+    await screen.findByTestId("card-row-System");
+    expect(screen.queryByTestId("card-pfs3-field")).toBeNull();
+
+    cleanup();
+    useSettingsStore.setState({
+      loaded: true,
+      settings: {
+        ...useSettingsStore.getState().settings,
+        uxMode: "power",
+      },
+    });
+    render(<CardSection />);
+    const field = await screen.findByTestId("card-pfs3-field");
+    expect(
+      (
+        within(field).getByRole("button", {
+          name: new RegExp(i18n.t("common.browse"), "i"),
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(false);
   });
 });
 

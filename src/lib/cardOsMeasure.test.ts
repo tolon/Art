@@ -17,6 +17,8 @@ import type {
   UnusableSource,
 } from "@/lib/cardOs";
 import {
+  driverMissingPhrase,
+  driverPhrase,
   isFixedPartition,
   measurableInputs,
   overflowPhrase,
@@ -264,6 +266,61 @@ describe("a volume name the core refuses", () => {
     expect(
       volumeNameProblemPhrase({ ok: false, why: "reserved-character", maxBytes: 30 })!.key
     ).toBe("cardSection.nameProblem.reservedCharacter");
+  });
+});
+
+describe("the PFS3 driver line", () => {
+  it("says which driver, and where it came from — an archive or a loose file", () => {
+    const fromArchive = driverPhrase({
+      path: "E:\\stage\\pfs3aio",
+      fromArchive: "E:\\paketler\\pfs3aio.lha",
+      version: 19,
+      revision: 2,
+    });
+    expect(fromArchive.key).toBe("cardSection.driver.fromArchive");
+    expect(fromArchive.params).toMatchObject({
+      version: "19.2",
+      from: "E:\\paketler\\pfs3aio.lha",
+    });
+
+    const loose = driverPhrase({
+      path: "E:\\paketler\\pfs3aio",
+      fromArchive: null,
+      version: 19,
+      revision: 2,
+    });
+    // A different sentence, because "from pfs3aio.lha" about a loose file is
+    // a claim about where it came from that nobody made.
+    expect(loose.key).toBe("cardSection.driver.loose");
+    expect(loose.params).toMatchObject({ version: "19.2", at: "E:\\paketler\\pfs3aio" });
+  });
+
+  /** A refusal a user can fix with one download must not read like one they
+   *  cannot fix: it names what to add **and** everywhere ART already looked. */
+  it("says what to add and where ART looked when no driver was found", () => {
+    const phrase = driverMissingPhrase({
+      code: "ART-PFS3-DRIVER-NOT-FOUND",
+      message: "No PFS3 driver was found.",
+      params: { searched: "E:\\media, E:\\paketler", unreadable: "" },
+    });
+    expect(phrase!.key).toBe("cardSection.driver.missing");
+    expect(phrase!.params).toMatchObject({ searched: "E:\\media, E:\\paketler" });
+  });
+
+  it("names the archives it could not read, when there were any", () => {
+    const phrase = driverMissingPhrase({
+      code: "ART-PFS3-DRIVER-NOT-FOUND",
+      message: "No PFS3 driver was found.",
+      params: { searched: "E:\\media", unreadable: "E:\\media\\broken.lha" },
+    });
+    expect(phrase!.key).toBe("cardSection.driver.missingUnreadable");
+    expect(phrase!.params).toMatchObject({ unreadable: "E:\\media\\broken.lha" });
+  });
+
+  it("is not the sentence for any other refusal", () => {
+    expect(
+      driverMissingPhrase({ code: "ART-CARD-DOES-NOT-FIT", message: "x", params: {} })
+    ).toBeNull();
   });
 });
 

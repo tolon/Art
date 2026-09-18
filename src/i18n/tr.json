@@ -2212,7 +2212,29 @@
       "hint": "MB — bu bir alt sınırdır, kartın kendi toplamını aşmanın yolu değil."
     },
     "driver": {
-      "found": "PFS3 sürücüsü {{version}} — kaynağı: {{from}}"
+      "fromArchive": "PFS3 sürücüsü pfs3aio {{version}} — şu arşivden çıkarıldı: {{from}}",
+      "loose": "PFS3 sürücüsü pfs3aio {{version}} — şu yoldaki dosyanın kendisi: {{at}}",
+      "missing": "PFS3 sürücüsü bulunamadı, bu yüzden hiçbir bölüm biçimlendirilemez. pfs3aio.lha dosyasını (Aminet disk/misc/pfs3aio) malzeme klasörlerinden birine koyun ya da sürücü dosyasını kendiniz seçin. ART şuralara baktı: {{searched}}.",
+      "missingUnreadable": "PFS3 sürücüsü bulunamadı, bu yüzden hiçbir bölüm biçimlendirilemez. pfs3aio.lha dosyasını (Aminet disk/misc/pfs3aio) malzeme klasörlerinden birine koyun ya da sürücü dosyasını kendiniz seçin. ART şuralara baktı: {{searched}}; şunları ise okuyamadı: {{unreadable}}."
+    },
+    "image": {
+      "label": "İmaj dosyası",
+      "none": "Henüz bir imaj dosyası seçilmedi.",
+      "chooseTitle": "Kart imajı nereye yazılsın?",
+      "hint": "ART'ın yazacağı .img dosyası. Karta yazma işini, hâlihazırda kullandığınız imaj aracıyla kendiniz yaparsınız.",
+      "blocker": "Bir imaj dosyası seçilmeden yapım başlayamaz."
+    },
+    "emu68": {
+      "label": "Emu68 arşivi",
+      "none": "Henüz bir Emu68 sürümü seçilmedi.",
+      "chooseTitle": "Kendi Emu68 sürüm arşivinizi seçin",
+      "hint": "Emu68 sürümler sayfasından kendi indirdiğiniz dosya — ART bunu sizin yerinize indirmez. Kart oluşturucuda seçtiğiniz dosya burada da önerilir; başka birini seçmeniz yalnızca bu kartı değiştirir."
+    },
+    "pfs3": {
+      "label": "PFS3 sürücüsü (elle seçim)",
+      "none": "Malzeme klasörlerinizde bulunanı kullanıyor.",
+      "chooseTitle": "PFS3 sürücü dosyasını seçin",
+      "hint": "Yalnızca belirli bir pfs3aio kullanmak istiyorsanız gerekir. Dokunmazsanız ART malzeme klasörlerinizde bulduğunu kullanır ve hangisi olduğunu aşağıda yazar."
     }
   },
   "preload": {

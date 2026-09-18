@@ -605,6 +605,23 @@ export interface AmigaDiskRequest {
 export const SECOND_SYSTEM_DRIVE = "SDH2";
 export const SECOND_SYSTEM_PRIORITY = 0;
 
+/**
+ * Where the user's own Emu68 release archive is remembered.
+ *
+ * **One key, two screens.** `CardBuilder.tsx` has asked for this file since
+ * SD-1; the one-button card's own section (`CardSection.tsx`, round 4 task 8)
+ * asks the same question, and a second key would mean two answers to "which
+ * Emu68 does this card get". The card section *reads* this as its default and
+ * never writes it — what it writes is its own `CardTarget.emu68Archive`, per
+ * release (Q2), because a 3.9 card and a 3.2.2 card may take different
+ * releases while the builder's one-off choice stays what it was (ART-089: a
+ * late read never overwrites a key the user touched).
+ *
+ * It is a constant rather than a literal in two files for the ordinary
+ * reason: a rename in one place would silently make them two keys again.
+ */
+export const CARD_BUILDER_ARCHIVE_KEY = "cardBuilder.archive";
+
 /** What a second AmigaOS asks for, or why it cannot be asked for. */
 export type SecondSystem =
   | { ok: true; firstDiskBytes: number; extraDisks: AmigaDiskRequest[] }

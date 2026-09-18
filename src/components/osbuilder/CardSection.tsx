@@ -23,9 +23,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useOutletContext } from "react-router-dom";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 
 import { CardPartitionRow } from "@/components/osbuilder/CardPartitionRow";
+import { Field } from "@/components/osbuilder/Field";
+import { CARD_BUILDER_ARCHIVE_KEY } from "@/lib/cardBuild";
 import {
   cardOsCheckVolumeName,
   cardOsClassify,
@@ -37,6 +39,8 @@ import {
   type MeasuredCard,
 } from "@/lib/cardOs";
 import {
+  driverMissingPhrase,
+  driverPhrase,
   isFixedPartition,
   measurableInputs,
   overflowPhrase,
@@ -48,6 +52,8 @@ import type { CardPartitionTarget } from "@/lib/cardTarget";
 import { cardRowAt } from "@/lib/dropTarget";
 import { errorPhrase } from "@/lib/errorText";
 import { subscribeSafely } from "@/lib/jobs";
+import { isTextOrNothing } from "@/lib/remembered";
+import { useRemembered } from "@/lib/useRemembered";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { usePowerMode } from "@/lib/uxmode";
 
@@ -72,6 +78,21 @@ export function CardSection() {
     () => session.material.folders.map((folder) => folder.path),
     [session.material.folders]
   );
+
+  /**
+   * **One key, two screens.** `CardBuilder.tsx` has remembered the user's
+   * Emu68 archive since SD-1; this section asks the same question, so it
+   * *reads* that key as its default rather than asking twice. It never
+   * writes it: what this screen stores is the card target's own
+   * `emu68Archive`, per release (Q2), and a late read that wrote back would
+   * be exactly the overwrite ART-089 forbids.
+   */
+  const [builderArchive] = useRemembered<string | null>(
+    CARD_BUILDER_ARCHIVE_KEY,
+    isTextOrNothing,
+    null
+  );
+  const emu68Archive = target.emu68Archive ?? builderArchive;
 
   const [measured, setMeasured] = useState<MeasuredCard | null>(null);
   const [refusal, setRefusal] = useState<CardRefusal | null>(null);
@@ -274,6 +295,38 @@ export function CardSection() {
   }
 
   // -------------------------------------------------------------------
+  // The three rows above the partitions (design § 3's sketch)
+  // -------------------------------------------------------------------
+
+  /** Where the card image is written. `card_os_prepare`'s `image`. */
+  async function chooseImage() {
+    const picked = await save({
+      title: t("cardSection.image.chooseTitle"),
+      defaultPath: "amiga.img",
+      filters: [{ name: "Card image", extensions: ["img"] }],
+    });
+    if (typeof picked === "string") setCardTarget({ ...targetRef.current, image: picked });
+  }
+
+  async function chooseEmu68() {
+    const picked = await open({
+      multiple: false,
+      title: t("cardSection.emu68.chooseTitle"),
+      filters: [{ name: "Emu68 release", extensions: ["zip"] }],
+    });
+    if (typeof picked === "string")
+      setCardTarget({ ...targetRef.current, emu68Archive: picked });
+  }
+
+  async function choosePfs3() {
+    const picked = await open({
+      multiple: false,
+      title: t("cardSection.pfs3.chooseTitle"),
+    });
+    if (typeof picked === "string") setCardTarget({ ...targetRef.current, pfs3Driver: picked });
+  }
+
+  // -------------------------------------------------------------------
   // What the three summary registers say
   // -------------------------------------------------------------------
   // **The one gate every figure on this screen passes through.** A
@@ -285,7 +338,11 @@ export function CardSection() {
   const shown = measuring ? null : measured;
   const plan = shown?.plan ?? null;
   const overflow = refusal ? overflowPhrase(refusal) : null;
-  const otherRefusal = refusal && !overflow ? errorPhrase(refusal) : null;
+  // The missing driver has its own sentence — what to add and where ART
+  // looked — so it never falls through to the generic strip.
+  const driverMissing = refusal && !measuring ? driverMissingPhrase(refusal) : null;
+  const otherRefusal =
+    refusal && !overflow && !driverMissing ? errorPhrase(refusal) : null;
   const total = plan ? totalPhrase(plan) : null;
   const free =
     plan === null
@@ -307,6 +364,61 @@ export function CardSection() {
 
   return (
     <section data-testid="card-section" style={{ marginTop: 12 }}>
+      {/* **Where the card image goes.** The one value `card_os_prepare` is
+          given as its `image`; per release, like everything else on this
+          card. A `save` dialog rather than an `open` one, because the file
+          does not exist yet — and the build refuses to start without it,
+          which the sentence below says here rather than letting it be found
+          when the button does nothing. */}
+      <Field
+        label={t("cardSection.image.label")}
+        value={target.image}
+        empty={t("cardSection.image.none")}
+        onChoose={() => void chooseImage()}
+        choose={t("common.browse")}
+        hint={t("cardSection.image.hint")}
+        testId="card-image-field"
+        describedBy={target.image ? undefined : "card-image-blocker"}
+      />
+      {!target.image && (
+        <p
+          id="card-image-blocker"
+          className="badge badge-warn"
+          style={{ fontSize: 11, margin: "-6px 0 12px", display: "inline-block" }}
+          data-testid="card-image-blocker"
+        >
+          {t("cardSection.image.blocker")}
+        </p>
+      )}
+
+      {/* **The user's own Emu68 release.** ART never downloads one. The card
+          builder has asked for this file since SD-1, so its remembered answer
+          is this row's default — read, never written (ART-089). */}
+      <Field
+        label={t("cardSection.emu68.label")}
+        value={emu68Archive}
+        empty={t("cardSection.emu68.none")}
+        onChoose={() => void chooseEmu68()}
+        choose={t("common.browse")}
+        hint={t("cardSection.emu68.hint")}
+        testId="card-emu68-field"
+      />
+
+      {/* § 47: the explicit driver is a power-user row on the same screen.
+          In beginner mode the line under the partitions says which driver
+          ART found by itself, which is the answer a beginner needs. */}
+      {powerMode && (
+        <Field
+          label={t("cardSection.pfs3.label")}
+          value={target.pfs3Driver}
+          empty={t("cardSection.pfs3.none")}
+          onChoose={() => void choosePfs3()}
+          choose={t("common.browse")}
+          hint={t("cardSection.pfs3.hint")}
+          testId="card-pfs3-field"
+        />
+      )}
+
       <div
         style={{
           display: "flex",
@@ -449,13 +561,17 @@ export function CardSection() {
       )}
 
       {/* The PFS3 driver the measurement found, named with where it came
-          from — the design's own line. */}
+          from — the design's own line. It is not a question: ART finds the
+          driver in the material folders, and the only thing to answer is the
+          power-user override above. */}
       {shown && (
         <p className="faint" style={{ fontSize: 11, margin: "8px 0 0" }} data-testid="card-driver">
-          {t("cardSection.driver.found", {
-            version: `${shown.driver.version}.${shown.driver.revision}`,
-            from: shown.driver.fromArchive ?? shown.driver.path,
-          })}
+          {t(driverPhrase(shown.driver).key, driverPhrase(shown.driver).params)}
+        </p>
+      )}
+      {driverMissing && (
+        <p className="infobar warn" style={{ marginTop: 8 }} data-testid="card-driver-missing">
+          {t(driverMissing.key, driverMissing.params)}
         </p>
       )}
 
