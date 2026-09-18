@@ -768,6 +768,20 @@ describe("literal t(\"…\") calls in src/pages and src/components", () => {
     // enumerates every variant each mapper can return and
     // `phrase-keys.test.ts` resolves each one in the catalogue, which is the
     // check this scan cannot make.
-    expect(dynamicCalls).toBe(212);
+    // 212 → 223 (card round 4, task 10): eleven, all in `BuildTab.tsx`'s new
+    // card mode, all a `Phrase` from `@/lib/cardOsRun` or one it composes —
+    // the row's own outcome (`cardPhasePhrase`), its live count
+    // (`cardCountPhrase`), the sub-phase it is in and the one a stop stopped
+    // in (`cardSubPhasePhrase`, twice), the detail a written phase carries,
+    // the refusal's own sentence (`cardRefusalPhrase`), an install row's
+    // typed reasons (`refusalPhrase`), what to do about it
+    // (`cardNextStepPhrase`), what became of the `.partial`
+    // (`cardPartialPhrase`) and a session folder that could not be removed
+    // (`cardScratchLeftPhrase`). The button's three labels and the four
+    // blockers are deliberately literal `t("cardRun.…")` calls, so they stay
+    // inside the static check. `cardOsRun.test.ts` enumerates every variant
+    // each mapper can return and `phrase-keys.test.ts` resolves each one in
+    // the catalogue, which is the check this scan cannot make.
+    expect(dynamicCalls).toBe(223);
   });
 });

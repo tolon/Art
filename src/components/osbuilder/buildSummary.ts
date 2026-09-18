@@ -223,7 +223,7 @@ export function useBuildSummary({
     firstBootAskPrefs,
   });
 
-  const lines = runSummaryLines({
+  const baseLines = runSummaryLines({
     plan: plan.effectivePlan,
     destinationIsTree,
     destinationChecked,
@@ -246,6 +246,42 @@ export function useBuildSummary({
         }
       : line
   );
+
+  /**
+   * **The first line says what is being built, and in card mode that is a
+   * card** (round 4, task 10; task 7 deliberately left this until the tab
+   * actually ran one).
+   *
+   * `runSummaryLines`'s first line describes a *folder* build — the tree's
+   * files and bytes landing in the destination the user chose, or the tree
+   * already there. In card mode neither is what happens: the tree goes into
+   * ART's own working folder and is removed with it (owner's decision 2), and
+   * what the person is actually getting is an image of a given size with a
+   * given number of partitions. So the folder's line is dropped rather than
+   * reworded — a sentence about a destination that is not this build's is the
+   * screen out-claiming the run — and the card's own line takes its place.
+   * The other three lines (the updates, first boot, what would be replaced)
+   * are true of both and stay as they are.
+   */
+  const cardMode = session.destinationKind === "card-image";
+  const lines: Phrase[] = cardMode
+    ? [
+        {
+          key: "osBuilder.build.summary.card",
+          params: {
+            image: session.cardTarget.image ?? "",
+            gb: session.cardTarget.sizeGb,
+            count: session.cardTarget.partitions.length,
+          },
+        },
+        ...baseLines.filter(
+          (line) =>
+            line.key !== "osBuilder.build.summary.tree" &&
+            line.key !== "osBuilder.build.summary.treeExisting" &&
+            line.key !== "osBuilder.build.summary.checking"
+        ),
+      ]
+    : baseLines;
 
   return {
     release,

@@ -271,6 +271,30 @@ export function isJobCancellation(err: unknown): boolean {
 }
 
 /**
+ * The rejection a **refused** job produces — the fourth ending (card round 4,
+ * Task 1) reaching the one function that waits on a job.
+ *
+ * Its own class rather than a message convention, because a refusal is not a
+ * failure and not a cancellation: its next step is the user's, and the screen
+ * builds that sentence from the `ART-*` code, which a formatted message would
+ * have to be parsed back out of. `message` stays the core's own sentence, so
+ * an `errorText` fallback still says something true.
+ *
+ * Added in Task 10 with {@link awaitJobResult}'s `refused` arm: before it,
+ * `settleFromProgress` knew three job states and a job that ended refused
+ * without emitting its result event left the promise unsettled for ever.
+ */
+export class JobRefused extends Error {
+  constructor(
+    readonly code: string,
+    message: string
+  ) {
+    super(message);
+    this.name = "JobRefused";
+  }
+}
+
+/**
  * Wait for exactly one job to finish, resolving with the value its own
  * result event carries — or rejecting with a readable sentence if the job
  * fails or is cancelled first. `resultEvent` is a Tauri event name whose
@@ -296,7 +320,24 @@ export function isJobCancellation(err: unknown): boolean {
  * `commands/osinstall.rs`'s own module doc comment explains why): this
  * function is the part that hides the job underneath an ordinary promise.
  */
-export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
+/**
+ * Which job a result payload is about.
+ *
+ * Two spellings, because the Rust side has two: the older commands serialise
+ * their result struct as it is written (`job_id`), and everything under
+ * `#[serde(rename_all = "camelCase")]` — the whole card path, `card_os_prepare`
+ * and `card_os_build` among them — sends `jobId`. Filtering on `job_id` alone
+ * read `undefined` for every card event, which matches no job at all: the
+ * promise simply never settled (card round 4, Task 10).
+ */
+function jobIdOf(payload: { job_id: number } | { jobId: number }): number {
+  return "job_id" in payload ? payload.job_id : payload.jobId;
+}
+
+export function awaitJobResult<
+  TPayload extends { job_id: number } | { jobId: number },
+  TValue,
+>(
   resultEvent: string,
   start: () => Promise<number>,
   extract: (payload: TPayload) => TValue
@@ -319,7 +360,9 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
     /** `"finished"` is not itself a rejection or a resolution — the result
      *  event is what carries the actual value, and it is expected to arrive
      *  at essentially the same moment (the Rust side emits it immediately
-     *  before returning `Ok(())`). Only the two failure states settle here. */
+     *  before returning `Ok(())`). Only the three ending states settle here,
+     *  and they settle **apart**: a failure, a cancellation and a refusal are
+     *  three different things to tell somebody. */
     function settleFromProgress(job: JobProgress) {
       if (settled || job.state.state === "running") return;
       if (job.state.state === "failed") {
@@ -330,6 +373,15 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
         settled = true;
         cleanup();
         reject(new Error(JOB_CANCELLED_MESSAGE));
+      } else if (job.state.state === "refused") {
+        // Card round 4, Task 10. `card_os_build` emits its own result event
+        // for every ending including this one, so this arm is the safety net
+        // rather than the ordinary path — but without it a refused job whose
+        // result event never arrived left this promise unsettled for ever,
+        // which is a spinner with nothing behind it.
+        settled = true;
+        cleanup();
+        reject(new JobRefused(job.state.code, job.state.message));
       }
     }
 
@@ -341,7 +393,7 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
             bufferedResults.push(event.payload);
             return;
           }
-          if (event.payload.job_id !== jobId) return;
+          if (jobIdOf(event.payload) !== jobId) return;
           settled = true;
           cleanup();
           resolve(extract(event.payload));
@@ -370,7 +422,7 @@ export function awaitJobResult<TPayload extends { job_id: number }, TValue>(
         // Catch up on whatever arrived in the gap between subscribing and
         // learning the id — the whole reason this is buffered rather than
         // simply filtered from the start.
-        const matchedResult = bufferedResults.find((payload) => payload.job_id === id);
+        const matchedResult = bufferedResults.find((payload) => jobIdOf(payload) === id);
         if (matchedResult) {
           settled = true;
           cleanup();

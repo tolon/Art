@@ -46,6 +46,8 @@ import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 import { useBuildSummary } from "@/components/osbuilder/buildSummary";
+import { HealthPanel } from "@/components/osbuilder/HealthPanel";
+import { KickstartAgreement } from "@/components/osbuilder/KickstartAgreement";
 import {
   isFirstBootWritten,
   phaseDetailPhrase,
@@ -55,7 +57,42 @@ import {
   type PhaseReport,
 } from "@/lib/buildRun";
 import { stepPath } from "@/lib/buildSteps";
+import { CARD_BUILDER_ARCHIVE_KEY } from "@/lib/cardBuild";
+import type { CardOsBuildRequest, CardOsPrepareRequest } from "@/lib/cardOs";
+import { measurableInputs } from "@/lib/cardOsMeasure";
+import {
+  cardBarFraction,
+  cardCountPhrase,
+  cardNextStepPhrase,
+  cardPartialPhrase,
+  cardPhasePhrase,
+  cardPhaseTone,
+  cardRefusalPhrase,
+  cardScratchLeftPhrase,
+  cardSequence,
+  cardSubPhasePhrase,
+  type CardPhase,
+  type CardPhaseReport,
+} from "@/lib/cardOsRun";
+import { firstBootAsksPrefs } from "@/lib/buildSession";
 import { fraction } from "@/lib/jobs";
+import {
+  DEFAULT_EMU68_OPTIONS,
+  DEFAULT_FIRMWARE_CONFIG,
+  DEFAULT_HARDWARE,
+  type Emu68Line,
+  type Emu68Options,
+  type FirmwareConfig,
+  type PistormHardware,
+} from "@/lib/pistorm";
+import {
+  EMU68_OPTION_SPEC,
+  FIRMWARE_SPEC,
+  HARDWARE_SPEC,
+  isEmu68Line,
+} from "@/lib/pistormOptions";
+import { isText, isTextOrNothing } from "@/lib/remembered";
+import { useRemembered, useRememberedShape } from "@/lib/useRemembered";
 import {
   isInstallRelease,
   mediaEvidence,
@@ -66,6 +103,7 @@ import {
   refusalPhrase,
   wrongMediaFolder,
   type ApplyOutcome,
+  type InstallPlan,
   type InstallRelease,
   type MediaScanResult,
   type ReleaseEvidence,
@@ -73,6 +111,7 @@ import {
 } from "@/lib/osinstall";
 import type { Phrase } from "@/lib/phrase";
 import { useBuildRun } from "@/lib/useBuildRun";
+import { useCardOsRun } from "@/lib/useCardOsRun";
 import { useBuildSession } from "@/lib/useBuildSession";
 import { useRunLock } from "@/lib/runLock";
 
@@ -396,6 +435,294 @@ function PhaseRow({
   );
 }
 
+/**
+ * One row of the card's run — what happened, how far it has got, and what to
+ * do about it.
+ *
+ * Every sentence here is a `Phrase` from `cardOsRun.ts`, put through the
+ * translator at the point it is drawn: the four endings are four keys, and
+ * **a bar is drawn only when `cardBarFraction` allows one** (CLAUDE.md's rule,
+ * decided there rather than restated here).
+ */
+function CardPhaseRow({ report, image }: { report: CardPhaseReport; image: string | null }) {
+  const { t } = useTranslation();
+  const { phase, ending } = report;
+  const outcome = cardPhasePhrase(phase.kind, ending);
+  const count = cardCountPhrase(ending);
+  const fraction = cardBarFraction(ending);
+  const next = cardNextStepPhrase(ending, image);
+  const detail = ending.state === "succeeded" ? ending.detail : undefined;
+  const refusal =
+    ending.state === "refused" || ending.state === "failed"
+      ? cardRefusalPhrase(ending.refusal)
+      : null;
+  // The core's own name for what it is doing right now, from the phase
+  // event — and where a stop stopped, from the ending itself.
+  const now = ending.state === "running" && report.now ? cardSubPhasePhrase(report.now) : null;
+  const stoppedIn =
+    ending.state === "stopped" && ending.phase ? cardSubPhasePhrase(ending.phase) : null;
+
+  return (
+    <div
+      data-testid="card-phase-row"
+      style={{ padding: "6px 0", borderTop: "1px solid var(--border)" }}
+    >
+      <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+        <span
+          className={TONE_CLASS[cardPhaseTone(ending)]}
+          style={{ fontSize: 12, display: "inline-block" }}
+        >
+          {t(outcome.key, outcome.params)}
+        </span>
+        <span className="faint" style={{ fontSize: 11, wordBreak: "break-all" }}>
+          {phase.name}
+        </span>
+        {now && (
+          <span className="faint" data-testid="card-phase-now" style={{ fontSize: 11 }}>
+            {t(now.key, now.params)}
+          </span>
+        )}
+        {stoppedIn && (
+          <span className="faint" data-testid="card-stopped-phase" style={{ fontSize: 11 }}>
+            {t(stoppedIn.key, stoppedIn.params)}
+          </span>
+        )}
+      </div>
+
+      {count && (
+        <div style={{ marginTop: 4 }}>
+          <span className="faint" data-testid="card-phase-count" style={{ fontSize: 11 }}>
+            {t(count.key, count.params)}
+          </span>
+          {fraction !== null && (
+            <div
+              aria-hidden
+              data-testid="card-phase-bar"
+              style={{
+                height: 4,
+                marginTop: 4,
+                borderRadius: 2,
+                background: "var(--border)",
+                overflow: "hidden",
+                maxWidth: 420,
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${fraction * 100}%`,
+                  background: "var(--accent)",
+                  transition: "width 120ms linear",
+                }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {detail && (
+        <p
+          className="muted"
+          data-testid="card-phase-detail"
+          style={{ fontSize: 11, margin: "4px 0 0", wordBreak: "break-all" }}
+        >
+          {t(detail.key, detail.params)}
+        </p>
+      )}
+
+      {/* The refusal itself, under the row. "Fix what the refusal names" with
+          no refusal on screen names nothing. */}
+      {refusal && (
+        <p
+          className="muted"
+          data-testid="card-refusal-sentence"
+          style={{ fontSize: 11, margin: "4px 0 0", whiteSpace: "pre-line" }}
+        >
+          {t(refusal.key, refusal.params)}
+        </p>
+      )}
+      {/* An install row's refusals are typed and the list is the actionable
+          half — the same sentences tab 4's folder run draws. */}
+      {report.refusals && report.refusals.length > 0 && (
+        <ul className="muted" style={{ fontSize: 11, margin: "4px 0 0", paddingLeft: 20 }}>
+          {report.refusals.map((reason, at) => {
+            const phrase = refusalPhrase(reason);
+            return (
+              <li key={at} data-testid="card-phase-refusal">
+                {t(phrase.key, phrase.params)}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {next && (
+        <p
+          className="muted"
+          data-testid="card-phase-next"
+          style={{ fontSize: 11, margin: "4px 0 0" }}
+        >
+          {t(next.key, next.params)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export interface CardRunProps {
+  phases: CardPhase[];
+  plan: InstallPlan | null;
+  prepare: Omit<CardOsPrepareRequest, "session">;
+  build: Omit<CardOsBuildRequest, "session" | "agreedKickstarts">;
+  image: string | null;
+}
+
+/**
+ * The card's own run on tab 4: one button, its rows, the agreement in the
+ * middle, and one report.
+ *
+ * **Mounted only in card mode**, so `useCardOsRun` — and the session it can
+ * open — does not exist at all for a folder build (Q9's blast radius).
+ *
+ * The session's tree goes into `session.tree` while the session lives and is
+ * taken back when it closes: that is how the Machine tab's card section and
+ * this run agree about which tree is being measured (task 8's carry). Nothing
+ * writes `osinstall.destination` — R2.
+ */
+function CardRun({ phases, plan, prepare, build, image }: CardRunProps) {
+  const { t } = useTranslation();
+  const { setTree } = useBuildSession();
+  const [confirmed, setConfirmed] = useState(false);
+  const [agreed, setAgreed] = useState<string[]>([]);
+
+  const run = useCardOsRun({
+    onSessionTree: (root) => setTree({ root, builtHere: root !== null }),
+  });
+
+  // The lane's strip goes dead while this runs — the same two effects tab 4's
+  // folder run uses, and for the same reason: the sequencer lives here, so
+  // leaving the tab mid-run would drop the rest of it with no sentence
+  // anywhere.
+  const { setRunning } = useRunLock();
+  useEffect(() => {
+    setRunning(run.running);
+  }, [run.running, setRunning]);
+  useEffect(() => () => setRunning(false), [setRunning]);
+
+  const result = run.result;
+  const partial = result ? cardPartialPhrase(result.partial) : null;
+  const scratchLeft = cardScratchLeftPhrase(run.scratchLeft);
+
+  return (
+    <>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, marginBottom: 10 }}>
+        <input
+          type="checkbox"
+          data-testid="build-confirm"
+          checked={confirmed}
+          onChange={(e) => setConfirmed(e.target.checked)}
+        />
+        {t("cardRun.confirm")}
+      </label>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <button
+          className="btn btn-primary"
+          data-testid="card-run"
+          disabled={!confirmed || run.running}
+          onClick={() => {
+            setAgreed([]);
+            run.start({ phases, plan, prepare, build });
+          }}
+        >
+          {t(run.running ? "cardRun.running" : run.succeeded ? "cardRun.runAgain" : "cardRun.run")}
+        </button>
+        {run.running && (
+          <>
+            <button className="btn btn-sm" data-testid="card-stop" onClick={() => run.stop()}>
+              {t("cardRun.stop")}
+            </button>
+            <button className="btn btn-sm" data-testid="card-give-up" onClick={() => run.giveUp()}>
+              {t("cardRun.giveUp")}
+            </button>
+            <span className="faint" style={{ fontSize: 11 }}>
+              {t("cardRun.giveUpHint")}
+            </span>
+          </>
+        )}
+      </div>
+
+      {run.openFailure && (
+        <p
+          className="badge badge-err"
+          data-testid="card-open-failed"
+          style={{ display: "block", padding: "6px 10px", fontSize: 12, marginTop: 10 }}
+        >
+          {t("cardRun.openFailed", { message: run.openFailure.message })}
+        </p>
+      )}
+
+      {run.reports.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          {run.reports.map((report) => (
+            <CardPhaseRow key={report.phase.id} report={report} image={image} />
+          ))}
+        </div>
+      )}
+
+      {/* The agreement, between prepare and build (Q8). Nothing is ticked by
+          ART, and the build does not start until the user presses Continue —
+          ticking nothing is an answer too. */}
+      {run.awaitingAgreement && run.proposal && (
+        <div style={{ marginTop: 12 }}>
+          <p className="infobar" data-testid="card-agree-waiting">
+            {t("cardRun.agreeWaiting")}
+          </p>
+          <KickstartAgreement proposal={run.proposal} onAgreedChange={setAgreed} />
+          <button
+            className="btn btn-primary btn-sm"
+            data-testid="card-agree-continue"
+            style={{ marginTop: 8 }}
+            onClick={() => run.agree(agreed)}
+          >
+            {t("cardRun.agreeContinue")}
+          </button>
+        </div>
+      )}
+
+      {/* What became of the half-written image — said on every ending, never
+          only on the good one. */}
+      {partial && (
+        <p className="muted" data-testid="card-partial" style={{ fontSize: 11, marginTop: 10 }}>
+          {t(partial.key, partial.params)}
+        </p>
+      )}
+      {scratchLeft && (
+        <p className="infobar warn" data-testid="card-scratch-left" style={{ marginTop: 8 }}>
+          {t(scratchLeft.key, scratchLeft.params)}
+        </p>
+      )}
+
+      {result?.manifestPath && (
+        <p
+          className="muted"
+          data-testid="card-manifest"
+          style={{ fontSize: 11, marginTop: 8, wordBreak: "break-all" }}
+        >
+          {t("cardRun.manifest", { path: result.manifestPath })}
+        </p>
+      )}
+
+      {/* The card's own checklist, the one `CardBuilder` draws — lifted into
+          its own file in this task so the two cannot drift. */}
+      {result?.health && (
+        <div data-testid="card-health">
+          <HealthPanel report={result.health} />
+        </div>
+      )}
+    </>
+  );
+}
+
 export function BuildTab() {
   const { t } = useTranslation();
   const { session, setTree, setFirstBoot, setKind, setRelease } = useBuildSession();
@@ -462,6 +789,85 @@ export function BuildTab() {
 
   const treePhaseNeeded = phases.some((phase) => phase.kind === "tree");
 
+  // -------------------------------------------------------------------
+  // Card mode (round 4, task 10): the same tab, the card's own run
+  // -------------------------------------------------------------------
+  const cardMode = session.destinationKind === "card-image";
+  const cardTarget = session.cardTarget;
+  const cardImage = cardTarget.image;
+
+  /** The Emu68 release the card gets. **Read, never written** — the key is
+   *  `CardBuilder.tsx`'s and this screen only falls back to it when the card
+   *  target names none (ART-089). */
+  const [builderArchive] = useRemembered<string | null>(
+    CARD_BUILDER_ARCHIVE_KEY,
+    isTextOrNothing,
+    null
+  );
+  const [cardLabel] = useRemembered("cardBuilder.label", isText, "ART CARD");
+  const [hardware] = useRememberedShape<PistormHardware>(
+    "pistorm.hardware",
+    HARDWARE_SPEC,
+    DEFAULT_HARDWARE
+  );
+  const [firmware] = useRememberedShape<FirmwareConfig>(
+    "pistorm.firmware",
+    FIRMWARE_SPEC,
+    DEFAULT_FIRMWARE_CONFIG
+  );
+  const [emu68Options] = useRememberedShape<Emu68Options>(
+    "pistorm.options",
+    EMU68_OPTION_SPEC,
+    DEFAULT_EMU68_OPTIONS
+  );
+  const [emu68Line] = useRemembered<Emu68Line>("pistorm.line", isEmu68Line, "stable");
+
+  const cardPhases: CardPhase[] = useMemo(
+    () =>
+      cardSequence({
+        release: summary.release,
+        updates: ticked.rows,
+        firstBootWanted: summary.firstBootWanted,
+        firstBootAskPrefs: firstBootAsksPrefs(session.firstboot.askPrefs),
+        image: cardImage ?? "",
+      }),
+    [summary.release, ticked.rows, summary.firstBootWanted, session.firstboot.askPrefs, cardImage]
+  );
+
+  const cardPrepare: Omit<CardOsPrepareRequest, "session"> = useMemo(
+    () => ({
+      cardGb: cardTarget.sizeGb,
+      image: cardImage ?? "",
+      partitions: measurableInputs(cardTarget.partitions),
+      material: session.material.folders.map((folder) => folder.path),
+      ...(cardTarget.pfs3Driver ? { pfs3Driver: cardTarget.pfs3Driver } : {}),
+      ...(session.rom.path ? { kickstart: session.rom.path } : {}),
+    }),
+    [cardTarget, cardImage, session.material.folders, session.rom.path]
+  );
+
+  const cardBuildRequest: Omit<CardOsBuildRequest, "session" | "agreedKickstarts"> = useMemo(
+    () => ({
+      archive: cardTarget.emu68Archive ?? builderArchive ?? "",
+      kickstart: session.rom.path,
+      label: cardLabel,
+      hardware,
+      line: emu68Line,
+      firmware,
+      options: emu68Options,
+    }),
+    [
+      cardTarget.emu68Archive,
+      builderArchive,
+      session.rom.path,
+      cardLabel,
+      hardware,
+      emu68Line,
+      firmware,
+      emu68Options,
+    ]
+  );
+
   /**
    * **A plan that is still being computed is not a plan nobody asked for**
    * (review I5).
@@ -507,7 +913,42 @@ export function BuildTab() {
    * holding a line it is not — so the ternary went and the rule is stated
    * once, here, where the mutation does fall.
    */
-  const gate: Phrase | null = !summary.destinationChecked
+  /**
+   * What stands in the card's Build button's place.
+   *
+   * The media half of `osinstallBlocker` still applies — the card's system
+   * tree is `osinstall_apply`'s, and a folder with no install media in it
+   * cannot build one — but its **destination** arms do not: in card mode the
+   * destination is the card image, and whether something is already sitting
+   * where the image goes is `card_os_prepare`'s own refusal
+   * (`refuse_partial_destination`), asked with the real path at the real
+   * moment. So the image is passed as the destination and `destinationTaken`
+   * is false, and the image's own absence is checked first, where it can be
+   * said in one sentence naming where to go and fix it.
+   */
+  const cardBlocker = osinstallBlocker({
+    mediaFolder: plannedFolderPaths.length > 0 ? plannedFolderPaths[0] : null,
+    destination: cardImage,
+    destinationTaken: false,
+    plan: effectivePlanResult,
+    found: evidence.found,
+    releaseHolding: evidence.releaseHolding,
+    mediaFacts: evidence.facts,
+  });
+  const cardGate: Phrase | null = !cardImage
+    ? { key: "cardRun.blocked.noImage" }
+    : summary.ticked.loading
+      ? { key: "osBuilder.build.summary.updatesChecking" }
+      : ticked.unresolved.length > 0
+        ? {
+            key: "osBuilder.build.blocked.unresolved",
+            params: { names: ticked.unresolved.map((row) => row.name).join(", ") },
+          }
+        : cardBlocker?.key === "osinstall.blocked.notPlanned" && planning
+          ? { key: "osinstall.blocked.planning" }
+          : cardBlocker;
+
+  const folderGate: Phrase | null = !summary.destinationChecked
     ? // **Nothing is offered over a guess** (fix round 1, M3). Which
       // sequence this build runs — with a tree phase or without one — is
       // decided by a round trip that has not landed, and a button pressed
@@ -536,6 +977,8 @@ export function BuildTab() {
       : phases.length === 0
         ? { key: "osBuilder.build.blocked.nothingToRun" }
         : null;
+
+  const gate: Phrase | null = cardMode ? cardGate : folderGate;
 
   const [confirmed, setConfirmed] = useState(false);
   // A confirmation describes the plan that was on screen when it was given;
@@ -667,6 +1110,16 @@ export function BuildTab() {
             </button>
           )}
         </>
+      ) : cardMode ? (
+        /* **The card's own run, mounted only in card mode.** The session it
+           can open does not exist at all for a folder build (Q9). */
+        <CardRun
+          phases={cardPhases}
+          plan={effectivePlan}
+          prepare={cardPrepare}
+          build={cardBuildRequest}
+          image={cardImage}
+        />
       ) : (
         <>
           <label
@@ -723,7 +1176,7 @@ export function BuildTab() {
         </>
       )}
 
-      {run.reports.length > 0 && (
+      {!cardMode && run.reports.length > 0 && (
         <div style={{ marginTop: 12 }}>
           {run.reports.map((report) => (
             <PhaseRow
@@ -736,7 +1189,7 @@ export function BuildTab() {
         </div>
       )}
 
-      {run.succeeded && destination && (
+      {!cardMode && run.succeeded && destination && (
         <p
           className="badge badge-ok"
           data-testid="build-handoff"

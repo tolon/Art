@@ -184,6 +184,18 @@ import {
   summaryPhrase,
   titlesPhrase,
 } from "@/lib/cardOsKickstarts";
+import {
+  cardCountPhrase,
+  cardNextStepPhrase,
+  cardPartialPhrase,
+  cardPhasePhrase,
+  cardRefusalPhrase,
+  cardScratchLeftPhrase,
+  cardSubPhasePhrase,
+  type CardPhaseEnding,
+  type CardPhaseKind,
+} from "@/lib/cardOsRun";
+import type { CardOsPhaseName, PartialRemoval } from "@/lib/cardOs";
 import type { ProposedKickstart, RtbSource } from "@/lib/cardOs";
 import type { KickstartOffer } from "@/lib/gameindex";
 
@@ -332,6 +344,89 @@ describe("Phrase keys returned by the discriminated-union mappers", () => {
       });
       expect(resolvesAtRuntime(phrase!.key), unreadable).toBe(true);
     }
+  });
+
+  it("cardOsRun: every (kind, ending) pair, next step, count and fact resolves", () => {
+    const refusal = {
+      code: "ART-CARD-DOES-NOT-FIT",
+      message: "the card does not fit",
+      params: { kind: "does-not-fit" },
+    };
+    const kinds: CardPhaseKind[] = [
+      "tree",
+      "package",
+      "firstboot",
+      "prepare",
+      "agree",
+      "build",
+    ];
+    const endings: CardPhaseEnding[] = [
+      { state: "pending" },
+      { state: "running", done: 3, total: null },
+      { state: "succeeded" },
+      { state: "refused", refusal },
+      { state: "failed", refusal },
+      { state: "stopped", phase: "partitions" },
+      { state: "stopped", phase: null },
+      { state: "not-attempted" },
+    ];
+    for (const kind of kinds) {
+      for (const ending of endings) {
+        const phrase = cardPhasePhrase(kind, ending);
+        expect(resolvesAtRuntime(phrase.key), `${kind}/${ending.state}`).toBe(true);
+      }
+      // Two different kinds never share a terminal key: a build refused and a
+      // tree refused are two different things to tell somebody.
+      expect(cardPhasePhrase(kind, { state: "succeeded" }).key).toContain(kind);
+    }
+
+    for (const ending of endings) {
+      const next = cardNextStepPhrase(ending, "E:\\amiga\\kart.img");
+      if (next) expect(resolvesAtRuntime(next.key), ending.state).toBe(true);
+      const nameless = cardNextStepPhrase(ending, null);
+      if (nameless) expect(resolvesAtRuntime(nameless.key), ending.state).toBe(true);
+      const count = cardCountPhrase(ending);
+      if (count) expect(resolvesAtRuntime(count.key), ending.state).toBe(true);
+    }
+    const withTotal = cardCountPhrase({ state: "running", done: 3, total: 9 });
+    expect(resolvesAtRuntime(withTotal!.key)).toBe(true);
+
+    const subs: CardOsPhaseName[] = ["prepare", "whdload", "card", "partitions", "check"];
+    for (const sub of subs) expect(resolvesAtRuntime(cardSubPhasePhrase(sub).key), sub).toBe(true);
+
+    const partials: PartialRemoval[] = [
+      { outcome: "not-created" },
+      { outcome: "removed", path: "E:\\amiga\\kart.img.partial" },
+      { outcome: "already-gone", path: "E:\\amiga\\kart.img.partial" },
+      { outcome: "not-removed", path: "E:\\amiga\\kart.img.partial", why: "in use" },
+    ];
+    for (const partial of partials) {
+      expect(resolvesAtRuntime(cardPartialPhrase(partial).key), partial.outcome).toBe(true);
+    }
+
+    const left = cardScratchLeftPhrase({ path: "E:\\tmp\\card-1", why: "in use" });
+    expect(resolvesAtRuntime(left!.key)).toBe(true);
+    expect(cardScratchLeftPhrase(null)).toBeNull();
+
+    // A card code the recogniser knows, one it does not, and ART's own
+    // codeless refusal — none of which may render as a raw key.
+    const refusals: { code: string; message: string; params: Record<string, string> }[] = [
+      refusal,
+      {
+        code: "ART-CARD-SOURCE-UNUSABLE",
+        message: "x",
+        params: { source: "a", partition: "Games" },
+      },
+      { code: "", message: "something Rust said", params: {} },
+    ];
+    for (const one of refusals) {
+      const phrase = cardRefusalPhrase(one);
+      expect(phrase, one.code).not.toBeNull();
+      expect(resolvesAtRuntime(phrase!.key), one.code).toBe(true);
+    }
+    // An install phase's refusal has no sentence of its own here: the typed
+    // reasons beside it are what the row renders.
+    expect(cardRefusalPhrase({ code: "ART-INSTALL-REFUSED", message: "", params: {} })).toBeNull();
   });
 
   it("cardOsKickstarts: every offer, RTB source and summary resolves", () => {

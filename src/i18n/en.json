@@ -808,7 +808,9 @@
         "replaces": "Would replace {{replaced}} files ({{fresh}} new and {{unchanged}} identical among the release's parts)",
         "replacesUpdates": "The updates would replace {{replaced}} files already in the tree",
         "replacesPending": "Not previewed yet",
-        "checking": "Checking the destination…"
+        "checking": "Checking the destination…",
+        "card_one": "A {{gb}} GB card image at {{image}}, with {{count}} partition — its system tree is built in ART's own working folder and removed with it",
+        "card_other": "A {{gb}} GB card image at {{image}}, with {{count}} partitions — its system tree is built in ART's own working folder and removed with it"
       },
       "unresolved": "{{name}}: more than one file carries it. Use one of them on the Amiga files tab (the readout's row offers each); it will not be written until you do.",
       "navigationLocked": "A build is running — Stop it before leaving this tab.",
@@ -2274,6 +2276,96 @@
       "none": "No title on this card asks for a Kickstart image.",
       "line": "{{agreed}} of {{total}} Kickstart image(s) will be placed. The rest are left out — a title that needs one it does not get will not run under WHDLoad."
     }
+  },
+  "cardRun": {
+    "confirm": "I have read what will be built, and the card image may be written.",
+    "run": "Build the card",
+    "runAgain": "Build the card again",
+    "running": "Building…",
+    "stop": "Stop",
+    "giveUp": "Give this up",
+    "giveUpHint": "The working folder ART opened for this card is removed with it.",
+    "blocked": {
+      "noImage": "Choose where the card image goes, on the Machine tab, before this can be built."
+    },
+    "phase": {
+      "pending": "waiting",
+      "running": "running",
+      "tree": {
+        "succeeded": "System tree built",
+        "refused": "The system tree was refused",
+        "failed": "The system tree could not be built",
+        "stopped": "You stopped the system tree",
+        "notAttempted": "System tree — not attempted"
+      },
+      "package": {
+        "succeeded": "Update added",
+        "refused": "The update was refused",
+        "failed": "The update could not be added",
+        "stopped": "You stopped the update",
+        "notAttempted": "Update — not attempted"
+      },
+      "firstboot": {
+        "succeeded": "First-boot setup written",
+        "refused": "The first-boot setup was refused",
+        "failed": "The first-boot setup could not be written",
+        "stopped": "You stopped the first-boot setup",
+        "notAttempted": "First-boot setup — not attempted"
+      },
+      "prepare": {
+        "succeeded": "Card prepared",
+        "refused": "Preparing the card was refused ({{code}})",
+        "failed": "Preparing the card failed ({{code}})",
+        "stopped": "You stopped the preparation",
+        "notAttempted": "Preparation — not attempted"
+      },
+      "agree": {
+        "succeeded": "Kickstart images agreed",
+        "refused": "The Kickstart step was refused ({{code}})",
+        "failed": "The Kickstart step failed ({{code}})",
+        "stopped": "You gave this up at the Kickstart step",
+        "notAttempted": "Kickstart step — not attempted"
+      },
+      "build": {
+        "succeeded": "Card image written",
+        "refused": "The card was refused ({{code}}) — nothing of the image was written",
+        "failed": "The card image failed ({{code}})",
+        "stopped": "You stopped the card image",
+        "notAttempted": "Card image — not attempted"
+      }
+    },
+    "next": {
+      "refused": "Fix what the refusal names, then press Build again. Nothing of the card image was written.",
+      "failed": "The card image was being written at {{image}}; nothing else on your disks was touched. What became of its .partial file is said below.",
+      "failedUnknown": "ART did not get as far as naming a card image, and nothing else on your disks was touched.",
+      "stopped": "You stopped this. The card image at {{image}} was not finished; what became of its .partial file is said below.",
+      "stoppedUnknown": "You stopped this before ART had named a card image."
+    },
+    "count": {
+      "soFar": "{{done}} so far",
+      "of": "{{done}} / {{total}}"
+    },
+    "sub": {
+      "prepare": "Staging what each partition holds",
+      "whdload": "WHDLoad",
+      "card": "Card image",
+      "partitions": "Partitions",
+      "check": "Checking the finished card"
+    },
+    "partial": {
+      "notCreated": "No half-written .partial file was created.",
+      "removed": "The half-written {{path}} was removed.",
+      "alreadyGone": "The half-written {{path}} was already gone when ART went to remove it.",
+      "notRemoved": "{{path}} could NOT be removed ({{why}}) — it is still on your disk."
+    },
+    "scratchLeft": "ART's own working folder {{path}} could not be removed ({{why}}). Nothing of yours is in it; remove it by hand when you can.",
+    "openFailed": "ART could not open a working folder for this card, so nothing was started: {{message}}",
+    "detail": {
+      "written": "{{files}} files, {{bytes}}"
+    },
+    "manifest": "Manifest written beside the image: {{path}}",
+    "agreeWaiting": "Waiting for you: tick the Kickstart images that may be placed, then press Continue. Ticking none is allowed.",
+    "agreeContinue": "Continue with these Kickstart images"
   },
   "preload": {
     "heading": "Prepare the card's Amiga volumes",

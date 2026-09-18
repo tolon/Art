@@ -808,7 +808,9 @@
         "replaces": "{{replaced}} dosyanın yerine geçer (sistemin parçalarında {{fresh}} yeni, {{unchanged}} aynı)",
         "replacesUpdates": "Güncellemeler ağaçtaki {{replaced}} dosyanın yerine geçer",
         "replacesPending": "Henüz önizlenmedi",
-        "checking": "Hedef denetleniyor…"
+        "checking": "Hedef denetleniyor…",
+        "card_one": "{{image}} yolunda {{gb}} GB'lık bir kart imajı, {{count}} bölümlü — sistem ağacı ART'ın kendi çalışma klasöründe kurulur ve onunla birlikte kaldırılır",
+        "card_other": "{{image}} yolunda {{gb}} GB'lık bir kart imajı, {{count}} bölümlü — sistem ağacı ART'ın kendi çalışma klasöründe kurulur ve onunla birlikte kaldırılır"
       },
       "unresolved": "{{name}}: birden fazla dosya taşıyor. Amiga dosyaları sekmesinde birini kullanın (okuma satırı her birini sunar); seçene kadar yazılmaz.",
       "navigationLocked": "Derleme sürüyor — sekmeden ayrılmadan önce Durdur'a basın.",
@@ -2274,6 +2276,96 @@
       "none": "Bu karttaki hiçbir oyun bir Kickstart imajı istemiyor.",
       "line": "{{total}} Kickstart imajından {{agreed}} tanesi karta yerleştirilecek. Geri kalanlar dışarıda bırakılıyor — kendisine gereken imajı alamayan bir oyun WHDLoad altında çalışmayacak."
     }
+  },
+  "cardRun": {
+    "confirm": "Ne oluşturulacağını okudum; kart imajı yazılabilir.",
+    "run": "Kartı oluştur",
+    "runAgain": "Kartı yeniden oluştur",
+    "running": "Oluşturuluyor…",
+    "stop": "Durdur",
+    "giveUp": "Bundan vazgeç",
+    "giveUpHint": "ART'ın bu kart için açtığı çalışma klasörü de birlikte kaldırılır.",
+    "blocked": {
+      "noImage": "Bu oluşturulabilmeden önce, Makine sekmesinde kart imajının nereye yazılacağını seçin."
+    },
+    "phase": {
+      "pending": "sırada bekliyor",
+      "running": "şu anda çalışıyor",
+      "tree": {
+        "succeeded": "Sistem ağacı kuruldu",
+        "refused": "Sistem ağacının kurulması reddedildi",
+        "failed": "Sistem ağacı kurulamadı",
+        "stopped": "Sistem ağacının kurulmasını siz durdurdunuz",
+        "notAttempted": "Sistem ağacı — hiç denenmedi"
+      },
+      "package": {
+        "succeeded": "Güncelleme eklendi",
+        "refused": "Güncellemenin eklenmesi reddedildi",
+        "failed": "Güncelleme eklenemedi",
+        "stopped": "Güncellemenin eklenmesini siz durdurdunuz",
+        "notAttempted": "Güncelleme — hiç denenmedi"
+      },
+      "firstboot": {
+        "succeeded": "İlk açılış kurulumu yazıldı",
+        "refused": "İlk açılış kurulumunun yazılması reddedildi",
+        "failed": "İlk açılış kurulumu yazılamadı",
+        "stopped": "İlk açılış kurulumunu siz durdurdunuz",
+        "notAttempted": "İlk açılış kurulumu — hiç denenmedi"
+      },
+      "prepare": {
+        "succeeded": "Kart hazırlandı",
+        "refused": "Kartın hazırlanması reddedildi ({{code}})",
+        "failed": "Kartın hazırlanması başarısız oldu ({{code}})",
+        "stopped": "Hazırlığı siz durdurdunuz",
+        "notAttempted": "Hazırlık — hiç denenmedi"
+      },
+      "agree": {
+        "succeeded": "Kickstart imajları için onay verildi",
+        "refused": "Kickstart adımı reddedildi ({{code}})",
+        "failed": "Kickstart adımı başarısız oldu ({{code}})",
+        "stopped": "Kickstart adımında bundan vazgeçtiniz",
+        "notAttempted": "Kickstart adımı — hiç denenmedi"
+      },
+      "build": {
+        "succeeded": "Kart imajı yazıldı",
+        "refused": "Kart reddedildi ({{code}}) — imajın hiçbir parçası yazılmadı",
+        "failed": "Kart imajı yazılamadı ({{code}})",
+        "stopped": "Kart imajının yazılmasını siz durdurdunuz",
+        "notAttempted": "Kart imajı — hiç denenmedi"
+      }
+    },
+    "next": {
+      "refused": "Reddetmenin adını verdiği şeyi düzeltin, sonra Oluştur'a yeniden basın. Kart imajının hiçbir parçası yazılmadı.",
+      "failed": "Kart imajı {{image}} yoluna yazılıyordu; disklerinizde başka hiçbir şeye dokunulmadı. Yarım kalan .partial dosyasına ne olduğu aşağıda yazıyor.",
+      "failedUnknown": "ART bir kart imajının adını verecek kadar ileri gidemedi; disklerinizde başka hiçbir şeye dokunulmadı.",
+      "stopped": "Bunu siz durdurdunuz. {{image}} yolundaki kart imajı tamamlanmadı; yarım kalan .partial dosyasına ne olduğu aşağıda yazıyor.",
+      "stoppedUnknown": "Bunu, ART daha bir kart imajının adını vermeden durdurdunuz."
+    },
+    "count": {
+      "soFar": "şimdiye kadar {{done}} adet",
+      "of": "{{total}} içinden {{done}} adet"
+    },
+    "sub": {
+      "prepare": "Her bölüme girecekler hazırlanıyor",
+      "whdload": "WHDLoad",
+      "card": "Kart imajı",
+      "partitions": "Bölümler",
+      "check": "Tamamlanan kart denetleniyor"
+    },
+    "partial": {
+      "notCreated": "Yarım kalmış bir .partial dosyası hiç oluşturulmadı.",
+      "removed": "Yarım kalan {{path}} dosyası kaldırıldı.",
+      "alreadyGone": "Yarım kalan {{path}} dosyası, ART onu kaldırmaya gittiğinde zaten ortada yoktu.",
+      "notRemoved": "{{path}} dosyası KALDIRILAMADI ({{why}}) — hâlâ diskinizde duruyor."
+    },
+    "scratchLeft": "ART'ın kendi çalışma klasörü olan {{path}} kaldırılamadı ({{why}}). İçinde size ait hiçbir şey yok; fırsat bulduğunuzda elle kaldırabilirsiniz.",
+    "openFailed": "ART bu kart için bir çalışma klasörü açamadı, bu yüzden hiçbir şey başlatılmadı: {{message}}",
+    "detail": {
+      "written": "{{files}} dosya, {{bytes}}"
+    },
+    "manifest": "İmajın yanına yazılan künye dosyası: {{path}}",
+    "agreeWaiting": "Sıra sizde: yerleştirilmesine izin verdiğiniz Kickstart imajlarını işaretleyin, sonra Devam'a basın. Hiçbirini işaretlememek de serbesttir.",
+    "agreeContinue": "Bu Kickstart imajlarıyla devam et"
   },
   "preload": {
     "heading": "Kartın Amiga birimlerini hazırla",
