@@ -263,8 +263,48 @@ the Build tab's run button — `src/lib/useCardOsRun.ts`, never on mount — so 
 opening the tab; mutation-checked (`opens no session until the button is pressed`, Task 10). Every path through
 the run (succeeded, refused, failed, the user's own Stop, giving up at the Kickstart agreement) calls
 `card_os_close` exactly once. **Still open, as filed:** no exit hook and no startup sweep were built this round —
-a session left by a real crash or a killed process is still found only by hand, and `session.tree` (the build
-session's own remembered key) can still name a scratch path that no longer exists after such a crash.
+a session left by a real crash or a killed process is still found only by hand.
+**Round 4's fix wave (2026-09-18) removed the `session.tree` half of this** (the final review's C3): the run's
+scratch tree no longer goes anywhere persisted — `src/lib/cardRunTree.ts`, a store with no key — so no crash can
+leave a scratch path in the build session for a later run to read. The leftover *folder* is what remains open.
+
+**ART-345** 🟠 **In the one-button card flow the Machine tab can never show a size, a total or an overflow** —
+*found 2026-09-18 by card round 4's final whole-branch review (`final-review.md`, I5), by reading; filed by the
+fix wave as a flow question, not built*
+`src/components/osbuilder/CardSection.tsx` (`tree`, the measure request, `cardSection.needTree`),
+`src-tauri/src/commands/cardos.rs` (`card_os_measure`) · `CardSection` measures against a system tree, and in the
+one-button flow the card's tree exists **only inside a run** — while the Machine tab is unreachable, because the
+strip chips and the whole sidebar are dead under `useRunLock`. So unless the user has previously completed a
+*folder* build, which a card user has no reason to do, every row reads *"henüz ölçülmedi"*, the heading cost reads
+*"…ölçülebilecek bir sistem ağacı olduğunda"*, and § 3's live total, per-row size and overflow line never appear.
+The refusal that names the overflowing partition — task 8's headline — is unreachable before the run too, which
+is the one moment it would be worth anything. **Why filed, not fixed:** `card_os_measure` needs the tree only for
+System, so a request could carry `tree: ""` and answer the user's own partitions while saying System is not yet
+measured — but "measured except for the operating system" is a *screen* question (what the total then means,
+whether the overflow line may be drawn at all, what the three registers say), and the owner decides what the
+Machine tab claims. The alternative, a measure-only session opened on demand, is a second session lifetime beside
+the run's. **Fix direction:** decide with the owner which of the two, then either let `card_os_measure` take an
+empty tree and have `CardSection` say plainly which part of the answer is still missing, or open a staging-free
+session for the measurement alone. Either way the Machine tab must be able to answer *"does this fit"* before the
+build, which is the reason `card_os_measure` exists.
+
+**ART-346** 🟡 **A card run's report is deleted from the screen if the Build tab's gate turns on while it runs** —
+*found 2026-09-18 by card round 4's final whole-branch review (`final-review.md`, I4); the session-leak half was
+fixed by the fix wave, this half filed*
+`src/components/osbuilder/BuildTab.tsx` (`gate ? … : cardMode ? <CardRun/> : …`) · The whole card run is inside
+`CardRun`, which is rendered only in the `gate === null` branch, unlike the folder run whose `run.reports` are
+rendered outside the gate. The gate reads live values — `summary.ticked.loading`, `ticked.unresolved`,
+`cardBlocker` over the plan and the media evidence, and `cardImage` — so any of them changing mid-run (a media
+scan landing, a re-plan, a tick resolving) unmounts `CardRun`: every phase row and every refusal on screen
+disappears and is replaced by the blocker's own sentence, with nothing saying a run happened. **The session no
+longer leaks:** the fix wave rejects the pending agreement on unmount, so `runSequence`'s `finally` runs and
+`card_os_close` is called (`is closed when the screen goes away while the run waits at the agreement`,
+`src/lib/useCardOsRun.test.tsx`). **Why the rest is filed:** moving the card's rows outside the gate branch means
+deciding what the screen shows when a gate and a finished run are both true — the blocker's sentence, the report,
+or both, and in which order — and the folder lane's answer (report below, always) was never argued for the card,
+whose rows carry the endings of a run that wrote a card image. **Fix direction:** render the card's reports and
+its `.infobar` endings outside the `gate` ternary the way `!cardMode && run.reports.length > 0` already does, and
+add a case that flips a gate input while a run is in flight and asserts the rows survive.
 
 Missing features are not defects — see [FEATURES.md](FEATURES.md) for what is
 not built yet, and [STATUS.md](STATUS.md) for what is scheduled.

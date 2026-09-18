@@ -18,10 +18,12 @@ wording of every entry, with what was measured, is in git history
 - **ART reads Amiga LZX archives** with its own reader, behind the same safety checks as LHA, ZIP and 7z (checked against unar).
 - **Groundwork for the one-button card's content step** (no screen yet): folders, archives, WHDLoad hardfiles and ADFs are checked and measured before a card partition is written, and one partition can take several folders.
 - **More groundwork for the one-button card, still no screen**: the PFS3 driver, WHDLoad and the Kickstarts a card's titles need are found — Kickstarts are only ever placed on the names you agree to — and the card is built under a temporary name, checked, and only then given its own.
-- **The one-button card has its screen.** On the OS Builder's Machine tab, choose *Card image* instead of a folder and pick one card size (16/32/64/128/256 GB, shown beside its real byte count). Below it, a section for the card's partitions: System and Work always there, add more by name, and fill each by dragging files onto its own row, a folder-picker button, or its menu — every source is recognised and named, every size is live, and an overflow is named by partition and never rounded away.
+- **The one-button card has its screen.** On the OS Builder's Machine tab, choose *Card image* instead of a folder and pick one card size (16/32/64/128/256 GB, shown beside its real byte count). Below it, a section for the card's partitions: System and Work always there, add more by name, and fill each by dragging files onto its own row, a folder-picker button, or its menu — every source is recognised and named, and an overflow is named by partition and never rounded away. Sizes are measured against a system tree, so in the one-button flow they appear only once you have built one; that is [ART-345](docs/ISSUES.md), open.
 - **Before a card is built, ART lists every Kickstart its titles want** — where it found each one, or what to add — and places only the ones you tick; nothing is ticked for you.
 - **Building a card reports its own phases by name**, and where there is a real count, how many files or steps so far — never a bar pretending to know a total it does not have.
 - **A refused card build says why, by name, in your own language, and is never shown as "failed"** — a refusal names what is missing and where to get it, and the same button re-runs the whole thing once you have fixed it.
+- **A drop on System or Work says why it takes nothing**, instead of doing nothing at all; a name ART gives a partition itself (`Work_2`) is refused when you type it, rather than making a row that can neither be filled nor removed.
+- **When ART falls back to hst-imager for one of a card's partitions, the one-button run says which partition and why** — the line the manual card screens have had since ART-120.
 - **The manual card screens — Card Builder and volume preparation — are now Power User–mode features.** The one-button card is the default path in Beginner mode; switching to Power User mode does not remove or disable anything, it only shows the two screens alongside it.
 
 ### Changed
@@ -38,6 +40,12 @@ wording of every entry, with what was measured, is in git history
 
 - **A file's date and comment in its `.uaem` now reach a PFS3 partition ART fills** (ART-116, ART-335); a comment with a character the Amiga cannot store is refused by name.
 - **A comment in a `.uaem` now reaches an FFS volume ART fills** (ART-337), and a card partition's size estimate counts comments.
+- **Dragging files onto a card partition row works in the running application.** It did not: the OS Builder's own screens were never handed the drop, so only the *Add…* button and the row menu did anything. Dragging *over* a row no longer adds the path you dropped somewhere else an hour ago, either.
+- **Building a card no longer erases the distribution folder ART remembers for you.** A card run used the build session's own tree setting to carry its temporary folder, and cleared it — along with "first boot written" — when it finished, on every ending including success.
+- **The hst-imager you set in Settings is used when a card is measured and prepared**, instead of ART refusing the card and telling you to go and set it.
+- **A card run left at the Kickstart step when the screen changes now closes its session** instead of leaving the whole staged tree behind.
+- **The job bar no longer draws a quarter-full bar for work whose total nobody knows** — it shows the count instead.
+- **What is not yet placed on a card is said in your own language**, including the Kickstart step's "put this package in a material folder" advice, which used to arrive in English inside a Turkish sentence.
 
 ## [0.9.4] - 2026-09-15
 
