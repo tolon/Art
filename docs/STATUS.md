@@ -28,10 +28,10 @@ where it was taken.
 
 | | |
 |---|---|
-| **Last updated** | 2026-09-18 — card round 4 (every screen) built on `art-card-round-4` (13 tasks, `51769ad`..`a0b0415`, on top of round 3's merge `d421822`), then its final whole-branch review, one fix wave, a scoped re-review and the residual round that closed the re-review's three findings (N1, N2, N3); **unmerged, and the ART-059 second whole-suite Rust run is owed at the new head.** The `main`/`origin` row below still describes `main` as merged through round 3; the test, lint and sweep rows below describe `art-card-round-4` at the residual round, the i18n row at `a0b0415` |
+| **Last updated** | 2026-09-18 — card round 4 (every screen) built on `art-card-round-4` (13 tasks, `51769ad`..`a0b0415`, on top of round 3's merge `d421822`), then its final whole-branch review, one fix wave, a scoped re-review and the residual round that closed the re-review's three findings (N1, N2, N3) and the M2 comment correction its own re-review raised; **unmerged, with ART-059's two whole-suite Rust runs taken at `993ecc9` and green — nothing test-shaped is owed before the merge.** The `main`/`origin` row below still describes `main` as merged through round 3; the test, lint and sweep rows below describe `art-card-round-4` at the residual round, the i18n row at `a0b0415` |
 | **Version** | **0.9.4**, released 2026-09-15 — tag `v0.9.4` (annotated, on `e91f22e`), release run 34969262720 `success`, published on the owner's word with one NSIS and one MSI installer. Its notes are CHANGELOG's `[0.9.4]` section. The number lives in three files (`package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` — all `0.9.4`, checked 2026-09-17) and `release.yml` refuses a tag that disagrees with any of them, or a version with no CHANGELOG section |
 | **`main` / `origin`** | **`main` is `d421822`** — card round 3 merged `--no-ff` on 2026-09-17 on the owner's word and `art-card-round-3` deleted; pushed, and CI's result on it is the row below. Round 3 was reviewed (0 Critical, 5 Important, 18 Minor), fixed in one wave, re-reviewed, and its residuals (N1, N2, N5, N6, ART-343's ROM half, M18) fixed (fourteen tasks: `core/cardos/` above `core/card`/`core/preload` — ART-339 — the WHDLoad phase, the Kickstart proposal, `card_os_open`/`prepare`/`build`/`close`, `.partial` output, and the end-to-end card proven against `hst-imager`). One other local branch, `art-310-windows` (`d851174`, 12 commits not in `main`), is kept unmerged: ART-310 was fixed on `main` by another route, and [ISSUES-archive.md](ISSUES-archive.md) cites its research note through `git show art-310-windows:…` |
-| **Tests — Rust** | `cd src-tauri && cargo test --lib` on `art-card-round-4` at the fix wave, 2026-09-18: `test result: ok. 3728 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 532.38s`, run twice at that head. The residual round after it added one `commands::cardos` case and ran **that module only** — `test result: ok. 26 passed; 0 failed; 1 ignored; 0 measured; 3768 filtered out; finished in 42.36s` — so **the whole suite has not run at the current head**, and ART-059's two runs are owed there before the merge |
+| **Tests — Rust** | `cd src-tauri && cargo test --lib` on `art-card-round-4` at `993ecc9` (the residual round), 2026-09-18, **twice — ART-059 satisfied**: `test result: ok. 3729 passed; 0 failed; 66 ignored; 0 measured; 0 filtered out; finished in 537.79s`, then the same result in `500.44s`. The only change committed after those two runs is a corrected doc comment on `card_os_prepare` (the residual round's own re-review, M2), which cannot alter behaviour |
 | **Tests — frontend** | `pnpm test` on `art-card-round-4` at the residual round, 2026-09-18: `Test Files 122 passed (122)`, `Tests 1945 passed (1945)` |
 | **Lint, format, clippy** | Clean on `art-card-round-4` at the residual round, 2026-09-18: `pnpm lint` (both `tsc --noEmit` passes), `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` (no warnings). `cargo deny check` (`advisories ok, bans ok, licenses ok, sources ok`) was last run at `a0b0415`; no Cargo file has changed since |
 | **Sweeps** | Card round 4's residual round, 2026-09-18, all four CI-blocking sweeps clean at the current head; the figures below are that run's and match Task 13's: `control-byte-sweep.py` (7 files allow-listed for AmigaDOS DosType data and 7 for deliberate alignment), `scratch-root-sweep.py` (5 named exceptions), `scratch-guard-sweep.py` (157 guard sources, 2070 call sites, 3 hand-built paths, 9 platform-root arguments, 12 exempt), `contrast-check.py --quiet` (105 pairs, both themes). The two non-sweep oracles were last run at Task 13 and not since (nothing they cover changed): `rom-table-check.py`, 154 identifiable dumps, "the committed table says exactly what the database says"; `oracle-check.py`, 53 checks, both directions, "ART and an independent implementation agree, both ways round" |
@@ -364,11 +364,13 @@ and the screen branches on that field alone — so an I/O failure read as
 event now goes through `prepare_refusal_event`, which answers `Some` only for a
 refusal; a failure settles through `JobFailed { code }`, and both arms are
 pinned. **N3** (Minor): `hstImagerPath`'s forwarding to measure and prepare is
-asserted in the two files that already mock those commands. **Unmerged: what is
-owed before the merge is ART-059's whole-suite Rust runs at the new head** (the
-residual round ran `commands::cardos` alone, 26 passed), and after the merge the
-owner's own card, built through these screens, flashed and booted on a real
-PiStorm.
+asserted in the two files that already mock those commands. That round's own
+re-review raised one Minor (M2), also fixed: `card_os_prepare`'s doc comment
+still read as though every ending travelled on its event, which N2 had just
+made false. **Unmerged, and nothing test-shaped is owed** — ART-059's two
+whole-suite Rust runs were taken at `993ecc9` and came back green (3729 each).
+**Next is the merge, and after it the owner's own card, built through these
+screens, flashed and booted on a real PiStorm.**
 
 **Open defects** (10, after round 4's fix wave filed two): ART-062 (Turkish read on screen), ART-324 (a 4 GiB file
 on a largefile PFS3 volume, which ART never formats), ART-328 and ART-329

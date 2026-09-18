@@ -468,10 +468,18 @@ fn prepare_refusal_event(error: &CoreError) -> Option<CardRefusal> {
     prepare_refused(error).then(|| card_refusal_from(error))
 }
 
-/// Prepare the session's card. Returns a job id; the answer arrives on
-/// [`CARD_OS_PREPARE_EVENT`] — a prepared card **or** a typed refusal, never
-/// both — and a refusal ends the job [`JobState::Refused`] with its own code,
-/// never `Failed`.
+/// Prepare the session's card. Returns a job id.
+///
+/// **Two of the three endings travel on [`CARD_OS_PREPARE_EVENT`]** — a
+/// prepared card **or** a typed refusal, never both — and a refusal also ends
+/// the job [`JobState::Refused`] with its own code, never `Failed`.
+///
+/// **A failure says nothing on that event** (fix-wave re-review, N2; see
+/// [`prepare_refusal_event`]). It reaches the screen as the job's own
+/// [`JobState::Failed`], carrying the same `ART-*` code, which
+/// `settleFromProgress` turns into a `JobFailed` the run renders as a failure.
+/// Emitting the event for a failure too made the row say *refused*, with a
+/// refusal's next step, over a job the bar above it called failed.
 #[tauri::command]
 pub fn card_os_prepare(
     request: CardOsPrepareRequest,
